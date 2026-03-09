@@ -69,17 +69,6 @@ def pinpoint_list_jobs(
     return [pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filter)]
 
 
-@mcp.tool()
-def pinpoint_get_raw_values(job_url: str) -> list[dict]:
-    """Return per-run measurement values for a Pinpoint job.
-
-    One row per (metric, bot run): metric, label, run_id, unit, value.
-    run_id is a GUID consistent across all metrics in a run (join key).
-
-    job_url: Pinpoint job URL or job ID
-    """
-    return pinpoint.fetch_raw_values(pinpoint.job_id_from_url(job_url))
-
 
 @mcp.tool()
 def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:

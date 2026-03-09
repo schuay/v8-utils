@@ -3,7 +3,6 @@
 Usage:
   pp show-job <job_url>
   pp list-jobs [--count N] [--user EMAIL] [--filter KEY=VALUE]
-  pp get-raw-values <job_url>
   pp show-results <job_url> [--show-all]
   pp create-job --benchmark BENCH --configuration CONFIG [options]
   pp watch <job_url>
@@ -22,7 +21,6 @@ import daemon
 
 from tools import (
     pinpoint_create_job,
-    pinpoint_get_raw_values,
     pinpoint_list_jobs,
     pinpoint_show_job,
     pinpoint_show_results,
@@ -174,9 +172,6 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         print()
 
 
-def _cmd_get_raw_values(args: argparse.Namespace) -> None:
-    _out(pinpoint_get_raw_values(args.job_url))
-
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
     result = pinpoint_show_results(args.job_url, show_all=args.show_all)
@@ -256,11 +251,6 @@ def main() -> None:
     p.add_argument("-f", "--filter", default=None, metavar="KEY=VALUE",
                    help='Client-side filter, e.g. "status=Completed", "comparison_mode=try"')
     p.set_defaults(func=_cmd_list_jobs)
-
-    # get-raw-values
-    p = sub.add_parser("get-raw-values", help="Dump per-run raw measurement values as JSON")
-    p.add_argument("job_url", help="Pinpoint job URL or job ID")
-    p.set_defaults(func=_cmd_get_raw_values)
 
     # show-results
     p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
