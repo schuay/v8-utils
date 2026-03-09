@@ -93,7 +93,7 @@ def find_dm_space(service_account_email: str, user_google_id: str) -> str:
     """Find the existing DM space between the bot and a user.
 
     Requires the user to have opened a DM with the bot in Google Chat first
-    (search for the bot by its app display name, not its service account email).
+    (search for "v8-utils-pinpoint" in Google Chat, not the service account email).
     Returns the space resource name, e.g. "spaces/AAA...".
     """
     token = _impersonated_token(service_account_email, _SCOPES_BOT)
