@@ -40,7 +40,33 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
-    _out(pinpoint_list_jobs(count=args.count, user=args.user, filter=args.filter))
+    jobs = pinpoint_list_jobs(count=args.count, user=args.user, filter=args.filter)
+    if not jobs:
+        print("No jobs found.")
+        return
+    for j in jobs:
+        created = (j.get("created") or "")[:16].replace("T", " ")
+        status = j.get("status") or "?"
+        url = j.get("url") or ""
+        config_ = j.get("configuration") or ""
+        benchmark = j.get("benchmark") or ""
+        story = j.get("story") or ""
+        diff = j.get("difference_count")
+        patch = j.get("experiment_patch") or ""
+        base_flags = j.get("base_extra_args") or ""
+        exp_flags = j.get("experiment_extra_args") or ""
+
+        label = f"{benchmark} / {story}".strip(" /")
+        diff_str = f"  diffs={diff}" if diff is not None else ""
+        print(f"{created}  {status:<12}  {url}")
+        print(f"  {config_}  {label}{diff_str}")
+        if patch:
+            print(f"  patch:     {patch}")
+        if base_flags:
+            print(f"  base-flags: {base_flags}")
+        if exp_flags:
+            print(f"  exp-flags:  {exp_flags}")
+        print()
 
 
 def _cmd_get_raw_values(args: argparse.Namespace) -> None:
