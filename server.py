@@ -78,6 +78,42 @@ def _luci_auth_headers() -> dict[str, str]:
         return {}
 
 
+# ── Gerrit patch resolver ──────────────────────────────────────────────────────
+
+_GERRIT_BASE = "https://chromium-review.googlesource.com"
+_RE_CRREV = re.compile(
+    r"^(?:https?://)?(?:crrev(?:\.com)?/)?(?:c/)?(\d+)(?:/(\d+))?$", re.IGNORECASE
+)
+
+
+def _resolve_patch(patch: str) -> str:
+    """Resolve a Gerrit patch shorthand to a full chromium-review URL.
+
+    Accepts: bare change ID (12345), crrev/c/12345, crrev.com/c/12345,
+             or a full https://chromium-review.googlesource.com/... URL.
+    Raises ValueError for unrecognised formats.
+    """
+    patch = patch.strip()
+    m = _RE_CRREV.match(patch)
+    if m:
+        change_id, patchset = m.group(1), m.group(2)
+        r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
+        r.raise_for_status()
+        # Gerrit prefixes responses with ")]}'" to prevent XSSI.
+        text = r.text[r.text.find("{"):]
+        project = json.loads(text)["project"]
+        url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
+        return f"{url}/{patchset}" if patchset else url
+
+    if patch.startswith("http"):
+        return patch
+
+    raise ValueError(
+        f"Unrecognised patch format: {patch!r}. "
+        "Expected a change ID (12345), crrev/c/12345, or a full Gerrit URL."
+    )
+
+
 # ── Pinpoint helpers ──────────────────────────────────────────────────────────
 
 def _job_id_from_url(job_url: str) -> str:
@@ -510,6 +546,82 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
         *(_row(c) for c in cells),
     ]
     return "\n".join(lines)
+
+
+@mcp.tool()
+def pinpoint_create_job(
+    benchmark: str,
+    configuration: str,
+    story: str | None = None,
+    story_tags: str | None = None,
+    base_git_hash: str = "HEAD",
+    exp_git_hash: str = "HEAD",
+    base_patch: str | None = None,
+    exp_patch: str | None = None,
+    base_extra_args: str | None = None,
+    exp_extra_args: str | None = None,
+    repeat: int = 30,
+    bug_id: int | None = None,
+) -> dict:
+    """Create a new Pinpoint A/B try job. Requires luci-auth login.
+
+    benchmark:      benchmark name, e.g. "speedometer3" or "jetstream2"
+    configuration:  bot config, e.g. "mac-m1_mini_2020-perf", "linux-perf"
+    story:          story within the benchmark (required unless story_tags given)
+    story_tags:     comma-separated story tags to select stories
+    base_git_hash:  git hash for the base build (default: HEAD)
+    exp_git_hash:   git hash for the experiment build (default: HEAD)
+    base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
+    exp_patch:      Gerrit patch for experiment — same formats
+    base_extra_args: extra browser args for base, e.g. "--js-flags=--turbofan"
+    exp_extra_args:  extra browser args for experiment
+    repeat:         number of bot runs per variant (default: 30)
+    bug_id:         buganizer issue ID to associate with the job
+
+    Returns the created job dict including job_id and job URL.
+    """
+    if not story and not story_tags:
+        raise ValueError("Either story or story_tags must be specified.")
+
+    resolved_base_patch = _resolve_patch(base_patch) if base_patch else None
+    resolved_exp_patch = _resolve_patch(exp_patch) if exp_patch else None
+
+    payload = {
+        "comparison_mode":        "try",
+        "benchmark":              benchmark,
+        "configuration":          configuration,
+        "story":                  story,
+        "story_tags":             story_tags,
+        "initial_attempt_count":  str(repeat),
+        "bug_id":                 bug_id,
+        "base_git_hash":          base_git_hash,
+        "end_git_hash":           exp_git_hash,
+        "base_patch":             resolved_base_patch,
+        "experiment_patch":       resolved_exp_patch,
+        "base_extra_args":        base_extra_args,
+        "experiment_extra_args":  exp_extra_args,
+        "tags":                   '{"origin": "v8-mcp"}',
+    }
+    # Strip None values — the API rejects unexpected null fields.
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    headers = _luci_auth_headers()
+    if not headers:
+        raise ValueError(_LOGIN_INSTRUCTIONS)
+
+    r = httpx.post(
+        f"{_PINPOINT_BASE}/api/new",
+        data=payload,
+        headers=headers,
+        follow_redirects=True,
+        timeout=30,
+    )
+    r.raise_for_status()
+    result = r.json()
+    job_id = result.get("jobId") or result.get("job_id")
+    if job_id:
+        result["url"] = f"{_PINPOINT_BASE}/job/{job_id}"
+    return result
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
