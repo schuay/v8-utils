@@ -99,6 +99,26 @@ def resolve_patch(patch: str) -> str:
     )
 
 
+_RE_GERRIT_CHANGE_ID = re.compile(r"/\+/(\d+)")
+
+
+def fetch_gerrit_subject(patch_url: str) -> str | None:
+    """Return the subject (first line of commit message) for a Gerrit change URL.
+
+    Returns None if the change ID cannot be extracted or the request fails.
+    """
+    m = _RE_GERRIT_CHANGE_ID.search(patch_url)
+    if not m:
+        return None
+    try:
+        r = httpx.get(f"{_GERRIT_BASE}/changes/{m.group(1)}", timeout=15)
+        r.raise_for_status()
+        text = r.text[r.text.find("{"):]
+        return json.loads(text).get("subject")
+    except Exception:
+        return None
+
+
 # ── Job listing ───────────────────────────────────────────────────────────────
 
 def job_id_from_url(job_url: str) -> str:

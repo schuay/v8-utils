@@ -18,6 +18,7 @@ import re
 import sys
 
 import daemon
+import pinpoint
 
 from tools import (
     pinpoint_create_job,
@@ -119,6 +120,10 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     status = j.get("status") or "?"
     print(f"{_DIM}{created}{_RESET}  {_status_color(status)}  {url}")
     print()
+
+    patch_url = j.get("experiment_patch")
+    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+
     fields = [
         ("configuration", j.get("configuration")),
         ("benchmark",     j.get("benchmark")),
@@ -126,7 +131,8 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         ("mode",          j.get("comparison_mode")),
         ("base",          j.get("base_git_hash")),
         ("end",           j.get("end_git_hash")),
-        ("patch",         j.get("experiment_patch")),
+        ("patch",         patch_url),
+        ("",              patch_subject),
         ("base-flags",    j.get("base_extra_args")),
         ("exp-flags",     j.get("experiment_extra_args")),
         ("diffs",         j.get("difference_count")),
@@ -134,11 +140,18 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         ("results",       j.get("results_url")),
         ("exception",     j.get("exception")),
     ]
-    w = max(len(k) for k, v in fields if v is not None)
+    w = max((len(k) for k, v in fields if v is not None), default=0)
     for key, val in fields:
         if val is None:
             continue
-        val_str = f"{_CYAN}{val}{_RESET}" if key in ("patch", "results") else str(val)
+        if key == "patch":
+            val_str = f"{_CYAN}{val}{_RESET}"
+        elif key == "" :  # patch subject line
+            val_str = f"{_BOLD}{val}{_RESET}"
+        elif key == "results":
+            val_str = f"{_CYAN}{val}{_RESET}"
+        else:
+            val_str = str(val)
         print(f"  {_DIM}{key:<{w}}{_RESET}  {val_str}")
 
 
