@@ -17,6 +17,8 @@ import os
 import re
 import sys
 
+import chat
+import config
 import daemon
 import pinpoint
 
@@ -244,12 +246,26 @@ def _cmd_daemon_stop(args: argparse.Namespace) -> None:
 
 
 def _cmd_chat_setup(args: argparse.Namespace) -> None:
-    # TODO: implement OAuth2 browser flow
-    # 1. Load client ID + secret from config
-    # 2. Run local OAuth2 flow (open browser, listen on localhost for redirect)
-    # 3. Use user token to find/create DM space with the bot
-    # 4. Write chat_app_space to config file
-    raise NotImplementedError("pp chat-setup not yet implemented")
+    cfg = config.load()
+    if not cfg.chat_service_account_email:
+        print(
+            f"{_RED}error:{_RESET} chat_service_account_email not set in {config.CONFIG_PATH}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print(f"Service account: {_CYAN}{cfg.chat_service_account_email}{_RESET}")
+    print("Identifying you via Application Default Credentials...")
+    user_id = chat.adc_user_id()
+    print(f"  {_DIM}Google user ID:{_RESET} {user_id}")
+
+    print("Finding DM space between you and the bot...")
+    print(f"  {_DIM}(Open Google Chat, find the bot by name, and send it a message if this fails.){_RESET}")
+    space = chat.find_dm_space(cfg.chat_service_account_email, user_id)
+    print(f"  {_DIM}space:{_RESET} {space}")
+
+    config.update_chat_app_space(space)
+    print(f"{_GREEN}Done.{_RESET} Written to {config.CONFIG_PATH}")
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:

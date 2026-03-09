@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 CONFIG_PATH = Path("~/.config/v8-utils/config.toml").expanduser()
@@ -17,15 +18,11 @@ class Config:
     # Google Chat — incoming webhook (simple, no auth required)
     chat_webhook: str | None = None
 
-    # Google Chat — app / service account (supports direct user DMs)
-    # chat_service_account_key: path to the service account JSON key file
-    # chat_oauth_client_id / chat_oauth_client_secret: OAuth2 desktop client
-    #   credentials (used by `pp chat-setup` to identify the user)
-    # chat_app_space: DM space name written by `pp chat-setup`, e.g. spaces/AAA...
-    chat_service_account_key: str | None = None
-    chat_oauth_client_id: str | None = None
-    chat_oauth_client_secret: str | None = None
-    chat_app_space: str | None = None  # seconds
+    # Google Chat — service account impersonation (supports direct user DMs)
+    # chat_service_account_email: the service account associated with the Chat app
+    # chat_app_space: DM space name, written by `pp chat-setup`, e.g. spaces/AAA...
+    chat_service_account_email: str | None = None
+    chat_app_space: str | None = None
 
 
 _cache: Config | None = None
@@ -45,9 +42,27 @@ def load() -> Config:
         user=data.get("user"),
         poll_interval=int(data.get("poll_interval", 60)),
         chat_webhook=data.get("chat_webhook"),
-        chat_service_account_key=data.get("chat_service_account_key"),
-        chat_oauth_client_id=data.get("chat_oauth_client_id"),
-        chat_oauth_client_secret=data.get("chat_oauth_client_secret"),
+        chat_service_account_email=data.get("chat_service_account_email"),
         chat_app_space=data.get("chat_app_space"),
     )
     return _cache
+
+
+def update_chat_app_space(space: str) -> None:
+    """Write chat_app_space to the config file, creating it if needed."""
+    global _cache
+    _cache = None
+    new_line = f'chat_app_space = "{space}"'
+    if not CONFIG_PATH.exists():
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(new_line + "\n")
+        return
+    text = CONFIG_PATH.read_text()
+    pattern = re.compile(r"^chat_app_space\s*=.*$", re.MULTILINE)
+    if pattern.search(text):
+        text = pattern.sub(new_line, text)
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += new_line + "\n"
+    CONFIG_PATH.write_text(text)

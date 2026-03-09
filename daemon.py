@@ -70,22 +70,18 @@ def _notify_webhook(webhook: str, job: dict) -> None:
         log.error("webhook error for %s: %s", job.get("job_id"), e)
 
 
-def _notify_chat_app(space: str, key_path: str, job: dict) -> None:
-    # TODO: implement service account auth + Chat REST API call
-    # 1. Load service account JSON from key_path
-    # 2. Mint a short-lived access token (google-auth)
-    # 3. POST to https://chat.googleapis.com/v1/{space}/messages
-    raise NotImplementedError("Chat app notifications not yet implemented")
+def _notify_chat_app(space: str, service_account_email: str, job: dict) -> None:
+    import chat
+    chat.notify(space, service_account_email, _message_text(job))
+    log.info("Chat app notification sent for %s", job.get("job_id"))
 
 
 def _notify(cfg: config.Config, job: dict) -> None:
     """Send a notification via Chat app (preferred) or webhook (fallback)."""
-    if cfg.chat_app_space and cfg.chat_service_account_key:
+    if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
-            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_key, job)
+            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_email, job)
             return
-        except NotImplementedError:
-            raise
         except Exception as e:
             log.error("Chat app notification failed: %s", e)
     if cfg.chat_webhook:
