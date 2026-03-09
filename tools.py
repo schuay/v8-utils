@@ -152,7 +152,7 @@ def pinpoint_create_job(
     exp_patch: str | None = None,
     base_js_flags: str | None = None,
     exp_js_flags: str | None = None,
-    repeat: int = 30,
+    repeat: int = 100,
     bug_id: int | None = None,
 ) -> dict:
     """Create a new Pinpoint A/B try job. Requires luci-auth login.
@@ -170,7 +170,7 @@ def pinpoint_create_job(
     exp_patch:      Gerrit patch for experiment — same formats
     base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
     exp_js_flags:   V8 flags for experiment, same format
-    repeat:         number of bot runs per variant (default: 30)
+    repeat:         number of bot runs per variant (default: 100)
     bug_id:         buganizer issue ID to associate with the job
     """
     return pinpoint.create_job(

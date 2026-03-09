@@ -355,7 +355,7 @@ def create_job(
     exp_patch: str | None = None,
     base_js_flags: str | None = None,
     exp_js_flags: str | None = None,
-    repeat: int = 30,
+    repeat: int = 100,
     bug_id: int | None = None,
 ) -> dict:
     """Create a new Pinpoint A/B try job. Requires luci-auth login."""

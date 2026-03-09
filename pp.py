@@ -155,8 +155,8 @@ def main() -> None:
                    help='V8 flags for base, e.g. "--turbofan"')
     p.add_argument("--exp-js-flags", default=None, dest="exp_js_flags",
                    help="V8 flags for experiment")
-    p.add_argument("-r", "--repeat", type=int, default=30,
-                   help="Bot runs per variant (default: 30)")
+    p.add_argument("-r", "--repeat", type=int, default=100,
+                   help="Bot runs per variant (default: 100)")
     p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
                    help="Buganizer issue ID")
     p.add_argument("-w", "--watch", action="store_true",
