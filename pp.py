@@ -6,6 +6,8 @@ Usage:
   pp get-raw-values <job_url>
   pp show-results <job_url> [--show-all]
   pp create-job --benchmark BENCH --configuration CONFIG [options]
+  pp watch <job_url>
+  pp daemon-stop
 """
 
 from __future__ import annotations
@@ -13,6 +15,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+
+import daemon
 
 from tools import (
     pinpoint_create_job,
@@ -61,6 +65,24 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         repeat=args.repeat,
         bug_id=args.bug_id,
     ))
+
+
+def _cmd_watch(args: argparse.Namespace) -> None:
+    if not daemon.is_running():
+        daemon.start_background()
+    daemon.send_job(args.job_url)
+    job_id = args.job_url.split("/")[-1]
+    print(f"Watching {job_id} — you'll be notified on completion.")
+
+
+def _cmd_daemon_stop(args: argparse.Namespace) -> None:
+    import os, signal
+    if not daemon.is_running():
+        print("Daemon is not running.")
+        return
+    pid = int(daemon.PID_PATH.read_text())
+    os.kill(pid, signal.SIGTERM)
+    print(f"Stopped daemon (pid {pid}).")
 
 
 def main() -> None:
@@ -121,6 +143,15 @@ def main() -> None:
     p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
                    help="Buganizer issue ID")
     p.set_defaults(func=_cmd_create_job)
+
+    # watch
+    p = sub.add_parser("watch", help="Notify via webhook when a job completes")
+    p.add_argument("job_url", help="Pinpoint job URL or job ID")
+    p.set_defaults(func=_cmd_watch)
+
+    # daemon-stop
+    p = sub.add_parser("daemon-stop", help="Stop the background notification daemon")
+    p.set_defaults(func=_cmd_daemon_stop)
 
     args = parser.parse_args()
     try:

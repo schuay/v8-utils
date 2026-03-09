@@ -2,6 +2,7 @@
 
 from mcp.server.fastmcp import FastMCP
 
+import config
 import pinpoint
 
 mcp = FastMCP("v8-mcp")
@@ -64,7 +65,7 @@ def pinpoint_list_jobs(
     benchmark, story, base/experiment patch and extra_args, difference_count.
     """
     if user is None:
-        user = pinpoint.get_current_user_email()
+        user = config.load().user or pinpoint.get_current_user_email()
     return [pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filter)]
 
 
