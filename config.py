@@ -1,4 +1,4 @@
-"""v8-mcp configuration — loads ~/.config/v8-mcp/config.toml."""
+"""v8-utils configuration — loads ~/.config/v8-utils/config.toml."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = Path("~/.config/v8-mcp/config.toml").expanduser()
+CONFIG_PATH = Path("~/.config/v8-utils/config.toml").expanduser()
 
 
 @dataclass

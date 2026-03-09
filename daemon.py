@@ -1,4 +1,4 @@
-"""v8-mcp notification daemon.
+"""v8-utils notification daemon.
 
 Polls watched Pinpoint jobs; logs all activity to a log file; optionally
 sends a Google Chat webhook notification when a job reaches a terminal state.
@@ -7,9 +7,9 @@ New jobs are submitted via a Unix domain socket. The daemon is started
 automatically by `pp watch`; it can also be run directly.
 
 State files:
-  ~/.local/share/v8-mcp/daemon.pid
-  ~/.local/share/v8-mcp/daemon.sock
-  ~/.local/share/v8-mcp/daemon.log
+  ~/.local/share/v8-utils/daemon.pid
+  ~/.local/share/v8-utils/daemon.sock
+  ~/.local/share/v8-utils/daemon.log
 """
 
 from __future__ import annotations
@@ -28,14 +28,14 @@ import httpx
 import config
 import pinpoint
 
-_STATE_DIR = Path("~/.local/share/v8-mcp").expanduser()
+_STATE_DIR = Path("~/.local/share/v8-utils").expanduser()
 SOCK_PATH = _STATE_DIR / "daemon.sock"
 PID_PATH  = _STATE_DIR / "daemon.pid"
 LOG_PATH  = _STATE_DIR / "daemon.log"
 
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
 
-log = logging.getLogger("v8-mcp")
+log = logging.getLogger("v8-utils")
 
 
 def _setup_logging() -> None:
@@ -162,7 +162,6 @@ def start_background() -> None:
         os.setsid()
         with open("/dev/null") as devnull:
             os.dup2(devnull.fileno(), 0)
-        # stdout/stderr → log file (before _setup_logging takes over)
         log_fd = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         os.dup2(log_fd, 1)
         os.dup2(log_fd, 2)

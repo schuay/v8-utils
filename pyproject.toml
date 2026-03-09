@@ -1,7 +1,7 @@
 [project]
-name = "v8-mcp"
+name = "v8-utils"
 version = "0.1.0"
-description = "MCP server exposing tools for V8 JavaScript engine developers"
+description = "CLI and MCP tools for V8 JavaScript engine developers"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

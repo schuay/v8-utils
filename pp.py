@@ -1,4 +1,4 @@
-"""pp — Pinpoint CLI wrapper around the v8-mcp tool functions.
+"""pp — Pinpoint CLI wrapper around the v8-utils tool functions.
 
 Usage:
   pp show-job <job_url>

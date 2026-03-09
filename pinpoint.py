@@ -380,7 +380,7 @@ def create_job(
         "experiment_patch":      resolve_patch(exp_patch) if exp_patch else None,
         "base_extra_args":       f'--js-flags="{base_js_flags}"' if base_js_flags else None,
         "experiment_extra_args": f'--js-flags="{exp_js_flags}"' if exp_js_flags else None,
-        "tags":                  '{"origin": "v8-mcp"}',
+        "tags":                  '{"origin": "v8-utils"}',
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 

@@ -1,11 +1,11 @@
-"""MCP tool definitions for v8-mcp."""
+"""MCP tool definitions for v8-utils."""
 
 from mcp.server.fastmcp import FastMCP
 
 import config
 import pinpoint
 
-mcp = FastMCP("v8-mcp")
+mcp = FastMCP("v8-utils")
 
 
 @mcp.tool()
