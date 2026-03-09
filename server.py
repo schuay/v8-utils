@@ -278,30 +278,44 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
     if not rows:
         return "No statistically significant results found."
 
-    rows.sort(key=lambda r: abs((r["exp_mean"] - r["base_mean"]) / r["base_mean"]) if r["base_mean"] else 0, reverse=True)
+    def _pct(r):
+        bm = r["base_mean"] or 0
+        return (r["exp_mean"] - bm) / bm * 100 if bm else 0
+
+    rows.sort(key=_pct, reverse=True)
 
     base_label = rows[0]["base_label"]
     exp_label  = rows[0]["exp_label"]
-    header = (
-        f"base: {base_label}\n"
-        f"exp:  {exp_label}\n\n"
-        f"{'metric':<30}  {'base mean±stdev':>22}  {'exp mean±stdev':>22}  {'chg%':>7}  {'p':>7}  sig\n"
-        + "-" * 100
-    )
 
-    lines = [header]
+    # Build cell strings first so we can fit column widths to content.
+    cells = []
     for r in rows:
-        bm = r["base_mean"] or 0
-        bs = r["base_stdev"] or 0
-        em = r["exp_mean"] or 0
-        es = r["exp_stdev"] or 0
-        pct = (em - bm) / bm * 100 if bm else 0
-        base_col = f"{bm:>10.3f} ±{bs:>8.3f}"
-        exp_col  = f"{em:>10.3f} ±{es:>8.3f}"
-        sig      = "*" if r["significant"] else ""
-        lines.append(
-            f"{r['name']:<30}  {base_col:>22}  {exp_col:>22}  {pct:>+7.2f}%  {r['p_value']:>7.4f}  {sig}"
-        )
+        bm, bs = r["base_mean"] or 0, r["base_stdev"] or 0
+        em, es = r["exp_mean"]  or 0, r["exp_stdev"]  or 0
+        cells.append((
+            r["name"],
+            f"{bm:.3f} ±{bs:.3f}",
+            f"{em:.3f} ±{es:.3f}",
+            f"{_pct(r):+.2f}%",
+            f"{r['p_value']:.4f}",
+            "*" if r["significant"] else "",
+        ))
+
+    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p", "sig")
+    widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
+
+    def _row(cols):
+        return "  ".join(c.ljust(widths[i]) if i == 0 else c.rjust(widths[i]) for i, c in enumerate(cols))
+
+    sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
+    lines = [
+        f"base: {base_label}",
+        f"exp:  {exp_label}",
+        "",
+        _row(hdrs),
+        sep,
+        *(_row(c) for c in cells),
+    ]
     return "\n".join(lines)
 
 
