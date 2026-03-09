@@ -260,7 +260,7 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
     print(f"  {_DIM}Google user ID:{_RESET} {user_id}")
 
     print("Finding DM space with the bot...")
-    print(f"  {_DIM}(In Google Chat, search for the bot by its app display name and send it a message first.){_RESET}")
+    print(f"  {_DIM}(In Google Chat, search for \"v8-utils-pinpoint\" and send it a message first.){_RESET}")
     space = chat.find_dm_space(cfg.chat_service_account_email, user_id)
     print(f"  {_DIM}space:{_RESET} {space}")
 
