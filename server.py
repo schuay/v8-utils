@@ -257,11 +257,13 @@ def pinpoint_get_raw_values(job_url: str) -> list[dict]:
 
 
 @mcp.tool()
-def pinpoint_show_results(job_url: str) -> str:
+def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
     """Fetch and display a base-vs-experiment comparison for a Pinpoint job.
 
-    Prints one line per metric with base mean±stdev, exp mean±stdev, p-value,
-    and a significance marker.  Significant results (p<0.05) are marked with *.
+    Prints one line per metric with base mean±stdev, exp mean±stdev, %change,
+    p-value, and a significance marker.  Sorted by absolute % change.
+
+    show_all: if False (default), only show statistically significant results.
 
     job_url: Pinpoint job URL, e.g.
              https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
@@ -271,14 +273,20 @@ def pinpoint_show_results(job_url: str) -> str:
     if not rows:
         return "No results found."
 
-    # Header: show the full labels once, then use "base" / "exp" in the table.
+    if not show_all:
+        rows = [r for r in rows if r["significant"]]
+    if not rows:
+        return "No statistically significant results found."
+
+    rows.sort(key=lambda r: abs((r["exp_mean"] - r["base_mean"]) / r["base_mean"]) if r["base_mean"] else 0, reverse=True)
+
     base_label = rows[0]["base_label"]
     exp_label  = rows[0]["exp_label"]
     header = (
         f"base: {base_label}\n"
         f"exp:  {exp_label}\n\n"
-        f"{'metric':<30}  {'base mean±stdev':>22}  {'exp mean±stdev':>22}  {'p':>7}  sig\n"
-        + "-" * 90
+        f"{'metric':<30}  {'base mean±stdev':>22}  {'exp mean±stdev':>22}  {'chg%':>7}  {'p':>7}  sig\n"
+        + "-" * 100
     )
 
     lines = [header]
@@ -287,11 +295,12 @@ def pinpoint_show_results(job_url: str) -> str:
         bs = r["base_stdev"] or 0
         em = r["exp_mean"] or 0
         es = r["exp_stdev"] or 0
+        pct = (em - bm) / bm * 100 if bm else 0
         base_col = f"{bm:>10.3f} ±{bs:>8.3f}"
         exp_col  = f"{em:>10.3f} ±{es:>8.3f}"
         sig      = "*" if r["significant"] else ""
         lines.append(
-            f"{r['name']:<30}  {base_col:>22}  {exp_col:>22}  {r['p_value']:>7.4f}  {sig}"
+            f"{r['name']:<30}  {base_col:>22}  {exp_col:>22}  {pct:>+7.2f}%  {r['p_value']:>7.4f}  {sig}"
         )
     return "\n".join(lines)
 
