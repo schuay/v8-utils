@@ -36,6 +36,71 @@ def _fetch_job(job_id: str) -> dict:
     return r.json()
 
 
+def _job_matches_filter(job: dict, filter: str) -> bool:
+    """Test a job against a "key:value" filter string.
+
+    Supported keys: status, benchmark, configuration, comparison_mode.
+    Matching is case-insensitive substring on the value.
+    """
+    if ":" not in filter:
+        return True
+    key, _, value = filter.partition(":")
+    key, value = key.strip().lower(), value.strip().lower()
+    args = job.get("arguments", {})
+    candidates = {
+        "status":          job.get("status", ""),
+        "benchmark":       args.get("benchmark", ""),
+        "configuration":   job.get("configuration", ""),
+        "comparison_mode": job.get("comparison_mode", ""),
+    }
+    return value in candidates.get(key, "").lower()
+
+
+def _fetch_jobs(user: str, count: int, filter: str | None = None) -> list[dict]:
+    """Fetch the most recent `count` jobs for a user matching an optional filter.
+
+    Paginates the API (50 jobs/page) and applies filter client-side until
+    `count` matching jobs are collected or the full history is exhausted.
+    """
+    matched = []
+    params: dict = {"user": user}
+
+    while len(matched) < count:
+        r = httpx.get(f"{_PINPOINT_BASE}/api/jobs", params=params, follow_redirects=True, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+        page = data.get("jobs", [])
+        if filter:
+            page = [j for j in page if _job_matches_filter(j, filter)]
+        matched.extend(page)
+        if not data.get("next"):
+            break
+        params["cursor"] = data["next_cursor"]
+
+    return matched[:count]
+
+
+def _summarise_job(j: dict) -> dict:
+    """Extract the interesting fields from a raw job dict."""
+    args = j.get("arguments", {})
+    return {
+        "job_id":                j.get("job_id"),
+        "url":                   f"{_PINPOINT_BASE}/job/{j.get('job_id')}",
+        "name":                  j.get("name"),
+        "status":                j.get("status"),
+        "created":               j.get("created"),
+        "configuration":         j.get("configuration"),
+        "benchmark":             args.get("benchmark"),
+        "story":                 args.get("story"),
+        "base_git_hash":         args.get("base_git_hash"),
+        "experiment_patch":      args.get("experiment_patch"),
+        "base_extra_args":       args.get("base_extra_args"),
+        "experiment_extra_args": args.get("experiment_extra_args"),
+        "difference_count":      j.get("difference_count"),
+        "exception":             j.get("exception"),
+    }
+
+
 def _fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, str]]:
     """Fetch and parse the raw histogram entries for a Pinpoint job.
 
@@ -240,6 +305,28 @@ def pinpoint_show_job(job_url: str) -> dict:
         "results_url":        data.get("results_url"),
         "bots":               data.get("bots"),
     }
+
+
+@mcp.tool()
+def pinpoint_list_jobs(
+    user: str,
+    count: int = 20,
+    filter: str | None = None,
+) -> list[dict]:
+    """List recent Pinpoint jobs for a user, newest first.
+
+    user:   user email, e.g. "jkummerow@chromium.org"
+    count:  number of jobs to return (default 20)
+    filter: optional "key:value" filter (applied client-side), e.g.:
+              "status:Completed"
+              "benchmark:jetstream2"
+              "configuration:mac-m4"
+              "comparison_mode:try"
+
+    Each entry includes job_id, url, name, status, created, configuration,
+    benchmark, story, base/experiment patch and extra_args, difference_count.
+    """
+    return [_summarise_job(j) for j in _fetch_jobs(user, count, filter)]
 
 
 @mcp.tool()

@@ -74,7 +74,7 @@ List jobs, newest first. Returns up to 50 jobs per page.
 | param    | notes                                                              |
 |----------|--------------------------------------------------------------------|
 | `user`   | filter by user email, e.g. `jkummerow@chromium.org`               |
-| `filter` | colon-separated key:value filter, e.g. `status:Completed`, `benchmark:jetstream2` |
+| `filter` | colon-separated key:value filter, e.g. `status:Completed`, `benchmark:jetstream2` — **ignored by the server**; our tool applies it client-side |
 | `cursor` | opaque cursor string from `next_cursor` for pagination             |
 
 **Response:**
