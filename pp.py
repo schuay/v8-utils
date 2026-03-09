@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 import daemon
@@ -27,13 +28,91 @@ from tools import (
     pinpoint_show_results,
 )
 
+# ── ANSI colors (no-ops when not a TTY) ───────────────────────────────────────
+
+if sys.stdout.isatty():
+    _BOLD   = "\033[1m"
+    _DIM    = "\033[2m"
+    _RED    = "\033[31m"
+    _GREEN  = "\033[32m"
+    _YELLOW = "\033[33m"
+    _CYAN   = "\033[36m"
+    _RESET  = "\033[0m"
+else:
+    _BOLD = _DIM = _RED = _GREEN = _YELLOW = _CYAN = _RESET = ""
+
+
+def _status_color(status: str) -> str:
+    s = status.lower()
+    if "complet" in s:
+        return f"{_GREEN}{status}{_RESET}"
+    if any(x in s for x in ("running", "queue", "pending", "schedul")):
+        return f"{_YELLOW}{status}{_RESET}"
+    if any(x in s for x in ("fail", "cancel", "error")):
+        return f"{_RED}{status}{_RESET}"
+    return status
+
+
+_JSON_RE = re.compile(
+    r'("(?:[^"\\]|\\.)*")\s*:'          # key
+    r'|("(?:[^"\\]|\\.)*")'             # string value
+    r'|(true|false|null)'               # boolean / null
+    r'|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'  # number
+)
+
+
+def _colorize_json(text: str) -> str:
+    if not _CYAN:
+        return text
+
+    def _replace(m: re.Match) -> str:
+        if m.group(1):  # key
+            return f"{_CYAN}{m.group(1)}{_RESET}:"
+        if m.group(2):  # string value
+            return f"{_GREEN}{m.group(2)}{_RESET}"
+        if m.group(3):  # bool / null
+            return f"{_YELLOW}{m.group(3)}{_RESET}"
+        if m.group(4):  # number
+            return f"{_YELLOW}{m.group(4)}{_RESET}"
+        return m.group(0)
+
+    return _JSON_RE.sub(_replace, text)
+
+
+def _colorize_results(text: str) -> str:
+    if not _CYAN:
+        return text
+
+    def _color_pct(m: re.Match) -> str:
+        val = m.group(0)
+        return f"{_GREEN}{val}{_RESET}" if val.startswith("+") else f"{_RED}{val}{_RESET}"
+
+    out = []
+    for line in text.splitlines():
+        if line.startswith("base:") or line.startswith("exp:"):
+            key, _, rest = line.partition(":")
+            out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
+        elif re.fullmatch(r"-+", line):
+            out.append(f"{_DIM}{line}{_RESET}")
+        elif "chg%" in line:
+            out.append(f"{_BOLD}{line}{_RESET}")
+        else:
+            line = re.sub(r"[+-]\d+\.\d+%", _color_pct, line)
+            line = re.sub(r"\*\s*$", f"{_BOLD}{_GREEN}*{_RESET}", line)
+            out.append(line)
+    return "\n".join(out)
+
+
+# ── Output helpers ─────────────────────────────────────────────────────────────
 
 def _out(result) -> None:
     if isinstance(result, str):
         print(result)
     else:
-        print(json.dumps(result, indent=2))
+        print(_colorize_json(json.dumps(result, indent=2)))
 
+
+# ── Command handlers ───────────────────────────────────────────────────────────
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
     _out(pinpoint_show_job(args.job_url))
@@ -57,15 +136,15 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         exp_flags = j.get("experiment_extra_args") or ""
 
         label = f"{benchmark} / {story}".strip(" /")
-        diff_str = f"  diffs={diff}" if diff is not None else ""
-        print(f"{created}  {status:<12}  {url}")
-        print(f"  {config_}  {label}{diff_str}")
+        diff_str = f"  {_YELLOW}diffs={diff}{_RESET}" if diff is not None else ""
+        print(f"{_DIM}{created}{_RESET}  {_status_color(f'{status:<12}')}  {_CYAN}{url}{_RESET}")
+        print(f"  {_DIM}{config_}{_RESET}  {_BOLD}{label}{_RESET}{diff_str}")
         if patch:
-            print(f"  patch:     {patch}")
+            print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}")
         if base_flags:
-            print(f"  base-flags: {base_flags}")
+            print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
         if exp_flags:
-            print(f"  exp-flags:  {exp_flags}")
+            print(f"  {_DIM}exp-flags:{_RESET}  {exp_flags}")
         print()
 
 
@@ -74,7 +153,11 @@ def _cmd_get_raw_values(args: argparse.Namespace) -> None:
 
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
-    _out(pinpoint_show_results(args.job_url, show_all=args.show_all))
+    result = pinpoint_show_results(args.job_url, show_all=args.show_all)
+    if isinstance(result, str):
+        print(_colorize_results(result))
+    else:
+        _out(result)
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
@@ -97,7 +180,7 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         if not daemon.is_running():
             daemon.start_background()
         daemon.send_job(job_url)
-        print(f"Watching {result.get('jobId') or job_url} — you'll be notified on completion.")
+        print(f"{_GREEN}Watching{_RESET} {result.get('jobId') or job_url} — you'll be notified on completion.")
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
@@ -105,17 +188,17 @@ def _cmd_watch(args: argparse.Namespace) -> None:
         daemon.start_background()
     daemon.send_job(args.job_url)
     job_id = args.job_url.split("/")[-1]
-    print(f"Watching {job_id} — you'll be notified on completion.")
+    print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 
 
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     import signal
     if not daemon.is_running():
-        print("Daemon is not running.")
+        print(f"{_YELLOW}Daemon is not running.{_RESET}")
         return
     pid = int(daemon.PID_PATH.read_text())
     os.kill(pid, signal.SIGTERM)
-    print(f"Stopped daemon (pid {pid}).")
+    print(f"{_GREEN}Stopped daemon{_RESET} (pid {pid}).")
 
 
 def _cmd_logs(args: argparse.Namespace) -> None:
@@ -208,7 +291,7 @@ def main() -> None:
     try:
         args.func(args)
     except Exception as e:
-        print(f"error: {e}", file=sys.stderr)
+        print(f"{_RED}error:{_RESET} {e}", file=sys.stderr)
         sys.exit(1)
 
 
