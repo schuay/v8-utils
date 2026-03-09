@@ -99,7 +99,7 @@ def resolve_patch(patch: str) -> str:
     )
 
 
-_RE_GERRIT_CHANGE_ID = re.compile(r"/\+/(\d+)")
+_RE_GERRIT_CHANGE_ID = re.compile(r"/(\d+)(?:/\d+)?/?$")
 
 
 def fetch_gerrit_subject(patch_url: str) -> str | None:

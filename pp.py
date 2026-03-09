@@ -156,11 +156,20 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
+    import concurrent.futures
     jobs = pinpoint_list_jobs(count=args.count, user=args.user, filter=args.filter)
     if not jobs:
         print("No jobs found.")
         return
-    for j in jobs:
+
+    patches = [j.get("experiment_patch") or "" for j in jobs]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        subjects = list(ex.map(
+            lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
+            patches,
+        ))
+
+    for j, subject in zip(jobs, subjects):
         created = (j.get("created") or "")[:16].replace("T", " ")
         status = j.get("status") or "?"
         url = j.get("url") or ""
@@ -178,6 +187,8 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         print(f"  {_DIM}{config_}{_RESET}  {_BOLD}{label}{_RESET}{diff_str}")
         if patch:
             print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}")
+        if subject:
+            print(f"             {_BOLD}{subject}{_RESET}")
         if base_flags:
             print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
         if exp_flags:
