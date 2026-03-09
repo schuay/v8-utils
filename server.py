@@ -35,12 +35,12 @@ def _fetch_job(job_id: str) -> dict:
     return r.json()
 
 
-def _fetch_results(job_id: str) -> list[dict]:
-    """Fetch and parse the histogram results for a Pinpoint job.
+def _fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, str]]:
+    """Fetch and parse the raw histogram entries for a Pinpoint job.
 
-    Returns a list of dicts, one per (metric_name, label), each with:
-      name, unit, label, n, mean, stdev, min, max
-    Labels are the resolved human-readable strings (e.g. "base: ..." / "exp: ...").
+    Returns (histograms, guids) where:
+      histograms  list of raw histogram dicts (entries with name + unit)
+      guids       mapping from GUID string to resolved scalar value
     """
     job = _fetch_job(job_id)
     results_path = job.get("results_url")
@@ -62,23 +62,31 @@ def _fetch_results(job_id: str) -> list[dict]:
 
     entries = [json.loads(line) for line in data_block.splitlines() if line.strip()]
 
-    # Build guid -> value map from GenericSet entries.
     guids = {
         e["guid"]: e["values"][0] if len(e["values"]) == 1 else e["values"]
         for e in entries
         if e.get("type") == "GenericSet"
     }
+    histograms = [e for e in entries if "name" in e and "unit" in e]
+    return histograms, guids
 
-    # Group sample values by (metric_name, label).
+
+def _fetch_results(job_id: str) -> list[dict]:
+    """Aggregate histogram results for a Pinpoint job by (metric, label).
+
+    Returns a list of dicts, one per (metric_name, label), each with:
+      name, unit, label, n, mean, stdev, min, max
+    Labels are the resolved human-readable strings (e.g. "base: ..." / "exp: ...").
+    """
+    histograms, guids = _fetch_histograms(job_id)
+
     groups: dict[tuple[str, str], dict] = defaultdict(lambda: {"unit": None, "values": []})
-    for e in entries:
-        if "name" not in e or "unit" not in e:
-            continue
-        diag = e.get("diagnostics", {})
+    for h in histograms:
+        diag = h.get("diagnostics", {})
         label = guids.get(diag.get("labels"), diag.get("labels", "unknown"))
-        key = (e["name"], label)
-        groups[key]["unit"] = e["unit"]
-        groups[key]["values"].extend(e.get("sampleValues", []))
+        key = (h["name"], label)
+        groups[key]["unit"] = h["unit"]
+        groups[key]["values"].extend(h.get("sampleValues", []))
 
     results = []
     for (name, label), info in sorted(groups.items()):
@@ -94,6 +102,33 @@ def _fetch_results(job_id: str) -> list[dict]:
             "max":   max(vals) if vals else None,
         })
     return results
+
+
+def _fetch_raw_values(job_id: str) -> list[dict]:
+    """Return per-run histogram values for a Pinpoint job.
+
+    Returns a list of dicts, one per (metric, run), each with:
+      metric, label, run_id, unit, value
+
+    run_id is the label GUID, which is unique per bot run and consistent
+    across all metrics within the same run, making it suitable for joining.
+    """
+    histograms, guids = _fetch_histograms(job_id)
+
+    rows = []
+    for h in histograms:
+        diag = h.get("diagnostics", {})
+        label_guid = diag.get("labels", "unknown")
+        label = guids.get(label_guid, label_guid)
+        for value in h.get("sampleValues", []):
+            rows.append({
+                "metric":  h["name"],
+                "label":   label,
+                "run_id":  label_guid,
+                "unit":    h["unit"],
+                "value":   value,
+            })
+    return rows
 
 
 # ── Pinpoint tools ────────────────────────────────────────────────────────────
@@ -131,6 +166,24 @@ def pinpoint_show_job(job_url: str) -> dict:
         "results_url":        data.get("results_url"),
         "bots":               data.get("bots"),
     }
+
+
+@mcp.tool()
+def pinpoint_get_raw_values(job_url: str) -> list[dict]:
+    """Return per-run measurement values for a Pinpoint job.
+
+    Returns one row per (metric, bot run) with columns:
+      metric, label, run_id, unit, value
+
+    run_id is a GUID that uniquely identifies a single bot run and is
+    consistent across all metrics, so rows can be joined or grouped by it.
+    Suitable for downstream aggregation, statistical tests, or export.
+
+    job_url: Pinpoint job URL, e.g.
+             https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+    """
+    job_id = _job_id_from_url(job_url)
+    return _fetch_raw_values(job_id)
 
 
 @mcp.tool()
