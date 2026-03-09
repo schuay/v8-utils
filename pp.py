@@ -14,7 +14,7 @@ import argparse
 import json
 import sys
 
-from server import (
+from tools import (
     pinpoint_create_job,
     pinpoint_get_raw_values,
     pinpoint_list_jobs,
@@ -74,21 +74,24 @@ def main() -> None:
 
     # list-jobs
     p = sub.add_parser("list-jobs", help="List recent Pinpoint jobs for a user")
-    p.add_argument("-n", "--count", type=int, default=20, help="Number of jobs (default: 20)")
-    p.add_argument("-u", "--user", default=None, help="User email (default: current luci-auth user)")
+    p.add_argument("-n", "--count", type=int, default=20, metavar="N",
+                   help="Number of jobs (default: 20)")
+    p.add_argument("-u", "--user", default=None,
+                   help="User email (default: current luci-auth user)")
     p.add_argument("-f", "--filter", default=None, metavar="KEY=VALUE",
-                   help="Server-side filter, e.g. comparison_mode=try, configuration=linux-r350-perf")
+                   help='Client-side filter, e.g. "status=Completed", "comparison_mode=try"')
     p.set_defaults(func=_cmd_list_jobs)
 
     # get-raw-values
-    p = sub.add_parser("get-raw-values", help="Dump per-run raw measurement values")
+    p = sub.add_parser("get-raw-values", help="Dump per-run raw measurement values as JSON")
     p.add_argument("job_url", help="Pinpoint job URL or job ID")
     p.set_defaults(func=_cmd_get_raw_values)
 
     # show-results
     p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
     p.add_argument("job_url", help="Pinpoint job URL or job ID")
-    p.add_argument("--show-all", action="store_true", help="Include non-significant results")
+    p.add_argument("--show-all", action="store_true",
+                   help="Include non-significant results")
     p.set_defaults(func=_cmd_show_results)
 
     # create-job
@@ -97,7 +100,8 @@ def main() -> None:
                    help='Benchmark name or alias ("js3" = jetstream-main.crossbench)')
     p.add_argument("-c", "--configuration", required=True,
                    help='Bot config or alias ("linux", "macm4")')
-    p.add_argument("-s", "--story", default=None, help="Story within the benchmark")
+    p.add_argument("-s", "--story", default=None,
+                   help="Story within the benchmark")
     p.add_argument("--story-tags", default=None, dest="story_tags",
                    help="Comma-separated story tags")
     p.add_argument("--base-git-hash", default="HEAD", dest="base_git_hash",
@@ -121,7 +125,7 @@ def main() -> None:
     args = parser.parse_args()
     try:
         args.func(args)
-    except (ValueError, Exception) as e:
+    except Exception as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(1)
 
