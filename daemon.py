@@ -119,9 +119,10 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
 
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Periodically poll all watched jobs and notify on terminal status."""
-    cfg = config.load()
+    cfg = config.load()  # initial load; reloaded on each cycle below
     while True:
         time.sleep(cfg.poll_interval)
+        cfg = config.reload()  # pick up any config changes (e.g. chat_app_space)
         with lock:
             job_ids = list(watched)
         if not job_ids:

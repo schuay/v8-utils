@@ -69,6 +69,13 @@ def _set_value(key: str, value: str) -> None:
     CONFIG_PATH.write_text(text)
 
 
+def reload() -> Config:
+    """Discard the cached config and reload from disk."""
+    global _cache
+    _cache = None
+    return load()
+
+
 def update_chat_app_space(space: str) -> None:
     _set_value("chat_app_space", space)
 
