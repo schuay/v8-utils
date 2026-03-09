@@ -222,6 +222,11 @@ def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     print(f"{_GREEN}Stopped daemon{_RESET} (pid {pid}).")
 
 
+def _cmd_upgrade(args: argparse.Namespace) -> None:
+    os.execvp("uv", ["uv", "tool", "install",
+                     "git+https://github.com/schuay/v8-utils.git", "--reinstall"])
+
+
 def _cmd_logs(args: argparse.Namespace) -> None:
     log_path = daemon.LOG_PATH
     if not log_path.exists():
@@ -293,6 +298,10 @@ def main() -> None:
     p = sub.add_parser("watch", help="Notify via webhook when a job completes")
     p.add_argument("job_url", help="Pinpoint job URL or job ID")
     p.set_defaults(func=_cmd_watch)
+
+    # upgrade
+    p = sub.add_parser("upgrade", help="Upgrade pp to the latest version")
+    p.set_defaults(func=_cmd_upgrade)
 
     # daemon-stop
     p = sub.add_parser("daemon-stop", help="Stop the background notification daemon")
