@@ -558,8 +558,8 @@ def pinpoint_create_job(
     exp_git_hash: str = "HEAD",
     base_patch: str | None = None,
     exp_patch: str | None = None,
-    base_extra_args: str | None = None,
-    exp_extra_args: str | None = None,
+    base_js_flags: str | None = None,
+    exp_js_flags: str | None = None,
     repeat: int = 30,
     bug_id: int | None = None,
 ) -> dict:
@@ -573,8 +573,8 @@ def pinpoint_create_job(
     exp_git_hash:   git hash for the experiment build (default: HEAD)
     base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
     exp_patch:      Gerrit patch for experiment — same formats
-    base_extra_args: extra browser args for base, e.g. "--js-flags=--turbofan"
-    exp_extra_args:  extra browser args for experiment
+    base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
+    exp_js_flags:   V8 flags for experiment, same format
     repeat:         number of bot runs per variant (default: 30)
     bug_id:         buganizer issue ID to associate with the job
 
@@ -598,8 +598,8 @@ def pinpoint_create_job(
         "end_git_hash":           exp_git_hash,
         "base_patch":             resolved_base_patch,
         "experiment_patch":       resolved_exp_patch,
-        "base_extra_args":        base_extra_args,
-        "experiment_extra_args":  exp_extra_args,
+        "base_extra_args":        f'--js-flags="{base_js_flags}"' if base_js_flags else None,
+        "experiment_extra_args":  f'--js-flags="{exp_js_flags}"' if exp_js_flags else None,
         "tags":                   '{"origin": "v8-mcp"}',
     }
     # Strip None values — the API rejects unexpected null fields.
