@@ -13,6 +13,7 @@ from collections import defaultdict
 
 import httpx
 from mcp.server.fastmcp import FastMCP
+from scipy.stats import mannwhitneyu
 
 mcp = FastMCP("v8-mcp")
 
@@ -75,8 +76,10 @@ def _fetch_results(job_id: str) -> list[dict]:
     """Aggregate histogram results for a Pinpoint job by (metric, label).
 
     Returns a list of dicts, one per (metric_name, label), each with:
-      name, unit, label, n, mean, stdev, min, max
+      name, unit, label, n, mean, stdev, min, max, p_value, significant
     Labels are the resolved human-readable strings (e.g. "base: ..." / "exp: ...").
+    p_value and significant are set when exactly two labels exist for a metric
+    (Mann-Whitney U test, two-sided, alpha=0.05).
     """
     histograms, guids = _fetch_histograms(job_id)
 
@@ -88,18 +91,37 @@ def _fetch_results(job_id: str) -> list[dict]:
         groups[key]["unit"] = h["unit"]
         groups[key]["values"].extend(h.get("sampleValues", []))
 
+    # Compute per-metric Mann-Whitney U p-values when there are exactly 2 labels.
+    by_metric: dict[str, dict[str, list]] = defaultdict(dict)
+    for (name, label), info in groups.items():
+        by_metric[name][label] = info["values"]
+
+    p_values: dict[tuple[str, str], float | None] = {}
+    for name, by_label in by_metric.items():
+        if len(by_label) == 2:
+            (label_a, vals_a), (label_b, vals_b) = by_label.items()
+            result = mannwhitneyu(vals_a, vals_b, alternative="two-sided")
+            p_values[(name, label_a)] = result.pvalue
+            p_values[(name, label_b)] = result.pvalue
+        else:
+            for label in by_label:
+                p_values[(name, label)] = None
+
     results = []
     for (name, label), info in sorted(groups.items()):
         vals = info["values"]
+        p = p_values.get((name, label))
         results.append({
-            "name":  name,
-            "label": label,
-            "unit":  info["unit"],
-            "n":     len(vals),
-            "mean":  statistics.mean(vals) if vals else None,
-            "stdev": statistics.stdev(vals) if len(vals) > 1 else None,
-            "min":   min(vals) if vals else None,
-            "max":   max(vals) if vals else None,
+            "name":        name,
+            "label":       label,
+            "unit":        info["unit"],
+            "n":           len(vals),
+            "mean":        statistics.mean(vals) if vals else None,
+            "stdev":       statistics.stdev(vals) if len(vals) > 1 else None,
+            "min":         min(vals) if vals else None,
+            "max":         max(vals) if vals else None,
+            "p_value":     p,
+            "significant": (p < 0.05) if p is not None else None,
         })
     return results
 
