@@ -124,10 +124,6 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     patch_url = j.get("experiment_patch")
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
-    patch_val = patch_url
-    if patch_val and patch_subject:
-        patch_val = f"{patch_url}  {_BOLD}\"{patch_subject}\"{_RESET}"
-
     fields = [
         ("configuration", j.get("configuration")),
         ("benchmark",     j.get("benchmark")),
@@ -135,7 +131,7 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         ("mode",          j.get("comparison_mode")),
         ("base",          j.get("base_git_hash")),
         ("end",           j.get("end_git_hash")),
-        ("patch",         patch_val),
+        ("patch",         patch_url),
         ("base-flags",    j.get("base_extra_args")),
         ("exp-flags",     j.get("experiment_extra_args")),
         ("diffs",         j.get("difference_count")),
@@ -147,7 +143,13 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     for key, val in fields:
         if val is None:
             continue
-        val_str = f"{_CYAN}{val}{_RESET}" if key in ("patch", "results") else str(val)
+        if key == "patch":
+            subject_str = f"  {_BOLD}\"{patch_subject}\"{_RESET}" if patch_subject else ""
+            val_str = f"{_CYAN}{val}{_RESET}{subject_str}"
+        elif key == "results":
+            val_str = f"{_CYAN}{val}{_RESET}"
+        else:
+            val_str = str(val)
         print(f"  {_DIM}{key:<{w}}{_RESET}  {val_str}")
 
 
