@@ -25,6 +25,7 @@ class Config:
     chat_app_space: str | None = None
 
 
+
 _cache: Config | None = None
 
 
@@ -48,17 +49,17 @@ def load() -> Config:
     return _cache
 
 
-def update_chat_app_space(space: str) -> None:
-    """Write chat_app_space to the config file, creating it if needed."""
+def _set_value(key: str, value: str) -> None:
+    """Write a single key = "value" line to the config file, creating it if needed."""
     global _cache
     _cache = None
-    new_line = f'chat_app_space = "{space}"'
+    new_line = f'{key} = "{value}"'
     if not CONFIG_PATH.exists():
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         CONFIG_PATH.write_text(new_line + "\n")
         return
     text = CONFIG_PATH.read_text()
-    pattern = re.compile(r"^chat_app_space\s*=.*$", re.MULTILINE)
+    pattern = re.compile(rf"^{re.escape(key)}\s*=.*$", re.MULTILINE)
     if pattern.search(text):
         text = pattern.sub(new_line, text)
     else:
@@ -66,3 +67,9 @@ def update_chat_app_space(space: str) -> None:
             text += "\n"
         text += new_line + "\n"
     CONFIG_PATH.write_text(text)
+
+
+def update_chat_app_space(space: str) -> None:
+    _set_value("chat_app_space", space)
+
+

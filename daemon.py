@@ -53,39 +53,66 @@ def _setup_logging() -> None:
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
-def _message_text(job: dict) -> str:
+def _format_results_for_chat(rows: list[dict]) -> str:
+    """Format significant results as a Chat-friendly text block with emoji color."""
+    sig = [r for r in rows if r.get("significant")]
+    if not sig:
+        return ""
+    lines = ["", "*Results (significant):*"]
+    for r in sig:
+        unit = r.get("unit", "")
+        base_mean = r.get("base_mean") or 0.0
+        exp_mean  = r.get("exp_mean")  or 0.0
+        if base_mean:
+            pct = (exp_mean - base_mean) / base_mean * 100
+            pct_str = f"{pct:+.1f}%"
+            bigger_is_better = "_biggerIsBetter" in unit
+            good = pct > 0 if bigger_is_better else pct < 0
+            emoji = "🟢" if good else "🔴"
+        else:
+            pct_str = "?"
+            emoji = "📊"
+        lines.append(f"  {emoji} {pct_str} {r['name']}")
+    return "\n".join(lines)
+
+
+def _message_text(job: dict, results: list[dict] | None = None) -> str:
     status = job.get("status", "Unknown")
     name   = job.get("name", job.get("job_id", "unknown"))
     job_id = job.get("job_id", "")
     url    = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
     icon   = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
-    return f"{icon} *{status}*: {name}\n{url}"
+    text   = f"{icon} *{status}*: {name}\n{url}"
+    if results is not None:
+        text += _format_results_for_chat(results)
+    return text
 
 
-def _notify_webhook(webhook: str, job: dict) -> None:
+def _notify_webhook(webhook: str, job: dict, results: list[dict] | None = None) -> None:
     try:
-        httpx.post(webhook, json={"text": _message_text(job)}, timeout=10)
+        httpx.post(webhook, json={"text": _message_text(job, results)}, timeout=10)
         log.info("webhook sent for %s", job.get("job_id"))
     except Exception as e:
         log.error("webhook error for %s: %s", job.get("job_id"), e)
 
 
-def _notify_chat_app(space: str, service_account_email: str, job: dict) -> None:
+def _notify_chat_app(space: str, service_account_email: str, job: dict,
+                     results: list[dict] | None = None) -> None:
     import chat
-    chat.notify(space, service_account_email, _message_text(job))
+    chat.notify(space, service_account_email, _message_text(job, results))
     log.info("Chat app notification sent for %s", job.get("job_id"))
 
 
-def _notify(cfg: config.Config, job: dict) -> None:
+def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) -> None:
     """Send a notification via Chat app (preferred) or webhook (fallback)."""
     if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
-            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_email, job)
+            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_email, job, results)
             return
         except Exception as e:
             log.error("Chat app notification failed: %s", e)
     if cfg.chat_webhook:
-        _notify_webhook(cfg.chat_webhook, job)
+        _notify_webhook(cfg.chat_webhook, job, results)
 
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
@@ -110,8 +137,14 @@ def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
             log.info("%s  status=%s", job_id, status)
             if status in _TERMINAL_STATES:
                 log.info("%s  %s: %s", job_id, status, job.get("name", ""))
+                results = None
+                if status == "Completed" and (cfg.chat_app_space or cfg.chat_webhook):
+                    try:
+                        results = pinpoint.pivot_results(job_id)
+                    except Exception as e:
+                        log.warning("could not fetch results for %s: %s", job_id, e)
                 if cfg.chat_app_space or cfg.chat_webhook:
-                    _notify(cfg, job)
+                    _notify(cfg, job, results)
                 with lock:
                     watched.pop(job_id, None)
 
