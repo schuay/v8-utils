@@ -243,6 +243,15 @@ def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     print(f"{_GREEN}Stopped daemon{_RESET} (pid {pid}).")
 
 
+def _cmd_chat_setup(args: argparse.Namespace) -> None:
+    # TODO: implement OAuth2 browser flow
+    # 1. Load client ID + secret from config
+    # 2. Run local OAuth2 flow (open browser, listen on localhost for redirect)
+    # 3. Use user token to find/create DM space with the bot
+    # 4. Write chat_app_space to config file
+    raise NotImplementedError("pp chat-setup not yet implemented")
+
+
 def _cmd_upgrade(args: argparse.Namespace) -> None:
     os.execvp("uv", ["uv", "tool", "install",
                      "git+https://github.com/schuay/v8-utils.git", "--reinstall"])
@@ -322,6 +331,10 @@ def main() -> None:
     p = sub.add_parser("watch", help="Notify via webhook when a job completes")
     p.add_argument("job_url", help="Pinpoint job URL or job ID")
     p.set_defaults(func=_cmd_watch)
+
+    # chat-setup
+    p = sub.add_parser("chat-setup", help="Authenticate with Google Chat for direct notifications")
+    p.set_defaults(func=_cmd_chat_setup)
 
     # upgrade
     p = sub.add_parser("upgrade", help="Upgrade pp to the latest version")

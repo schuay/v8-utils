@@ -1,7 +1,11 @@
 """v8-utils notification daemon.
 
-Polls watched Pinpoint jobs; logs all activity to a log file; optionally
-sends a Google Chat webhook notification when a job reaches a terminal state.
+Polls watched Pinpoint jobs; logs all activity to a log file; sends a
+Google Chat notification when a job reaches a terminal state.
+
+Notification methods (in preference order):
+  1. Chat app (chat_app_space + chat_service_account_key in config)
+  2. Incoming webhook (chat_webhook in config)
 
 New jobs are submitted via a Unix domain socket. The daemon is started
 automatically by `pp watch`; it can also be run directly.
@@ -47,20 +51,45 @@ def _setup_logging() -> None:
     log.setLevel(logging.WARNING)
 
 
-# ── Webhook notification ───────────────────────────────────────────────────────
+# ── Notifications ─────────────────────────────────────────────────────────────
 
-def _notify(webhook: str, job: dict) -> None:
+def _message_text(job: dict) -> str:
     status = job.get("status", "Unknown")
     name   = job.get("name", job.get("job_id", "unknown"))
     job_id = job.get("job_id", "")
     url    = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
     icon   = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
-    text   = f"{icon} *{status}*: {name}\n{url}"
+    return f"{icon} *{status}*: {name}\n{url}"
+
+
+def _notify_webhook(webhook: str, job: dict) -> None:
     try:
-        httpx.post(webhook, json={"text": text}, timeout=10)
-        log.info("webhook sent for %s", job_id)
+        httpx.post(webhook, json={"text": _message_text(job)}, timeout=10)
+        log.info("webhook sent for %s", job.get("job_id"))
     except Exception as e:
-        log.error("webhook error for %s: %s", job_id, e)
+        log.error("webhook error for %s: %s", job.get("job_id"), e)
+
+
+def _notify_chat_app(space: str, key_path: str, job: dict) -> None:
+    # TODO: implement service account auth + Chat REST API call
+    # 1. Load service account JSON from key_path
+    # 2. Mint a short-lived access token (google-auth)
+    # 3. POST to https://chat.googleapis.com/v1/{space}/messages
+    raise NotImplementedError("Chat app notifications not yet implemented")
+
+
+def _notify(cfg: config.Config, job: dict) -> None:
+    """Send a notification via Chat app (preferred) or webhook (fallback)."""
+    if cfg.chat_app_space and cfg.chat_service_account_key:
+        try:
+            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_key, job)
+            return
+        except NotImplementedError:
+            raise
+        except Exception as e:
+            log.error("Chat app notification failed: %s", e)
+    if cfg.chat_webhook:
+        _notify_webhook(cfg.chat_webhook, job)
 
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
@@ -85,8 +114,8 @@ def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
             log.info("%s  status=%s", job_id, status)
             if status in _TERMINAL_STATES:
                 log.info("%s  %s: %s", job_id, status, job.get("name", ""))
-                if cfg.chat_webhook:
-                    _notify(cfg.chat_webhook, job)
+                if cfg.chat_app_space or cfg.chat_webhook:
+                    _notify(cfg, job)
                 with lock:
                     watched.pop(job_id, None)
 
