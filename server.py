@@ -76,10 +76,8 @@ def _fetch_results(job_id: str) -> list[dict]:
     """Aggregate histogram results for a Pinpoint job by (metric, label).
 
     Returns a list of dicts, one per (metric_name, label), each with:
-      name, unit, label, n, mean, stdev, min, max, p_value, significant
+      name, unit, label, n, mean, stdev, min, max
     Labels are the resolved human-readable strings (e.g. "base: ..." / "exp: ...").
-    p_value and significant are set when exactly two labels exist for a metric
-    (Mann-Whitney U test, two-sided, alpha=0.05).
     """
     histograms, guids = _fetch_histograms(job_id)
 
@@ -91,39 +89,89 @@ def _fetch_results(job_id: str) -> list[dict]:
         groups[key]["unit"] = h["unit"]
         groups[key]["values"].extend(h.get("sampleValues", []))
 
-    # Compute per-metric Mann-Whitney U p-values when there are exactly 2 labels.
-    by_metric: dict[str, dict[str, list]] = defaultdict(dict)
-    for (name, label), info in groups.items():
-        by_metric[name][label] = info["values"]
-
-    p_values: dict[tuple[str, str], float | None] = {}
-    for name, by_label in by_metric.items():
-        if len(by_label) == 2:
-            (label_a, vals_a), (label_b, vals_b) = by_label.items()
-            result = mannwhitneyu(vals_a, vals_b, alternative="two-sided")
-            p_values[(name, label_a)] = result.pvalue
-            p_values[(name, label_b)] = result.pvalue
-        else:
-            for label in by_label:
-                p_values[(name, label)] = None
-
     results = []
     for (name, label), info in sorted(groups.items()):
         vals = info["values"]
-        p = p_values.get((name, label))
         results.append({
-            "name":        name,
-            "label":       label,
-            "unit":        info["unit"],
-            "n":           len(vals),
-            "mean":        statistics.mean(vals) if vals else None,
-            "stdev":       statistics.stdev(vals) if len(vals) > 1 else None,
-            "min":         min(vals) if vals else None,
-            "max":         max(vals) if vals else None,
-            "p_value":     float(p) if p is not None else None,
-            "significant": bool(p < 0.05) if p is not None else None,
+            "name":  name,
+            "label": label,
+            "unit":  info["unit"],
+            "n":     len(vals),
+            "mean":  statistics.mean(vals) if vals else None,
+            "stdev": statistics.stdev(vals) if len(vals) > 1 else None,
+            "min":   min(vals) if vals else None,
+            "max":   max(vals) if vals else None,
         })
     return results
+
+
+def _pivot_results(job_id: str) -> list[dict]:
+    """Aggregate and compare base vs experiment for a Pinpoint job.
+
+    Returns a list of dicts, one per metric, each with:
+      name, unit, base_label, base_mean, base_stdev, base_n,
+      exp_label, exp_mean, exp_stdev, exp_n, p_value, significant
+
+    Labels starting with "base:" / "exp:" are identified by prefix;
+    otherwise the two labels are assigned alphabetically.
+    Mann-Whitney U test (two-sided, alpha=0.05) is used for significance.
+    Only metrics with exactly two labels are included.
+    """
+    histograms, guids = _fetch_histograms(job_id)
+
+    # Collect values per (metric, label).
+    groups: dict[tuple[str, str], dict] = defaultdict(lambda: {"unit": None, "values": []})
+    for h in histograms:
+        diag = h.get("diagnostics", {})
+        label = guids.get(diag.get("labels"), diag.get("labels", "unknown"))
+        key = (h["name"], label)
+        groups[key]["unit"] = h["unit"]
+        groups[key]["values"].extend(h.get("sampleValues", []))
+
+    # Group labels per metric.
+    by_metric: dict[str, dict[str, dict]] = defaultdict(dict)
+    for (name, label), info in groups.items():
+        by_metric[name][label] = info
+
+    def _is_base(label: str) -> bool:
+        return label.startswith("base:")
+
+    pivoted = []
+    for name, by_label in sorted(by_metric.items()):
+        if len(by_label) != 2:
+            continue
+        label_a, label_b = sorted(by_label)
+        # Prefer explicit "base:"/"exp:" prefix; fall back to alphabetical order.
+        if _is_base(label_a) or not _is_base(label_b):
+            base_label, exp_label = label_a, label_b
+        else:
+            base_label, exp_label = label_b, label_a
+
+        base_info = by_label[base_label]
+        exp_info  = by_label[exp_label]
+        base_vals = base_info["values"]
+        exp_vals  = exp_info["values"]
+
+        p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
+
+        def _stats(vals):
+            return {
+                "mean":  statistics.mean(vals) if vals else None,
+                "stdev": statistics.stdev(vals) if len(vals) > 1 else None,
+                "n":     len(vals),
+            }
+
+        pivoted.append({
+            "name":        name,
+            "unit":        base_info["unit"],
+            "base_label":  base_label,
+            **{f"base_{k}": v for k, v in _stats(base_vals).items()},
+            "exp_label":   exp_label,
+            **{f"exp_{k}":  v for k, v in _stats(exp_vals).items()},
+            "p_value":     p,
+            "significant": bool(p < 0.05),
+        })
+    return pivoted
 
 
 def _fetch_raw_values(job_id: str) -> list[dict]:
@@ -209,17 +257,43 @@ def pinpoint_get_raw_values(job_url: str) -> list[dict]:
 
 
 @mcp.tool()
-def pinpoint_show_results(job_url: str) -> list[dict]:
-    """Fetch and display all histogram results for a Pinpoint job.
+def pinpoint_show_results(job_url: str) -> str:
+    """Fetch and display a base-vs-experiment comparison for a Pinpoint job.
 
-    Returns one entry per (metric, label) with name, unit, label, n, mean,
-    stdev, min, and max.  Labels identify the base and experiment variants.
+    Prints one line per metric with base mean±stdev, exp mean±stdev, p-value,
+    and a significance marker.  Significant results (p<0.05) are marked with *.
 
     job_url: Pinpoint job URL, e.g.
              https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
     """
     job_id = _job_id_from_url(job_url)
-    return _fetch_results(job_id)
+    rows = _pivot_results(job_id)
+    if not rows:
+        return "No results found."
+
+    # Header: show the full labels once, then use "base" / "exp" in the table.
+    base_label = rows[0]["base_label"]
+    exp_label  = rows[0]["exp_label"]
+    header = (
+        f"base: {base_label}\n"
+        f"exp:  {exp_label}\n\n"
+        f"{'metric':<30}  {'base mean±stdev':>22}  {'exp mean±stdev':>22}  {'p':>7}  sig\n"
+        + "-" * 90
+    )
+
+    lines = [header]
+    for r in rows:
+        bm = r["base_mean"] or 0
+        bs = r["base_stdev"] or 0
+        em = r["exp_mean"] or 0
+        es = r["exp_stdev"] or 0
+        base_col = f"{bm:>10.3f} ±{bs:>8.3f}"
+        exp_col  = f"{em:>10.3f} ±{es:>8.3f}"
+        sig      = "*" if r["significant"] else ""
+        lines.append(
+            f"{r['name']:<30}  {base_col:>22}  {exp_col:>22}  {r['p_value']:>7.4f}  {sig}"
+        )
+    return "\n".join(lines)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
