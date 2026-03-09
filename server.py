@@ -9,6 +9,7 @@ Note the server may be upgraded via: uv tool upgrade v8-mcp
 import json
 import re
 import statistics
+import subprocess
 from collections import defaultdict
 
 import httpx
@@ -18,6 +19,63 @@ from scipy.stats import mannwhitneyu
 mcp = FastMCP("v8-mcp")
 
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
+
+
+# ── LUCI auth ─────────────────────────────────────────────────────────────────
+
+_LOGIN_INSTRUCTIONS = (
+    "Not logged in via luci-auth. "
+    "Run:  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
+)
+
+
+def _luci_run(command: str) -> str:
+    """Run a luci-auth subcommand and return its stdout, or raise ValueError."""
+    try:
+        return subprocess.check_output(
+            ["luci-auth", command], stderr=subprocess.STDOUT, text=True
+        )
+    except subprocess.CalledProcessError as e:
+        raise ValueError(e.output.strip() or _LOGIN_INSTRUCTIONS)
+    except FileNotFoundError:
+        raise ValueError("luci-auth not found in PATH. " + _LOGIN_INSTRUCTIONS)
+
+
+def _get_current_user_email() -> str:
+    """Return the email of the currently logged-in user via USERINFO_API.
+
+    Raises ValueError with login instructions if not logged in.
+    """
+    try:
+        token = _luci_run("token").strip()
+    except ValueError:
+        raise ValueError(_LOGIN_INSTRUCTIONS)
+    r = httpx.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    email = r.json().get("email")
+    if not email:
+        raise ValueError("Could not retrieve email from userinfo API")
+    return email
+
+
+def _user_email_variants(email: str) -> list[str]:
+    """Return email and its @google.com / @chromium.org counterparts."""
+    username = email.split("@")[0]
+    variants = [email, f"{username}@google.com", f"{username}@chromium.org"]
+    return list(dict.fromkeys(variants))  # deduplicate, preserve order
+
+
+def _luci_auth_headers() -> dict[str, str]:
+    """Return Authorization headers for the current LUCI user, or {} if not logged in."""
+    try:
+        token = _luci_run("token").strip()
+        return {"Authorization": f"Bearer {token}"}
+    except ValueError:
+        return {}
 
 
 # ── Pinpoint helpers ──────────────────────────────────────────────────────────
@@ -34,6 +92,16 @@ def _fetch_job(job_id: str) -> dict:
     r = httpx.get(url, follow_redirects=True, timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+def _is_cq_job(job: dict) -> bool:
+    """Return True if the job was submitted by the CQ (not a manual try job)."""
+    tags_raw = job.get("arguments", {}).get("tags", "")
+    try:
+        tags = json.loads(tags_raw) if tags_raw else {}
+    except (ValueError, TypeError):
+        tags = {}
+    return tags.get("origin") == "CQ"
 
 
 def _job_matches_filter(job: dict, filter: str) -> bool:
@@ -56,28 +124,57 @@ def _job_matches_filter(job: dict, filter: str) -> bool:
     return value in candidates.get(key, "").lower()
 
 
-def _fetch_jobs(user: str, count: int, filter: str | None = None) -> list[dict]:
-    """Fetch the most recent `count` jobs for a user matching an optional filter.
-
-    Paginates the API (50 jobs/page) and applies filter client-side until
-    `count` matching jobs are collected or the full history is exhausted.
-    """
+def _fetch_jobs_for_email(
+    email: str, count: int, extra_filter: str | None
+) -> list[dict]:
+    """Fetch up to `count` non-CQ jobs for a single email from the Pinpoint API."""
     matched = []
-    params: dict = {"user": user}
+    seen_ids: set[str] = set()
+    params: dict = {"filter": f"user={email}"}
 
     while len(matched) < count:
-        r = httpx.get(f"{_PINPOINT_BASE}/api/jobs", params=params, follow_redirects=True, timeout=30)
+        r = httpx.get(
+            f"{_PINPOINT_BASE}/api/jobs",
+            params=params,
+            follow_redirects=True,
+            timeout=30,
+        )
         r.raise_for_status()
         data = r.json()
         page = data.get("jobs", [])
-        if filter:
-            page = [j for j in page if _job_matches_filter(j, filter)]
-        matched.extend(page)
-        if not data.get("next"):
+        page = [j for j in page if not _is_cq_job(j)]
+        if extra_filter:
+            page = [j for j in page if _job_matches_filter(j, extra_filter)]
+        for j in page:
+            if j["job_id"] not in seen_ids:
+                seen_ids.add(j["job_id"])
+                matched.append(j)
+        next_cursor = data.get("next_cursor")
+        if not data.get("next") or not next_cursor or next_cursor == params.get("next_cursor"):
             break
-        params["cursor"] = data["next_cursor"]
+        params["next_cursor"] = next_cursor
 
-    return matched[:count]
+    return matched
+
+
+def _fetch_jobs(user: str, count: int, filter: str | None = None) -> list[dict]:
+    """Fetch the most recent `count` non-CQ jobs for a user matching an optional filter.
+
+    Queries all email variants (user@..., @google.com, @chromium.org) and merges.
+    The /api/jobs endpoint is public; no auth required.
+    """
+    emails = _user_email_variants(user)
+
+    seen_ids: set[str] = set()
+    all_jobs = []
+    for jobs in [_fetch_jobs_for_email(e, count, filter) for e in emails]:
+        for j in jobs:
+            if j["job_id"] not in seen_ids:
+                seen_ids.add(j["job_id"])
+                all_jobs.append(j)
+
+    all_jobs.sort(key=lambda j: j.get("created", ""), reverse=True)
+    return all_jobs[:count]
 
 
 def _summarise_job(j: dict) -> dict:
@@ -309,13 +406,16 @@ def pinpoint_show_job(job_url: str) -> dict:
 
 @mcp.tool()
 def pinpoint_list_jobs(
-    user: str,
     count: int = 20,
+    user: str | None = None,
     filter: str | None = None,
 ) -> list[dict]:
-    """List recent Pinpoint jobs for a user, newest first.
+    """List recent Pinpoint try jobs for a user, newest first. CQ jobs are excluded.
 
-    user:   user email, e.g. "jkummerow@chromium.org"
+    Requires luci-auth login when user is not specified:
+      luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email
+
+    user:   user email (default: current luci-auth user)
     count:  number of jobs to return (default 20)
     filter: optional "key:value" filter (applied client-side), e.g.:
               "status:Completed"
@@ -326,6 +426,8 @@ def pinpoint_list_jobs(
     Each entry includes job_id, url, name, status, created, configuration,
     benchmark, story, base/experiment patch and extra_args, difference_count.
     """
+    if user is None:
+        user = _get_current_user_email()
     return [_summarise_job(j) for j in _fetch_jobs(user, count, filter)]
 
 

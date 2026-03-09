@@ -71,11 +71,15 @@ List jobs, newest first. Returns up to 50 jobs per page.
 
 **Query parameters:**
 
-| param    | notes                                                              |
-|----------|--------------------------------------------------------------------|
-| `user`   | filter by user email, e.g. `jkummerow@chromium.org`               |
-| `filter` | colon-separated key:value filter, e.g. `status:Completed`, `benchmark:jetstream2` — **ignored by the server**; our tool applies it client-side |
-| `cursor` | opaque cursor string from `next_cursor` for pagination             |
+| param         | notes                                                              |
+|---------------|--------------------------------------------------------------------|
+| `filter`      | `user={email}` for server-side user filtering, e.g. `user=jgruber@chromium.org` |
+| `next_cursor` | opaque cursor string from `next_cursor` for pagination             |
+
+**Notes:**
+- The `filter=user={email}` parameter is handled server-side (confirmed via crossbench).
+- User email should be obtained from `https://www.googleapis.com/oauth2/v3/userinfo` using the LUCI Bearer token.
+- Jobs may be filed under `@google.com` or `@chromium.org` addresses; query both variants and merge.
 
 **Response:**
 
@@ -84,8 +88,8 @@ List jobs, newest first. Returns up to 50 jobs per page.
 | `jobs`        | list of job objects (same schema as `/job/{id}`) |
 | `count`       | total matching jobs (capped at 1000)             |
 | `max_count`   | same                                             |
-| `next_cursor` | pass as `cursor=` to fetch next page             |
-| `prev_cursor` | pass as `cursor=` to fetch previous page         |
+| `next_cursor` | pass as `next_cursor=` to fetch next page        |
+| `prev_cursor` | pass as `next_cursor=` to fetch previous page    |
 | `next`        | bool — whether a next page exists                |
 | `prev`        | bool — whether a previous page exists            |
 
