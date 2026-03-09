@@ -44,6 +44,10 @@ def _fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, str]]:
       guids       mapping from GUID string to resolved scalar value
     """
     job = _fetch_job(job_id)
+    status = job.get("status", "Unknown")
+    if status != "Completed":
+        raise ValueError(f"Job is not completed (status: {status})")
+
     results_path = job.get("results_url")
     if not results_path:
         raise ValueError("Job has no results_url")
