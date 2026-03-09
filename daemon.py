@@ -1,7 +1,7 @@
 """v8-mcp notification daemon.
 
-Polls watched Pinpoint jobs and sends a Google Chat webhook notification
-when each job reaches a terminal state (Completed, Failed, Cancelled).
+Polls watched Pinpoint jobs; logs all activity to a log file; optionally
+sends a Google Chat webhook notification when a job reaches a terminal state.
 
 New jobs are submitted via a Unix domain socket. The daemon is started
 automatically by `pp watch`; it can also be run directly.
@@ -9,11 +9,12 @@ automatically by `pp watch`; it can also be run directly.
 State files:
   ~/.local/share/v8-mcp/daemon.pid
   ~/.local/share/v8-mcp/daemon.sock
+  ~/.local/share/v8-mcp/daemon.log
 """
 
 from __future__ import annotations
 
-import json
+import logging
 import os
 import signal
 import socket
@@ -30,8 +31,20 @@ import pinpoint
 _STATE_DIR = Path("~/.local/share/v8-mcp").expanduser()
 SOCK_PATH = _STATE_DIR / "daemon.sock"
 PID_PATH  = _STATE_DIR / "daemon.pid"
+LOG_PATH  = _STATE_DIR / "daemon.log"
 
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
+
+log = logging.getLogger("v8-mcp")
+
+
+def _setup_logging() -> None:
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    handler = logging.FileHandler(LOG_PATH)
+    handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s",
+                                           datefmt="%Y-%m-%d %H:%M:%S"))
+    log.addHandler(handler)
+    log.setLevel(logging.DEBUG)
 
 
 # ── Webhook notification ───────────────────────────────────────────────────────
@@ -45,8 +58,9 @@ def _notify(webhook: str, job: dict) -> None:
     text   = f"{icon} *{status}*: {name}\n{url}"
     try:
         httpx.post(webhook, json={"text": text}, timeout=10)
+        log.info("webhook sent for %s", job_id)
     except Exception as e:
-        print(f"[daemon] webhook error: {e}", file=sys.stderr)
+        log.error("webhook error for %s: %s", job_id, e)
 
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
@@ -58,19 +72,21 @@ def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
         time.sleep(cfg.poll_interval)
         with lock:
             job_ids = list(watched)
+        if not job_ids:
+            continue
+        log.debug("polling %d job(s): %s", len(job_ids), ", ".join(job_ids))
         for job_id in job_ids:
             try:
                 job = pinpoint.fetch_job(job_id)
             except Exception as e:
-                print(f"[daemon] error fetching {job_id}: {e}", file=sys.stderr)
+                log.error("error fetching %s: %s", job_id, e)
                 continue
-            status = job.get("status", "")
+            status = job.get("status", "Unknown")
+            log.info("%s  status=%s", job_id, status)
             if status in _TERMINAL_STATES:
+                log.info("%s  %s: %s", job_id, status, job.get("name", ""))
                 if cfg.chat_webhook:
                     _notify(cfg.chat_webhook, job)
-                else:
-                    print(f"[daemon] {status}: {job.get('name')} — no webhook configured",
-                          file=sys.stderr)
                 with lock:
                     watched.pop(job_id, None)
 
@@ -79,7 +95,6 @@ def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
 
 def _socket_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Accept job IDs on the Unix socket and add them to the watch set."""
-    SOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
     SOCK_PATH.unlink(missing_ok=True)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
         srv.bind(str(SOCK_PATH))
@@ -94,15 +109,10 @@ def _socket_loop(watched: dict[str, str], lock: threading.Lock) -> None:
                 with lock:
                     if job_id not in watched:
                         watched[job_id] = job_id
-                        print(f"[daemon] watching {job_id}", flush=True)
+                        log.info("watching %s", job_id)
 
 
 # ── Daemon entry point ────────────────────────────────────────────────────────
-
-def _write_pid() -> None:
-    PID_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PID_PATH.write_text(str(os.getpid()))
-
 
 def _cleanup() -> None:
     SOCK_PATH.unlink(missing_ok=True)
@@ -110,24 +120,24 @@ def _cleanup() -> None:
 
 
 def run() -> None:
-    _write_pid()
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    PID_PATH.write_text(str(os.getpid()))
+    _setup_logging()
+
     signal.signal(signal.SIGTERM, lambda *_: (_cleanup(), sys.exit(0)))
     signal.signal(signal.SIGINT,  lambda *_: (_cleanup(), sys.exit(0)))
 
     watched: dict[str, str] = {}
     lock = threading.Lock()
 
-    poll_thread = threading.Thread(target=_poll_loop, args=(watched, lock), daemon=True)
-    poll_thread.start()
-
-    print(f"[daemon] started (pid {os.getpid()}, socket {SOCK_PATH})", flush=True)
+    log.info("started (pid %d)", os.getpid())
+    threading.Thread(target=_poll_loop, args=(watched, lock), daemon=True).start()
     _socket_loop(watched, lock)  # blocks
 
 
 # ── Client helpers (used by pp) ───────────────────────────────────────────────
 
 def is_running() -> bool:
-    """Return True if a daemon process is alive."""
     if not PID_PATH.exists():
         return False
     try:
@@ -139,7 +149,6 @@ def is_running() -> bool:
 
 
 def send_job(job_url: str) -> None:
-    """Send a job URL/ID to the running daemon."""
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
         s.connect(str(SOCK_PATH))
         s.sendall(job_url.encode())
@@ -149,12 +158,14 @@ def start_background() -> None:
     """Fork and start the daemon in the background."""
     pid = os.fork()
     if pid == 0:
-        # Child: detach and run
         os.setsid()
-        # Redirect stdio so the parent terminal isn't polluted
-        for fd, path in [(0, "/dev/null"), (1, "/dev/null"), (2, "/dev/null")]:
-            f = open(path, "r" if fd == 0 else "a")
-            os.dup2(f.fileno(), fd)
+        with open("/dev/null") as devnull:
+            os.dup2(devnull.fileno(), 0)
+        # stdout/stderr → log file (before _setup_logging takes over)
+        log_fd = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        os.dup2(log_fd, 1)
+        os.dup2(log_fd, 2)
+        os.close(log_fd)
         run()
         sys.exit(0)
     # Parent: wait briefly for socket to appear

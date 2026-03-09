@@ -85,6 +85,17 @@ def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     print(f"Stopped daemon (pid {pid}).")
 
 
+def _cmd_logs(args: argparse.Namespace) -> None:
+    log_path = daemon.LOG_PATH
+    if not log_path.exists():
+        print(f"No log file yet ({log_path})", file=sys.stderr)
+        sys.exit(1)
+    if args.follow:
+        os.execlp("tail", "tail", "-f", str(log_path))
+    else:
+        print(log_path.read_text(), end="")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="pp", description="Pinpoint CLI")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -152,6 +163,11 @@ def main() -> None:
     # daemon-stop
     p = sub.add_parser("daemon-stop", help="Stop the background notification daemon")
     p.set_defaults(func=_cmd_daemon_stop)
+
+    # logs
+    p = sub.add_parser("logs", help="Show daemon log (use --follow to tail -f)")
+    p.add_argument("-f", "--follow", action="store_true", help="Follow log output")
+    p.set_defaults(func=_cmd_logs)
 
     args = parser.parse_args()
     try:
