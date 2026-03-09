@@ -281,6 +281,9 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
     chat.notify(space, cfg.chat_service_account_email,
                 "👋 v8-utils notifications are set up. You'll be notified here when your Pinpoint jobs complete.")
     print(f"{_GREEN}Done.{_RESET} Written to {config.CONFIG_PATH}")
+    if daemon.is_running():
+        print(f"{_YELLOW}Note:{_RESET} restart the daemon so it picks up the new config:")
+        print(f"  pp daemon-stop && pp watch <job_url>")
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:

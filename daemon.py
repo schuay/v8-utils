@@ -53,11 +53,25 @@ def _setup_logging() -> None:
 
 # ── Notifications ─────────────────────────────────────────────────────────────
 
+def _format_job_details_for_chat(job: dict) -> str:
+    """Format key job fields as a compact Chat-friendly block."""
+    args = job.get("arguments", {})
+    fields = [
+        ("config",     job.get("configuration")),
+        ("benchmark",  args.get("benchmark")),
+        ("story",      args.get("story")),
+        ("patch",      args.get("experiment_patch")),
+        ("base-flags", args.get("base_extra_args")),
+        ("exp-flags",  args.get("experiment_extra_args")),
+    ]
+    return "\n".join(f"  {k}: {v}" for k, v in fields if v)
+
+
 def _format_results_for_chat(rows: list[dict]) -> str:
-    """Format significant results as a Chat-friendly text block with emoji color."""
+    """Format results as a Chat-friendly text block with emoji color."""
     sig = [r for r in rows if r.get("significant")]
     if not sig:
-        return ""
+        return "\n_No statistically significant changes._"
     lines = ["", "*Results (significant):*"]
     for r in sig:
         unit = r.get("unit", "")
@@ -77,12 +91,15 @@ def _format_results_for_chat(rows: list[dict]) -> str:
 
 
 def _message_text(job: dict, results: list[dict] | None = None) -> str:
-    status = job.get("status", "Unknown")
-    name   = job.get("name", job.get("job_id", "unknown"))
-    job_id = job.get("job_id", "")
-    url    = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
-    icon   = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
-    text   = f"{icon} *{status}*: {name}\n{url}"
+    status  = job.get("status", "Unknown")
+    name    = job.get("name", job.get("job_id", "unknown"))
+    job_id  = job.get("job_id", "")
+    url     = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
+    icon    = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
+    details = _format_job_details_for_chat(job)
+    text    = f"{icon} *{status}*: {name}\n{url}"
+    if details:
+        text += f"\n{details}"
     if results is not None:
         text += _format_results_for_chat(results)
     return text
@@ -119,10 +136,9 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
 
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Periodically poll all watched jobs and notify on terminal status."""
-    cfg = config.load()  # initial load; reloaded on each cycle below
+    cfg = config.load()
     while True:
         time.sleep(cfg.poll_interval)
-        cfg = config.reload()  # pick up any config changes (e.g. chat_app_space)
         with lock:
             job_ids = list(watched)
         if not job_ids:
