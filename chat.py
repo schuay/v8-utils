@@ -19,7 +19,12 @@ Setup flow (pp chat-setup):
 
 from __future__ import annotations
 
+import warnings
+
 import httpx
+
+# google-auth emits UserWarning when no quota project is set; irrelevant here.
+warnings.filterwarnings("ignore", category=UserWarning, module="google.auth")
 
 _CHAT_BASE = "https://chat.googleapis.com/v1"
 _SCOPES_BOT = ["https://www.googleapis.com/auth/chat.bot"]
@@ -37,7 +42,17 @@ def _impersonated_token(service_account_email: str, scopes: list[str]) -> str:
         target_principal=service_account_email,
         target_scopes=scopes,
     )
-    target.refresh(Request())
+    try:
+        target.refresh(Request())
+    except Exception as e:
+        if "iam.serviceAccounts.getAccessToken" in str(e):
+            raise PermissionError(
+                f"Cannot impersonate {service_account_email}.\n"
+                "Grant yourself the Token Creator role:\n"
+                f"  gcloud iam service-accounts add-iam-policy-binding {service_account_email} \\\n"
+                f"    --member='user:YOUR_EMAIL' --role='roles/iam.serviceAccountTokenCreator'"
+            ) from None
+        raise
     return target.token
 
 
