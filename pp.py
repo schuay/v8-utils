@@ -258,6 +258,9 @@ def _cmd_logs(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    import logging
+    logging.basicConfig(level=logging.WARNING)
+
     parser = argparse.ArgumentParser(prog="pp", description="Pinpoint CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
