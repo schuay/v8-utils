@@ -19,12 +19,15 @@ Setup flow (pp chat-setup):
 
 from __future__ import annotations
 
+import logging
 import warnings
 
 import httpx
 
-# google-auth emits UserWarning when no quota project is set; irrelevant here.
+# Suppress noisy google-auth diagnostics (quota project, project ID).
 warnings.filterwarnings("ignore", category=UserWarning, module="google.auth")
+logging.getLogger("google.auth").setLevel(logging.ERROR)
+logging.getLogger("google.auth.transport").setLevel(logging.ERROR)
 
 _CHAT_BASE = "https://chat.googleapis.com/v1"
 _SCOPES_BOT = ["https://www.googleapis.com/auth/chat.bot"]
@@ -102,5 +105,8 @@ def setup_dm_space(service_account_email: str, user_google_id: str) -> str:
         },
         timeout=10,
     )
-    r.raise_for_status()
+    if not r.is_success:
+        raise RuntimeError(
+            f"spaces:setup failed ({r.status_code}):\n{r.text}"
+        )
     return r.json()["name"]
