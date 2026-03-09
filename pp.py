@@ -124,6 +124,10 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     patch_url = j.get("experiment_patch")
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
+    patch_val = patch_url
+    if patch_val and patch_subject:
+        patch_val = f"{patch_url}  {_BOLD}\"{patch_subject}\"{_RESET}"
+
     fields = [
         ("configuration", j.get("configuration")),
         ("benchmark",     j.get("benchmark")),
@@ -131,8 +135,7 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         ("mode",          j.get("comparison_mode")),
         ("base",          j.get("base_git_hash")),
         ("end",           j.get("end_git_hash")),
-        ("patch",         patch_url),
-        ("",              patch_subject),
+        ("patch",         patch_val),
         ("base-flags",    j.get("base_extra_args")),
         ("exp-flags",     j.get("experiment_extra_args")),
         ("diffs",         j.get("difference_count")),
@@ -144,14 +147,7 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     for key, val in fields:
         if val is None:
             continue
-        if key == "patch":
-            val_str = f"{_CYAN}{val}{_RESET}"
-        elif key == "" :  # patch subject line
-            val_str = f"{_BOLD}{val}{_RESET}"
-        elif key == "results":
-            val_str = f"{_CYAN}{val}{_RESET}"
-        else:
-            val_str = str(val)
+        val_str = f"{_CYAN}{val}{_RESET}" if key in ("patch", "results") else str(val)
         print(f"  {_DIM}{key:<{w}}{_RESET}  {val_str}")
 
 
@@ -186,9 +182,8 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         print(f"{_DIM}{created}{_RESET}  {_status_color(f'{status:<12}')}  {_CYAN}{url}{_RESET}")
         print(f"  {_DIM}{config_}{_RESET}  {_BOLD}{label}{_RESET}{diff_str}")
         if patch:
-            print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}")
-        if subject:
-            print(f"             {_BOLD}{subject}{_RESET}")
+            subject_str = f"  {_BOLD}\"{subject}\"{_RESET}" if subject else ""
+            print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}{subject_str}")
         if base_flags:
             print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
         if exp_flags:

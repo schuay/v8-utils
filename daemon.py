@@ -44,7 +44,7 @@ def _setup_logging() -> None:
     handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s",
                                            datefmt="%Y-%m-%d %H:%M:%S"))
     log.addHandler(handler)
-    log.setLevel(logging.DEBUG)
+    log.setLevel(logging.WARNING)
 
 
 # ── Webhook notification ───────────────────────────────────────────────────────
