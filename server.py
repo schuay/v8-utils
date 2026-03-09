@@ -120,8 +120,8 @@ def _fetch_results(job_id: str) -> list[dict]:
             "stdev":       statistics.stdev(vals) if len(vals) > 1 else None,
             "min":         min(vals) if vals else None,
             "max":         max(vals) if vals else None,
-            "p_value":     p,
-            "significant": (p < 0.05) if p is not None else None,
+            "p_value":     float(p) if p is not None else None,
+            "significant": bool(p < 0.05) if p is not None else None,
         })
     return results
 
