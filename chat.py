@@ -86,23 +86,21 @@ def adc_user_id() -> str:
     return r.json()["sub"]
 
 
-def find_dm_space(service_account_email: str, user_google_id: str) -> str:
-    """Return the DM space name between the bot and a user.
+def setup_dm_space(service_account_email: str, user_google_id: str) -> str:
+    """Create (or find existing) DM space between the bot and a user.
 
-    Requires the user to have sent the bot at least one message in Google Chat
-    first (to create the DM space). Raises ValueError if not found.
+    Uses spaces:setup which is idempotent — safe to call repeatedly.
+    Returns the space resource name, e.g. "spaces/AAA...".
     """
     token = _impersonated_token(service_account_email, _SCOPES_BOT)
-    r = httpx.get(
-        f"{_CHAT_BASE}/spaces:findDirectMessage",
-        params={"name": f"users/{user_google_id}"},
+    r = httpx.post(
+        f"{_CHAT_BASE}/spaces:setup",
         headers={"Authorization": f"Bearer {token}"},
+        json={
+            "space": {"spaceType": "DIRECT_MESSAGE"},
+            "memberships": [{"member": {"name": f"users/{user_google_id}", "type": "HUMAN"}}],
+        },
         timeout=10,
     )
-    if r.status_code == 404:
-        raise ValueError(
-            "No DM space found between you and the bot.\n"
-            "Open Google Chat, search for the bot by name, and send it a message first."
-        )
     r.raise_for_status()
     return r.json()["name"]
