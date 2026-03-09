@@ -224,13 +224,26 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         if not daemon.is_running():
             daemon.start_background()
         daemon.send_job(job_url)
+        _chat_notify_watching(job_url)
         print(f"{_GREEN}Watching{_RESET} {result.get('jobId') or job_url} — you'll be notified on completion.")
+
+
+def _chat_notify_watching(job_url: str) -> None:
+    cfg = config.load()
+    if not (cfg.chat_app_space and cfg.chat_service_account_email):
+        return
+    try:
+        chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
+                    f"👀 Watching: {job_url}")
+    except Exception:
+        pass
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
     if not daemon.is_running():
         daemon.start_background()
     daemon.send_job(args.job_url)
+    _chat_notify_watching(args.job_url)
     job_id = args.job_url.split("/")[-1]
     print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 
