@@ -30,7 +30,9 @@ logging.getLogger("google.auth").setLevel(logging.ERROR)
 logging.getLogger("google.auth.transport").setLevel(logging.ERROR)
 
 _CHAT_BASE = "https://chat.googleapis.com/v1"
-_SCOPES_BOT = ["https://www.googleapis.com/auth/chat.bot"]
+_SCOPES_BOT    = ["https://www.googleapis.com/auth/chat.bot"]
+_SCOPES_SPACES = ["https://www.googleapis.com/auth/chat.spaces.create",
+                  "https://www.googleapis.com/auth/chat.bot"]
 
 
 def _impersonated_token(service_account_email: str, scopes: list[str]) -> str:
@@ -95,7 +97,7 @@ def setup_dm_space(service_account_email: str, user_google_id: str) -> str:
     Uses spaces:setup which is idempotent — safe to call repeatedly.
     Returns the space resource name, e.g. "spaces/AAA...".
     """
-    token = _impersonated_token(service_account_email, _SCOPES_BOT)
+    token = _impersonated_token(service_account_email, _SCOPES_SPACES)
     r = httpx.post(
         f"{_CHAT_BASE}/spaces:setup",
         headers={"Authorization": f"Bearer {token}"},
