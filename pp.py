@@ -115,7 +115,33 @@ def _out(result) -> None:
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
-    _out(pinpoint_show_job(args.job_url))
+    j = pinpoint_show_job(args.job_url)
+    url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.get('job_id')}{_RESET}"
+    created = (j.get("created") or "")[:16].replace("T", " ")
+    status = j.get("status") or "?"
+    print(f"{_DIM}{created}{_RESET}  {_status_color(status)}  {url}")
+    print()
+    fields = [
+        ("configuration", j.get("configuration")),
+        ("benchmark",     j.get("benchmark")),
+        ("story",         j.get("story")),
+        ("mode",          j.get("comparison_mode")),
+        ("base",          j.get("base_git_hash")),
+        ("end",           j.get("end_git_hash")),
+        ("patch",         j.get("experiment_patch")),
+        ("base-flags",    j.get("base_extra_args")),
+        ("exp-flags",     j.get("experiment_extra_args")),
+        ("diffs",         j.get("difference_count")),
+        ("bug",           j.get("bug_id")),
+        ("results",       j.get("results_url")),
+        ("exception",     j.get("exception")),
+    ]
+    w = max(len(k) for k, v in fields if v is not None)
+    for key, val in fields:
+        if val is None:
+            continue
+        val_str = f"{_CYAN}{val}{_RESET}" if key in ("patch", "results") else str(val)
+        print(f"  {_DIM}{key:<{w}}{_RESET}  {val_str}")
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
