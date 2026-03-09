@@ -548,6 +548,17 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
     return "\n".join(lines)
 
 
+_BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
+    # alias: (full benchmark name, default story or None)
+    "js3": ("jetstream-main.crossbench", "JetStream"),
+}
+
+_CONFIGURATION_ALIASES: dict[str, str] = {
+    "linux": "linux-r350-perf",
+    "macm4": "mac-m4-mini-perf",
+}
+
+
 @mcp.tool()
 def pinpoint_create_job(
     benchmark: str,
@@ -565,9 +576,12 @@ def pinpoint_create_job(
 ) -> dict:
     """Create a new Pinpoint A/B try job. Requires luci-auth login.
 
-    benchmark:      benchmark name, e.g. "speedometer3" or "jetstream2"
-    configuration:  bot config, e.g. "mac-m1_mini_2020-perf", "linux-perf"
-    story:          story within the benchmark (required unless story_tags given)
+    benchmark:      benchmark name or alias:
+                      "js3"  → jetstream-main.crossbench (story: JetStream)
+    configuration:  bot config or alias:
+                      "linux" → linux-r350-perf
+                      "macm4" → mac-m4-mini-perf
+    story:          story within the benchmark (overrides alias default)
     story_tags:     comma-separated story tags to select stories
     base_git_hash:  git hash for the base build (default: HEAD)
     exp_git_hash:   git hash for the experiment build (default: HEAD)
@@ -580,8 +594,13 @@ def pinpoint_create_job(
 
     Returns the created job dict including job_id and job URL.
     """
-    if not story and not story_tags:
-        raise ValueError("Either story or story_tags must be specified.")
+    if benchmark in _BENCHMARK_ALIASES:
+        full_benchmark, default_story = _BENCHMARK_ALIASES[benchmark]
+        benchmark = full_benchmark
+        if story is None:
+            story = default_story
+
+    configuration = _CONFIGURATION_ALIASES.get(configuration, configuration)
 
     resolved_base_patch = _resolve_patch(base_patch) if base_patch else None
     resolved_exp_patch = _resolve_patch(exp_patch) if exp_patch else None
