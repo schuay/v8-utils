@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 import daemon
@@ -82,7 +83,7 @@ def _cmd_watch(args: argparse.Namespace) -> None:
 
 
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
-    import os, signal
+    import signal
     if not daemon.is_running():
         print("Daemon is not running.")
         return
