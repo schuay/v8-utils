@@ -88,7 +88,7 @@ def _colorize_results(text: str) -> str:
 
     out = []
     for line in text.splitlines():
-        if line.startswith("base:") or line.startswith("exp:"):
+        if line.startswith("base:") or line.startswith("exp:") or line.startswith("unit:"):
             key, _, rest = line.partition(":")
             out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
         elif re.fullmatch(r"-+", line):

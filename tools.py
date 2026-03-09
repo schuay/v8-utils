@@ -118,10 +118,21 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
             for i, c in enumerate(cols)
         )
 
+    def fmt_unit(raw: str) -> str:
+        if raw.endswith("_biggerIsBetter"):
+            return raw[:-len("_biggerIsBetter")] + " (bigger is better)"
+        if raw.endswith("_smallerIsBetter"):
+            return raw[:-len("_smallerIsBetter")] + " (smaller is better)"
+        return raw
+
+    units = sorted({r["unit"] for r in rows if r.get("unit")})
+    unit_line = "unit: " + ",  ".join(fmt_unit(u) for u in units)
+
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
     return "\n".join([
         f"base: {rows[0]['base_label']}",
         f"exp:  {rows[0]['exp_label']}",
+        unit_line,
         "",
         fmt_row(hdrs),
         sep,
