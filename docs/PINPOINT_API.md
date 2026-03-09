@@ -67,19 +67,32 @@ Fetch details for a single job.
 
 ## GET /jobs
 
-List jobs, newest first. Returns up to 50 jobs per page.
+List jobs, newest first. Returns up to 50 jobs per page. **No authentication required.**
 
 **Query parameters:**
 
-| param         | notes                                                              |
-|---------------|--------------------------------------------------------------------|
-| `filter`      | `user={email}` for server-side user filtering, e.g. `user=jgruber@chromium.org` |
-| `next_cursor` | opaque cursor string from `next_cursor` for pagination             |
+| param         | notes                                                                      |
+|---------------|----------------------------------------------------------------------------|
+| `filter`      | `user={email}` — server-side user filter, e.g. `filter=user=jgruber@chromium.org` |
+| `next_cursor` | opaque cursor from previous response's `next_cursor` field                 |
+
+**Filter syntax:**
+
+Filters use `key=value` syntax (not `key:value`). Multiple filters can be combined.
+Confirmed working filters:
+
+| filter expression              | effect                              |
+|--------------------------------|-------------------------------------|
+| `user={email}`                 | jobs by a specific user             |
+| `comparison_mode=try`          | try jobs only                       |
+| `comparison_mode=performance`  | bisect jobs only                    |
+| `configuration={name}`         | jobs on a specific bot config       |
+
+`status=` filters appear to be **ignored** by the server; filter by status client-side.
 
 **Notes:**
-- The `filter=user={email}` parameter is handled server-side (confirmed via crossbench).
-- User email should be obtained from `https://www.googleapis.com/oauth2/v3/userinfo` using the LUCI Bearer token.
-- Jobs may be filed under `@google.com` or `@chromium.org` addresses; query both variants and merge.
+- A user may have jobs under both `@google.com` and `@chromium.org` addresses; query both and merge client-side.
+- To get the current user's email, call `GET https://www.googleapis.com/oauth2/v3/userinfo` with a LUCI Bearer token (`luci-auth token`).
 
 **Response:**
 
@@ -87,9 +100,8 @@ List jobs, newest first. Returns up to 50 jobs per page.
 |---------------|--------------------------------------------------|
 | `jobs`        | list of job objects (same schema as `/job/{id}`) |
 | `count`       | total matching jobs (capped at 1000)             |
-| `max_count`   | same                                             |
-| `next_cursor` | pass as `next_cursor=` to fetch next page        |
-| `prev_cursor` | pass as `next_cursor=` to fetch previous page    |
+| `next_cursor` | pass as `next_cursor=` to fetch the next page    |
+| `prev_cursor` | pass as `next_cursor=` to fetch the previous page |
 | `next`        | bool — whether a next page exists                |
 | `prev`        | bool — whether a previous page exists            |
 
