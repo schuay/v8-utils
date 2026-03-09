@@ -56,11 +56,17 @@ def _setup_logging() -> None:
 def _format_job_details_for_chat(job: dict) -> str:
     """Format key job fields as a compact Chat-friendly block."""
     args = job.get("arguments", {})
+    patch = args.get("experiment_patch")
+    if patch:
+        subject = pinpoint.fetch_gerrit_subject(patch)
+        patch_str = f"{patch}  \"{subject}\"" if subject else patch
+    else:
+        patch_str = None
     fields = [
         ("config",     job.get("configuration")),
         ("benchmark",  args.get("benchmark")),
         ("story",      args.get("story")),
-        ("patch",      args.get("experiment_patch")),
+        ("patch",      patch_str),
         ("base-flags", args.get("base_extra_args")),
         ("exp-flags",  args.get("experiment_extra_args")),
     ]
