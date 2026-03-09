@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 v8-mcp = "server:mcp.run"
+pp = "pp:main"
 
 [build-system]
 requires = ["hatchling"]
