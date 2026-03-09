@@ -156,6 +156,7 @@ def send_job(job_url: str) -> None:
 
 def start_background() -> None:
     """Fork and start the daemon in the background."""
+    _STATE_DIR.mkdir(parents=True, exist_ok=True)
     pid = os.fork()
     if pid == 0:
         os.setsid()
