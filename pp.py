@@ -51,7 +51,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
-    _out(pinpoint_create_job(
+    result = pinpoint_create_job(
         benchmark=args.benchmark,
         configuration=args.configuration,
         story=args.story,
@@ -64,7 +64,13 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         exp_js_flags=args.exp_js_flags,
         repeat=args.repeat,
         bug_id=args.bug_id,
-    ))
+    )
+    _out(result)
+    if args.watch and (job_url := result.get("url")):
+        if not daemon.is_running():
+            daemon.start_background()
+        daemon.send_job(job_url)
+        print(f"Watching {result.get('jobId') or job_url} — you'll be notified on completion.")
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
@@ -153,6 +159,8 @@ def main() -> None:
                    help="Bot runs per variant (default: 30)")
     p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
                    help="Buganizer issue ID")
+    p.add_argument("-w", "--watch", action="store_true",
+                   help="Watch the created job and notify on completion")
     p.set_defaults(func=_cmd_create_job)
 
     # watch
