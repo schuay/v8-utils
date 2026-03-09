@@ -259,8 +259,9 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
     user_id = chat.adc_user_id()
     print(f"  {_DIM}Google user ID:{_RESET} {user_id}")
 
-    print("Setting up DM space with the bot...")
-    space = chat.setup_dm_space(cfg.chat_service_account_email, user_id)
+    print("Finding DM space with the bot...")
+    print(f"  {_DIM}(In Google Chat, search for the bot by its app display name and send it a message first.){_RESET}")
+    space = chat.find_dm_space(cfg.chat_service_account_email, user_id)
     print(f"  {_DIM}space:{_RESET} {space}")
 
     config.update_chat_app_space(space)

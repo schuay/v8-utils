@@ -30,9 +30,7 @@ logging.getLogger("google.auth").setLevel(logging.ERROR)
 logging.getLogger("google.auth.transport").setLevel(logging.ERROR)
 
 _CHAT_BASE = "https://chat.googleapis.com/v1"
-_SCOPES_BOT    = ["https://www.googleapis.com/auth/chat.bot"]
-_SCOPES_SPACES = ["https://www.googleapis.com/auth/chat.spaces.create",
-                  "https://www.googleapis.com/auth/chat.bot"]
+_SCOPES_BOT = ["https://www.googleapis.com/auth/chat.bot"]
 
 
 def _impersonated_token(service_account_email: str, scopes: list[str]) -> str:
@@ -91,24 +89,26 @@ def adc_user_id() -> str:
     return r.json()["sub"]
 
 
-def setup_dm_space(service_account_email: str, user_google_id: str) -> str:
-    """Create (or find existing) DM space between the bot and a user.
+def find_dm_space(service_account_email: str, user_google_id: str) -> str:
+    """Find the existing DM space between the bot and a user.
 
-    Uses spaces:setup which is idempotent — safe to call repeatedly.
+    Requires the user to have opened a DM with the bot in Google Chat first
+    (search for the bot by its app display name, not its service account email).
     Returns the space resource name, e.g. "spaces/AAA...".
     """
-    token = _impersonated_token(service_account_email, _SCOPES_SPACES)
-    r = httpx.post(
-        f"{_CHAT_BASE}/spaces:setup",
+    token = _impersonated_token(service_account_email, _SCOPES_BOT)
+    r = httpx.get(
+        f"{_CHAT_BASE}/spaces:findDirectMessage",
+        params={"name": f"users/{user_google_id}"},
         headers={"Authorization": f"Bearer {token}"},
-        json={
-            "space": {"spaceType": "DIRECT_MESSAGE"},
-            "memberships": [{"member": {"name": f"users/{user_google_id}", "type": "HUMAN"}}],
-        },
         timeout=10,
     )
-    if not r.is_success:
-        raise RuntimeError(
-            f"spaces:setup failed ({r.status_code}):\n{r.text}"
+    if r.status_code == 404:
+        raise ValueError(
+            "No DM space found between you and the bot.\n"
+            "In Google Chat, search for the bot by its app display name (not the service\n"
+            "account email), open a DM, and send it a message. Then run pp chat-setup again."
         )
+    if not r.is_success:
+        raise RuntimeError(f"findDirectMessage failed ({r.status_code}):\n{r.text}")
     return r.json()["name"]
