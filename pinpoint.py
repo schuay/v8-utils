@@ -435,14 +435,14 @@ def _parse_crossbench_probe(raw: bytes) -> dict[str, list[float]] | None:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
-    probe_data = data.get("browser", {}).get("data", {})
-    if not probe_data:
-        return None
     result: dict[str, list[float]] = {}
-    for key, entry in probe_data.items():
-        vals = [float(v) for v in entry.get("values", []) if isinstance(v, (int, float))]
-        if vals:
-            result[key] = vals
+    for browser_data in data.values():
+        if not isinstance(browser_data, dict):
+            continue
+        for key, entry in browser_data.get("data", {}).items():
+            vals = [float(v) for v in entry.get("values", []) if isinstance(v, (int, float))]
+            if vals:
+                result[key] = vals
     return result or None
 
 
@@ -518,6 +518,7 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     sub_values: dict[str, dict[bool, list[float]]] = defaultdict(lambda: {True: [], False: []})
     has_probe_data = False
 
+    n_found = sum(1 for raw in probe_blobs if raw is not None)
     for i, raw in enumerate(probe_blobs):
         if raw is None:
             continue
@@ -530,10 +531,17 @@ def pivot_results_cas(job_id: str) -> list[dict]:
             sub_values[key][is_base].extend(vals)
 
     if not has_probe_data:
+        if n_found == 0:
+            raise ValueError(
+                f"Probe file {probe_filename!r} not found in any CAS isolate tree. "
+                "The benchmark directory structure may have changed."
+            )
         raise ValueError(
-            f"No probe data found in CAS isolates. "
-            f"Looked for {probe_filename!r} in each isolate tree. "
-            "This may indicate a directory structure change — update _parse_crossbench_probe."
+            f"Probe file {probe_filename!r} was fetched from {n_found} isolate(s) "
+            "but could not be parsed. "
+            "The file structure may differ from the expected crossbench probe format "
+            "{browser: {data: {story/metric: {values: [...]}}}}. "
+            "Run: cat <isolate>/output/jetstream_main.json | python3 -m json.tool | head -30"
         )
 
     rows = []
