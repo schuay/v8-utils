@@ -162,20 +162,24 @@ def _fetch_results_when_ready(job_id: str, poll_interval: int) -> list[dict] | N
 def _notify_with_results(cfg: config.Config, job: dict) -> None:
     """Wait for the results page, then send a notification. Runs in its own thread."""
     job_id = job.get("job_id", "")
-    log.info("waiting for results page for %s", job_id)
-    results = _fetch_results_when_ready(job_id, cfg.poll_interval)
-    _notify(cfg, job, results)
+    try:
+        log.info("waiting for results page for %s", job_id)
+        results = _fetch_results_when_ready(job_id, cfg.poll_interval)
+        _notify(cfg, job, results)
+    except Exception:
+        log.error("error notifying for %s", job_id, exc_info=True)
 
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
 
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Periodically poll all watched jobs and notify on terminal status."""
-    try:
-        _poll_loop_inner(watched, lock)
-    except Exception:
-        log.error("poll loop crashed", exc_info=True)
-        raise
+    while True:
+        try:
+            _poll_loop_inner(watched, lock)
+        except Exception:
+            log.error("poll loop crashed, restarting in 60s", exc_info=True)
+            time.sleep(60)
 
 
 def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
@@ -217,16 +221,19 @@ def _socket_loop(watched: dict[str, str], lock: threading.Lock) -> None:
         srv.bind(str(SOCK_PATH))
         srv.listen()
         while True:
-            conn, _ = srv.accept()
-            with conn:
-                data = conn.recv(256).decode().strip()
-                if not data:
-                    continue
-                job_id = pinpoint.job_id_from_url(data)
-                with lock:
-                    if job_id not in watched:
-                        watched[job_id] = job_id
-                        log.info("watching %s", job_id)
+            try:
+                conn, _ = srv.accept()
+                with conn:
+                    data = conn.recv(256).decode().strip()
+                    if not data:
+                        continue
+                    job_id = pinpoint.job_id_from_url(data)
+                    with lock:
+                        if job_id not in watched:
+                            watched[job_id] = job_id
+                            log.info("watching %s", job_id)
+            except Exception:
+                log.error("socket loop error", exc_info=True)
 
 
 # ── Daemon entry point ────────────────────────────────────────────────────────
