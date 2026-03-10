@@ -3,6 +3,7 @@
 from mcp.server.fastmcp import FastMCP
 
 import config
+import perf as perf_tools
 import pinpoint
 
 mcp = FastMCP("v8-utils")
@@ -192,3 +193,136 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
+
+
+# ── perf tools ────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def perf_stat(stat_file: str) -> dict:
+    """Parse a saved `perf stat` output file into structured counter data.
+
+    stat_file: path to a file containing `perf stat` text output
+               (saved via `perf stat -o <file>` or stderr redirection)
+
+    Returns elapsed_seconds and a list of counters with their values and
+    human-readable notes (e.g. "3.45 CPUs utilized").
+    """
+    return perf_tools.parse_stat(stat_file)
+
+
+@mcp.tool()
+def perf_hotspots(
+    perf_data: str,
+    dso: str | None = None,
+    n: int = 30,
+) -> list[dict]:
+    """Return the top N hot symbols from a perf.data file.
+
+    Each entry includes self_pct (exclusive time) and total_pct (inclusive
+    time including callees), plus the symbol name and shared object.
+    Sorted by self_pct descending — start here to find what to annotate.
+
+    perf_data: path to perf.data file
+    dso:       restrict to a specific shared object, e.g. "libv8.so" or "d8"
+    n:         number of symbols to return (default 30)
+    """
+    return perf_tools.hotspots(perf_data, dso=dso, n=n)
+
+
+@mcp.tool()
+def perf_callers(
+    perf_data: str,
+    symbol: str,
+    n: int = 20,
+) -> str:
+    """Show who calls a hot symbol and with what sample weight.
+
+    Returns the call-graph section for the symbol from perf report in
+    caller mode, so the tree reads upward (direct callers nearest, then
+    their callers above).  Use this to understand whether hotness is
+    self-time or propagated from a call site.
+
+    perf_data: path to perf.data file
+    symbol:    symbol name or unique substring, e.g. "Heap::AllocateRaw"
+    n:         max lines of call-graph detail to return (default 20)
+    """
+    return perf_tools.callers(perf_data, symbol, n=n)
+
+
+@mcp.tool()
+def perf_annotate(
+    perf_data: str,
+    symbol: str,
+    dso: str | None = None,
+    min_pct: float = 0.5,
+    context: int = 8,
+) -> dict:
+    """Annotated disassembly for a symbol, with smart hot-region extraction.
+
+    Returns:
+      total_lines:      total line count — use as reference for read_around
+      top_instructions: the 20 hottest individual instructions (addr, pct, asm)
+      hot_blocks:       contiguous clusters of hot instructions (>= min_pct),
+                        each expanded by ±context lines and sorted by peak heat
+
+    The hot_blocks content includes line numbers so you can call
+    perf_annotate_read_around to explore the surrounding code.
+
+    perf_data: path to perf.data file
+    symbol:    exact symbol name (use perf_hotspots to find it)
+    dso:       shared object filter, e.g. "libv8.so"
+    min_pct:   minimum sample % to qualify as hot (default 0.5)
+    context:   lines of context around each hot cluster (default 8)
+    """
+    return perf_tools.annotate(perf_data, symbol, dso=dso,
+                               min_pct=min_pct, context=context)
+
+
+@mcp.tool()
+def perf_annotate_read_around(
+    perf_data: str,
+    symbol: str,
+    line: int,
+    context: int = 30,
+    dso: str | None = None,
+) -> str:
+    """Read a window of annotated disassembly around a specific line number.
+
+    Use this after perf_annotate to explore regions of interest.  Line
+    numbers are as reported in perf_annotate's top_instructions and
+    hot_blocks fields.  Each output line is prefixed with its line number
+    for further navigation.
+
+    perf_data: path to perf.data file
+    symbol:    symbol name (must match perf_annotate call)
+    line:      1-based line number to centre the window on
+    context:   lines before and after to include (default 30)
+    dso:       shared object filter (must match perf_annotate call if used)
+    """
+    return perf_tools.annotate_read_around(perf_data, symbol, line,
+                                           context=context, dso=dso)
+
+
+@mcp.tool()
+def perf_diff(
+    perf_before: str,
+    perf_after: str,
+    dso: str | None = None,
+    n: int = 30,
+) -> list[dict]:
+    """Compare two perf profiles: what got hotter or cooler?
+
+    Returns the top N symbols sorted by |delta_pct|, so the biggest
+    changes appear first regardless of direction.  Each entry has:
+      symbol:       function name
+      dso:          shared object
+      baseline_pct: self% in the before profile (None if new)
+      after_pct:    self% in the after profile (None if removed)
+      delta_pct:    after - baseline (positive = got hotter)
+
+    perf_before: path to baseline perf.data
+    perf_after:  path to experiment perf.data
+    dso:         restrict to a specific shared object
+    n:           number of symbols to return (default 30)
+    """
+    return perf_tools.diff(perf_before, perf_after, dso=dso, n=n)
