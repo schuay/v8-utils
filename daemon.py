@@ -224,12 +224,16 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
 
 # ── Socket listener ───────────────────────────────────────────────────────────
 
-def _socket_loop(watched: dict[str, str], lock: threading.Lock) -> None:
+def _socket_loop(watched: dict[str, str], lock: threading.Lock,
+                 ready_fd: int | None = None) -> None:
     """Accept job IDs on the Unix socket and add them to the watch set."""
     SOCK_PATH.unlink(missing_ok=True)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
         srv.bind(str(SOCK_PATH))
         srv.listen()
+        if ready_fd is not None:
+            os.write(ready_fd, b"\x00")
+            os.close(ready_fd)
         while True:
             try:
                 conn, _ = srv.accept()
@@ -253,7 +257,7 @@ def _cleanup() -> None:
     PID_PATH.unlink(missing_ok=True)
 
 
-def run() -> None:
+def run(ready_fd: int | None = None) -> None:
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
     PID_PATH.write_text(str(os.getpid()))
     _setup_logging()
@@ -266,7 +270,7 @@ def run() -> None:
 
     log.info("started (pid %d)", os.getpid())
     threading.Thread(target=_poll_loop, args=(watched, lock), daemon=True).start()
-    _socket_loop(watched, lock)  # blocks
+    _socket_loop(watched, lock, ready_fd=ready_fd)  # blocks
 
 
 # ── Client helpers (used by pp) ───────────────────────────────────────────────
@@ -291,8 +295,10 @@ def send_job(job_url: str) -> None:
 def start_background() -> None:
     """Fork and start the daemon in the background."""
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
+    r_fd, w_fd = os.pipe()
     pid = os.fork()
     if pid == 0:
+        os.close(r_fd)
         os.setsid()
         with open("/dev/null") as devnull:
             os.dup2(devnull.fileno(), 0)
@@ -300,14 +306,14 @@ def start_background() -> None:
         os.dup2(log_fd, 1)
         os.dup2(log_fd, 2)
         os.close(log_fd)
-        run()
+        run(ready_fd=w_fd)
         sys.exit(0)
-    # Parent: wait briefly for socket to appear
-    for _ in range(20):
-        if SOCK_PATH.exists():
-            return
-        time.sleep(0.1)
-    raise RuntimeError("Daemon did not start in time")
+    # Parent: block until child signals readiness (write end closed after listen())
+    os.close(w_fd)
+    ready = os.read(r_fd, 1)
+    os.close(r_fd)
+    if not ready:
+        raise RuntimeError("Daemon failed to start")
 
 
 if __name__ == "__main__":
