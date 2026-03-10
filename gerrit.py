@@ -81,12 +81,13 @@ def comments(change_url: str) -> list[dict]:
             key=lambda c: c.get("updated", ""),
         )
         return {
-            "file":      root["_file"],
-            "line":      root.get("line"),
-            "patch_set": root.get("patch_set"),
-            "author":    root.get("author", {}).get("email", "unknown"),
-            "message":   root.get("message", ""),
-            "updated":   root.get("updated", ""),
+            "file":       root["_file"],
+            "line":       root.get("line"),
+            "patch_set":  root.get("patch_set"),
+            "unresolved": root.get("unresolved", False),
+            "author":     root.get("author", {}).get("email", "unknown"),
+            "message":    root.get("message", ""),
+            "updated":    root.get("updated", ""),
             "replies": [
                 {
                     "author":  r.get("author", {}).get("email", "unknown"),
