@@ -78,6 +78,13 @@ def _format_results_for_chat(rows: list[dict]) -> str:
     sig = [r for r in rows if r.get("significant")]
     if not sig:
         return "\n_No statistically significant changes._"
+
+    def _pct(r: dict) -> float:
+        bm = r.get("base_mean") or 0.0
+        return ((r.get("exp_mean") or 0.0) - bm) / bm * 100 if bm else 0.0
+
+    sig.sort(key=_pct, reverse=True)
+
     lines = ["", "*Results (significant):*"]
     for r in sig:
         unit = r.get("unit", "")
@@ -102,10 +109,13 @@ def _message_text(job: dict, results: list[dict] | None = None) -> str:
     job_id  = job.get("job_id", "")
     url     = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
     icon    = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
-    details = _format_job_details_for_chat(job)
-    text    = f"{icon} *{status}*: {name}\n{url}"
+    details   = _format_job_details_for_chat(job)
+    exception = job.get("exception")
+    text      = f"{icon} *{status}*: {name}\n{url}"
     if details:
         text += f"\n{details}"
+    if exception:
+        text += f"\n\n*Error:* {exception}"
     if results is not None:
         text += _format_results_for_chat(results)
     return text
