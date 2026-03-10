@@ -43,12 +43,12 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
 def _get(api_base: str, path: str) -> dict | list:
-    """Authenticated GET against the Gerrit REST API; falls back to anonymous."""
-    headers = pinpoint.get_auth_headers()
-    prefix = "/a" if headers else ""
-    r = httpx.get(f"{api_base}{prefix}{path}", headers=headers, timeout=30)
-    if r.status_code in (401, 403) and prefix:
-        r = httpx.get(f"{api_base}{path}", timeout=30)
+    """GET against the Gerrit REST API, with auth upgrade on 401."""
+    r = httpx.get(f"{api_base}{path}", timeout=30)
+    if r.status_code == 401:
+        headers = pinpoint.get_auth_headers()
+        if headers:
+            r = httpx.get(f"{api_base}/a{path}", headers=headers, timeout=30)
     r.raise_for_status()
     text = r.text
     if text.startswith(_XSSI):
