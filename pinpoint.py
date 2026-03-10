@@ -366,16 +366,6 @@ def fetch_raw_values(job_id: str) -> list[dict]:
 
 # ── CAS data access ───────────────────────────────────────────────────────────
 
-# Maps Pinpoint benchmark name → crossbench probe filename (without .json).
-# The probe file is searched by name anywhere in the isolate tree, so this
-# works regardless of which subdirectory the benchmark places it in.
-_BENCHMARK_TO_PROBE: dict[str, str] = {
-    "jetstream-main.crossbench": "jetstream_main",
-    "jetstream2.crossbench":     "jetstream_2.2",
-    "speedometer3.crossbench":   "speedometer_main",
-}
-
-
 def fetch_job_state(job_id: str) -> list[dict]:
     """Return the job's 'state' list (base/experiment variants with attempts)."""
     r = httpx.get(
@@ -409,54 +399,76 @@ def _extract_cas_digests(state: list[dict]) -> tuple[list[str], list[str]]:
     return base, exp
 
 
-def _parse_probe_json(raw: bytes) -> dict[str, float] | None:
-    """Parse a crossbench probe JSON blob into a flat {metric_key: float} dict.
+_BENCHMARK_TO_PROBE: dict[str, str] = {
+    "jetstream-main.crossbench": "jetstream_main.json",
+    "jetstream2.crossbench":     "jetstream2.json",
+}
 
-    Expected structure: {browser_label: {data: {"story/Metric": {values: [float]}}}}
-    Returns the mean of each metric's values list, or None if unparseable.
+
+def _parse_perf_results(raw: bytes) -> tuple[list[dict], dict] | None:
+    """Parse a perf_results.json blob (Chromium histogram JSON array format).
+
+    Returns (histograms, guids) in the same format as fetch_histograms(),
+    or None if unparseable.
+    """
+    try:
+        entries = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(entries, list):
+        return None
+    guids = {
+        e["guid"]: e["values"][0] if len(e["values"]) == 1 else e["values"]
+        for e in entries if e.get("type") == "GenericSet"
+    }
+    histograms = [e for e in entries if "name" in e and "unit" in e]
+    return (histograms, guids) if histograms else None
+
+
+def _parse_crossbench_probe(raw: bytes) -> dict[str, list[float]] | None:
+    """Parse a crossbench probe JSON (e.g. jetstream_main.json).
+
+    Structure: {browser: {data: {"story/SubMetric": {values: [float, ...]}}}}
+    Returns {story/SubMetric: [float values]} or None if unparseable.
     """
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, ValueError):
         return None
-    result: dict[str, float] = {}
-    for browser_data in data.values():
-        if not isinstance(browser_data, dict):
-            continue
-        for metric_key, stats in browser_data.get("data", {}).items():
-            if not isinstance(stats, dict):
-                continue
-            vals = stats.get("values", [])
-            if vals:
-                result[metric_key] = sum(vals) / len(vals)
+    probe_data = data.get("browser", {}).get("data", {})
+    if not probe_data:
+        return None
+    result: dict[str, list[float]] = {}
+    for key, entry in probe_data.items():
+        vals = [float(v) for v in entry.get("values", []) if isinstance(v, (int, float))]
+        if vals:
+            result[key] = vals
     return result or None
 
 
 def pivot_results_cas(job_id: str) -> list[dict]:
     """Like pivot_results, but fetches raw per-run values from CAS isolates.
 
-    Uses the RBE REST API directly — no `cas` binary required.  Walks each
-    isolate's directory tree to find the probe JSON by filename, then
-    batch-fetches all file blobs in as few API calls as possible.
+    Uses the RBE REST API directly — no `cas` binary required.
 
-    For JetStream this surfaces Score, First, Average, and Worst4 per story
-    rather than just the headline Score from the histogram HTML.
+    For benchmarks with a known probe file (e.g. JetStream → jetstream_main.json),
+    returns sub-metrics (Score, First, Average, Worst4) per story.
+    Falls back to aggregate metrics from perf_results.json for other benchmarks.
 
     Requires: gcloud auth application-default login
     """
     import cas_api
 
     job = fetch_job(job_id)
-    status = job.get("status", "Unknown")
-    if status != "Completed":
-        raise ValueError(f"Job is not completed (status: {status})")
+    if job.get("status") != "Completed":
+        raise ValueError(f"Job is not completed (status: {job.get('status', 'Unknown')})")
 
     benchmark = job.get("arguments", {}).get("benchmark", "")
-    probe_name = _BENCHMARK_TO_PROBE.get(benchmark)
-    if not probe_name:
+    probe_filename = _BENCHMARK_TO_PROBE.get(benchmark)
+    if not probe_filename:
         raise ValueError(
-            f"CAS data access is not supported for benchmark {benchmark!r}.\n"
-            f"Supported: {', '.join(_BENCHMARK_TO_PROBE)}"
+            f"No CAS probe file known for benchmark {benchmark!r}. "
+            "Update _BENCHMARK_TO_PROBE in pinpoint.py to add support."
         )
 
     state = fetch_job_state(job_id)
@@ -464,63 +476,82 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     if not base_digests or not exp_digests:
         raise ValueError("No CAS digests found in job state.")
 
-    # Fetch the full labels (e.g. "base: chromium@abc123 (...)") from histograms.
-    # Fall back to the short state labels if the results page isn't available yet.
-    try:
-        _histograms, _guids = fetch_histograms(job_id)
-        _groups = _collect_groups(_histograms, _guids)
-        _labels = sorted({label for _, label in _groups})
-        base_label = next((l for l in _labels if l.startswith("base:")), _labels[0] if _labels else "base")
-        exp_label  = next((l for l in _labels if l.startswith("exp:")),  _labels[1] if len(_labels) > 1 else "exp")
-    except Exception:
-        base_label = (state[0].get("change", {}).get("label") or "base") if state else "base"
-        exp_label  = (state[1].get("change", {}).get("label") or "exp")  if len(state) > 1 else "exp"
-
     all_digests = base_digests + exp_digests
-    probe_filename = f"{probe_name}.json"
+    n_base = len(base_digests)
 
     try:
-        blobs = cas_api.fetch_probe_files(all_digests, probe_filename)
+        perf_blobs  = cas_api.fetch_probe_files(all_digests, "perf_results.json")
+        probe_blobs = cas_api.fetch_probe_files(all_digests, probe_filename)
     except PermissionError as e:
         raise PermissionError(
-            f"CAS authentication failed.\n"
-            f"Ensure you are logged in:  gcloud auth application-default login\n"
+            "CAS authentication failed.\n"
+            "Ensure you are logged in:  gcloud auth application-default login\n"
             f"Details: {e}"
         ) from e
 
-    # {"story/Metric": {True: [base floats], False: [exp floats]}}
-    values: dict[str, dict[bool, list[float]]] = defaultdict(lambda: {True: [], False: []})
+    # Extract labels and units from perf_results.json
+    base_label: str | None = None
+    exp_label:  str | None = None
+    units: dict[str, str] = {}
 
-    for i, raw in enumerate(blobs):
+    for i, raw in enumerate(perf_blobs):
         if raw is None:
             continue
-        is_base = i < len(base_digests)
-        parsed = _parse_probe_json(raw)
-        if parsed is None:
+        parsed = _parse_perf_results(raw)
+        if not parsed:
             continue
-        for metric_key, val in parsed.items():
-            if isinstance(val, (int, float)):
-                values[metric_key][is_base].append(float(val))
+        histograms, guids = parsed
+        is_base = i < n_base
+        for h in histograms:
+            if h.get("unit"):
+                units[h["name"]] = h["unit"]
+        if histograms and (base_label is None or exp_label is None):
+            label_guid = histograms[0].get("diagnostics", {}).get("labels")
+            label = guids.get(label_guid) if label_guid else None
+            if label:
+                if is_base and base_label is None:
+                    base_label = label
+                elif not is_base and exp_label is None:
+                    exp_label = label
 
-    if not values:
+    # Collect values: prefer sub-metrics from probe file, fall back to perf_results
+    sub_values: dict[str, dict[bool, list[float]]] = defaultdict(lambda: {True: [], False: []})
+    has_probe_data = False
+
+    for i, raw in enumerate(probe_blobs):
+        if raw is None:
+            continue
+        parsed_probe = _parse_crossbench_probe(raw)
+        if not parsed_probe:
+            continue
+        has_probe_data = True
+        is_base = i < n_base
+        for key, vals in parsed_probe.items():
+            sub_values[key][is_base].extend(vals)
+
+    if not has_probe_data:
         raise ValueError(
             f"No probe data found in CAS isolates. "
-            f"Looked for {probe_filename!r} anywhere in each isolate tree."
+            f"Looked for {probe_filename!r} in each isolate tree. "
+            "This may indicate a directory structure change — update _parse_crossbench_probe."
         )
 
     rows = []
-    for metric_key, by_side in sorted(values.items()):
+    for name, by_side in sorted(sub_values.items()):
         base_vals = by_side[True]
         exp_vals  = by_side[False]
         if not base_vals or not exp_vals:
             continue
+        # For sub-metrics like "story/SubMetric", look up "story" in units dict
+        story = name.rsplit("/", 1)[0] if "/" in name else name
+        unit = units.get(name) or units.get(story)
         p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
         rows.append({
-            "name":        metric_key,
-            "unit":        None,
-            "base_label":  base_label,
+            "name":        name,
+            "unit":        unit,
+            "base_label":  base_label or "base",
             **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
-            "exp_label":   exp_label,
+            "exp_label":   exp_label or "exp",
             **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
             "p_value":     p,
             "significant": bool(p < 0.05),

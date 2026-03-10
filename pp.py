@@ -418,8 +418,9 @@ def main() -> None:
     p.add_argument("--show-all", action="store_true",
                    help="Include non-significant results")
     p.add_argument("--use-cas", action="store_true", dest="use_cas",
-                   help="Fetch raw per-run data from CAS isolates (richer metrics for JetStream; "
-                        "requires `cas` on PATH and gcloud ADC login)")
+                   help="Fetch raw per-run data from CAS isolates for richer sub-metrics "
+                        "(Score/First/Average/Worst4 per story). Slower than the default "
+                        "scraping path and requires: gcloud auth application-default login")
     p.set_defaults(func=_cmd_show_results)
 
     # create-job
