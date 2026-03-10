@@ -420,7 +420,7 @@ def _cas_binary() -> str:
         raise FileNotFoundError(
             "The `cas` binary is required for CAS data access but was not found in PATH.\n"
             "Install it from CIPD:\n"
-            "  cipd install 'infra/tools/luci/cas/${platform}' latest -root ~/bin\n"
+            "  cipd install 'infra/tools/luci/cas/linux-amd64' latest -root ~/bin\n"
             "  export PATH=$PATH:~/bin\n"
             "Or download directly from:\n"
             "  https://chrome-infra-packages.appspot.com/p/infra/tools/luci/cas"
