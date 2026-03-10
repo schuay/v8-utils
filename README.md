@@ -76,23 +76,27 @@ pp show-results --show-all https://pinpoint-dot-chromeperf.appspot.com/job/12d17
 Requires `luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email`.
 
 ```bash
-# Template + config alias + experiment patch (simplest)
-pp create-job -t js3 -c macm4 --exp-patch crrev/c/12345
+# Simplest: all defaults (js3+sp3 on m1, exp-patch from current branch's CL)
+pp create-job
+
+# Override bot and/or templates
+pp create-job -c m4
+pp create-job -t js3 -c m1 m4
 
 # Multiple configs and templates → creates all combinations (6 jobs)
-pp create-job -t js3 js2 sp3 -c linux macm4 --exp-patch crrev/c/12345
+pp create-job -t js3 js2 sp3 -c linux m1 --exp-patch crrev/c/12345
 
 # Multiple experiment patches → one job per patch
-pp create-job -t js3 -c macm4 --exp-patch crrev/c/111 crrev/c/222
+pp create-job -t js3 -c m1 --exp-patch crrev/c/111 crrev/c/222
 
 # Multiple experiment flag sets → one job per flag set
 pp create-job -t js3 -c linux --exp-js-flags "--turbofan" "--maglev"
 
 # All combinable: 2 templates × 2 configs × 2 patches = 8 jobs
-pp create-job -t js3 sp3 -c linux macm4 --exp-patch crrev/c/111 crrev/c/222
+pp create-job -t js3 sp3 -c linux m1 --exp-patch crrev/c/111 crrev/c/222
 
 # Create and immediately watch all jobs
-pp create-job -t js3 js2 -c linux macm4 --exp-patch crrev/c/12345 --watch
+pp create-job -w
 
 # Full options (using explicit benchmark instead of template)
 pp create-job \
@@ -118,7 +122,10 @@ pp create-job \
 | Alias | Bot configuration |
 |-------|------------------|
 | `linux` | `linux-r350-perf` |
-| `macm4`  | `mac-m4-mini-perf` |
+| `m1` | `mac-m1_mini_2020-perf` |
+| `m3` | `mac-m3-pro-perf` |
+| `m4` | `mac-m4-mini-perf` |
+| `macm4` | `mac-m4-mini-perf` (legacy) |
 
 ### Job notifications
 

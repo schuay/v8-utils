@@ -215,25 +215,54 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
             _out(result)
 
 
+def _get_gerrit_issue_url() -> str | None:
+    """Read the Gerrit CL URL for the current git branch from git config.
+
+    Returns a full URL including patchset, e.g.:
+      https://chromium-review.googlesource.com/7650974/1
+    Returns None if not inside a git repo or the branch has no associated CL.
+    """
+    import subprocess as _sp
+    def _git(*args: str) -> str:
+        r = _sp.run(["git"] + list(args), capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if not branch or branch == "HEAD":
+        return None
+    issue   = _git("config", f"branch.{branch}.gerritissue")
+    if not issue:
+        return None
+    server   = _git("config", f"branch.{branch}.gerritserver") \
+               or "https://chromium-review.googlesource.com"
+    patchset = _git("config", f"branch.{branch}.gerritpatchset")
+    url = f"{server}/{issue}"
+    return f"{url}/{patchset}" if patchset else url
+
+
 def _cmd_create_job(args: argparse.Namespace) -> None:
     import itertools
 
     # Resolve benchmark/story axes from template or explicit --benchmark
-    if args.template:
-        if args.benchmark:
-            raise ValueError("Cannot use --template and --benchmark together")
+    if args.benchmark:
+        pairs = [(args.benchmark, args.story)]
+    else:
         pairs = []
         for t in args.template:
             if t not in pinpoint.BENCHMARK_ALIASES:
                 known = ", ".join(pinpoint.BENCHMARK_ALIASES)
                 raise ValueError(f"Unknown template {t!r}. Known: {known}")
             pairs.append(pinpoint.BENCHMARK_ALIASES[t])
-    elif args.benchmark:
-        pairs = [(args.benchmark, args.story)]
-    else:
-        raise ValueError("Specify a template (-t) or benchmark (-b)")
 
-    exp_patches    = args.exp_patch    or [None]
+    # Resolve exp-patch: use explicit value, or auto-detect from current branch
+    if args.exp_patch:
+        exp_patches = args.exp_patch
+    else:
+        detected = _get_gerrit_issue_url()
+        if detected:
+            print(f"{_DIM}exp-patch: {detected} (from current branch){_RESET}")
+        exp_patches = [detected]  # None is valid (job with no patch)
+
     exp_flags_list = args.exp_js_flags or [None]
     combos = list(itertools.product(args.configuration, pairs, exp_patches, exp_flags_list))
     multi  = len(combos) > 1
@@ -390,12 +419,14 @@ def main() -> None:
     # create-job
     _template_names = ", ".join(pinpoint.BENCHMARK_ALIASES)
     p = sub.add_parser("create-job", help="Create one or more Pinpoint A/B try jobs")
-    p.add_argument("-t", "--template", nargs="+", metavar="TEMPLATE", default=None,
-                   help=f"Benchmark template(s): {_template_names}")
+    p.add_argument("-t", "--template", nargs="+", metavar="TEMPLATE",
+                   default=["js3", "sp3"],
+                   help=f"Benchmark template(s) (default: js3 sp3): {_template_names}")
     p.add_argument("-b", "--benchmark", default=None,
                    help="Benchmark name or alias (alternative to -t)")
-    p.add_argument("-c", "--configuration", nargs="+", required=True, metavar="CONFIG",
-                   help='Bot config(s) or alias(es) ("linux", "macm4")')
+    p.add_argument("-c", "--configuration", nargs="+", metavar="CONFIG",
+                   default=["m1"],
+                   help='Bot config(s) or alias(es) (default: m1)')
     p.add_argument("-s", "--story", default=None,
                    help="Story within the benchmark (only with -b)")
     p.add_argument("--story-tags", default=None, dest="story_tags",

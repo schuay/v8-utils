@@ -375,7 +375,10 @@ BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
 
 CONFIGURATION_ALIASES: dict[str, str] = {
     "linux": "linux-r350-perf",
-    "macm4": "mac-m4-mini-perf",
+    "m1":    "mac-m1_mini_2020-perf",
+    "m3":    "mac-m3-pro-perf",
+    "m4":    "mac-m4-mini-perf",
+    "macm4": "mac-m4-mini-perf",   # kept for backwards compatibility
 }
 
 
