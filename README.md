@@ -59,11 +59,13 @@ chat_service_account_email = "v8-utils-pinpoint@your-project.iam.gserviceaccount
 # List your 20 most recent jobs
 pp list-jobs
 
-# Show details of a specific job
+# Show details of one or more jobs
 pp show-job https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+pp show-job <url1> <url2> ...
 
 # Show base-vs-experiment comparison table (significant results only)
 pp show-results https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+pp show-results <url1> <url2> ...
 
 # Show all results, including non-significant ones
 pp show-results --show-all https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
@@ -74,13 +76,25 @@ pp show-results --show-all https://pinpoint-dot-chromeperf.appspot.com/job/12d17
 Requires `luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email`.
 
 ```bash
-# Minimal: benchmark alias, config alias, experiment patch
-pp create-job -b js3 -c macm4 --exp-patch crrev/c/12345
+# Template + config alias + experiment patch (simplest)
+pp create-job -t js3 -c macm4 --exp-patch crrev/c/12345
 
-# With V8 flags comparison
-pp create-job -b js3 -c linux --exp-js-flags "--turbofan --no-sparkplug"
+# Multiple configs and templates → creates all combinations (6 jobs)
+pp create-job -t js3 js2 sp3 -c linux macm4 --exp-patch crrev/c/12345
 
-# Full options
+# Multiple experiment patches → one job per patch
+pp create-job -t js3 -c macm4 --exp-patch crrev/c/111 crrev/c/222
+
+# Multiple experiment flag sets → one job per flag set
+pp create-job -t js3 -c linux --exp-js-flags "--turbofan" "--maglev"
+
+# All combinable: 2 templates × 2 configs × 2 patches = 8 jobs
+pp create-job -t js3 sp3 -c linux macm4 --exp-patch crrev/c/111 crrev/c/222
+
+# Create and immediately watch all jobs
+pp create-job -t js3 js2 -c linux macm4 --exp-patch crrev/c/12345 --watch
+
+# Full options (using explicit benchmark instead of template)
 pp create-job \
   --benchmark jetstream-main.crossbench \
   --configuration mac-m4-mini-perf \
@@ -89,18 +103,17 @@ pp create-job \
   --exp-patch https://chromium-review.googlesource.com/c/v8/v8/+/12345 \
   --repeat 100 \
   --bug-id 987654321
-
-# Create and immediately start watching for completion
-pp create-job -b js3 -c macm4 --exp-patch crrev/c/12345 --watch
 ```
 
-**Benchmark aliases:**
+**Templates** (`-t`):
 
-| Alias | Benchmark | Default story |
-|-------|-----------|---------------|
+| Template | Benchmark | Default story |
+|----------|-----------|---------------|
 | `js3` | `jetstream-main.crossbench` | `JetStream` |
+| `js2` | `jetstream2.crossbench` | `JetStream2` |
+| `sp3` | `speedometer3.crossbench` | `Speedometer3` |
 
-**Configuration aliases:**
+**Configuration aliases** (`-c`):
 
 | Alias | Bot configuration |
 |-------|------------------|
@@ -114,11 +127,12 @@ Chat message when each job completes, including job details and a summary of
 significant performance changes.
 
 ```bash
-# Watch a job (starts the daemon automatically if not running)
+# Watch one or more jobs (starts the daemon automatically if not running)
 pp watch https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+pp watch <url1> <url2> ...
 
-# Create a job and immediately watch it
-pp create-job -b js3 -c macm4 --exp-patch crrev/c/12345 --watch
+# Create jobs and immediately watch them
+pp create-job -t js3 js2 -c macm4 --exp-patch crrev/c/12345 --watch
 
 # Follow the daemon log
 pp logs --follow

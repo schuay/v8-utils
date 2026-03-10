@@ -358,6 +358,8 @@ def fetch_raw_values(job_id: str) -> list[dict]:
 BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
     # alias: (full benchmark name, default story)
     "js3": ("jetstream-main.crossbench", "JetStream"),
+    "js2": ("jetstream2.crossbench",     "JetStream2"),
+    "sp3": ("speedometer3.crossbench",   "Speedometer3"),
 }
 
 CONFIGURATION_ALIASES: dict[str, str] = {

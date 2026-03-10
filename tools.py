@@ -159,6 +159,8 @@ def pinpoint_create_job(
 
     benchmark:      benchmark name or alias:
                       "js3"  → jetstream-main.crossbench (story: JetStream)
+                      "js2"  → jetstream2.crossbench     (story: JetStream2)
+                      "sp3"  → speedometer3.crossbench   (story: Speedometer3)
     configuration:  bot config or alias:
                       "linux" → linux-r350-perf
                       "macm4" → mac-m4-mini-perf

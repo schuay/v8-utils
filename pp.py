@@ -4,7 +4,7 @@ Usage:
   pp show-job <job_url> [<job_url> ...]
   pp list-jobs [--count N] [--user EMAIL] [--filter KEY=VALUE]
   pp show-results <job_url> [<job_url> ...] [--show-all]
-  pp create-job --benchmark BENCH --configuration CONFIG [options]
+  pp create-job -t TEMPLATE [TEMPLATE ...] -c CONFIG [CONFIG ...] [options]
   pp watch <job_url> [<job_url> ...]
   pp daemon-stop
 """
@@ -214,27 +214,65 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
-    result = pinpoint_create_job(
-        benchmark=args.benchmark,
-        configuration=args.configuration,
-        story=args.story,
-        story_tags=args.story_tags,
-        base_git_hash=args.base_git_hash,
-        exp_git_hash=args.exp_git_hash,
-        base_patch=args.base_patch,
-        exp_patch=args.exp_patch,
-        base_js_flags=args.base_js_flags,
-        exp_js_flags=args.exp_js_flags,
-        repeat=args.repeat,
-        bug_id=args.bug_id,
-    )
-    _out(result)
-    if args.watch and (job_url := result.get("url")):
+    import itertools
+
+    # Resolve benchmark/story axes from template or explicit --benchmark
+    if args.template:
+        if args.benchmark:
+            raise ValueError("Cannot use --template and --benchmark together")
+        pairs = []
+        for t in args.template:
+            if t not in pinpoint.BENCHMARK_ALIASES:
+                known = ", ".join(pinpoint.BENCHMARK_ALIASES)
+                raise ValueError(f"Unknown template {t!r}. Known: {known}")
+            pairs.append(pinpoint.BENCHMARK_ALIASES[t])
+    elif args.benchmark:
+        pairs = [(args.benchmark, args.story)]
+    else:
+        raise ValueError("Specify a template (-t) or benchmark (-b)")
+
+    exp_patches    = args.exp_patch    or [None]
+    exp_flags_list = args.exp_js_flags or [None]
+    combos = list(itertools.product(args.configuration, pairs, exp_patches, exp_flags_list))
+    multi  = len(combos) > 1
+
+    urls = []
+    for i, (cfg, (benchmark, story), exp_patch, exp_js_flags) in enumerate(combos):
+        if multi:
+            parts = [cfg, benchmark]
+            if story:       parts.append(story)
+            if exp_patch:   parts.append(exp_patch)
+            if exp_js_flags: parts.append(f"flags:{exp_js_flags}")
+            print(f"{_DIM}[{i+1}/{len(combos)}] {' / '.join(parts)}{_RESET}")
+        result = pinpoint_create_job(
+            benchmark=benchmark,
+            configuration=cfg,
+            story=story,
+            story_tags=args.story_tags,
+            base_git_hash=args.base_git_hash,
+            exp_git_hash=args.exp_git_hash,
+            base_patch=args.base_patch,
+            exp_patch=exp_patch,
+            base_js_flags=args.base_js_flags,
+            exp_js_flags=exp_js_flags,
+            repeat=args.repeat,
+            bug_id=args.bug_id,
+        )
+        job_url = result.get("url")
+        if multi:
+            print(f"  {_GREEN}✓{_RESET} {_CYAN}{job_url or '?'}{_RESET}")
+        else:
+            _out(result)
+        if job_url:
+            urls.append(job_url)
+
+    if args.watch and urls:
         if not daemon.is_running():
             daemon.start_background()
-        daemon.send_job(job_url)
-        _chat_notify_watching(job_url)
-        print(f"{_GREEN}Watching{_RESET} {result.get('jobId') or job_url} — you'll be notified on completion.")
+        for url in urls:
+            daemon.send_job(url)
+            _chat_notify_watching(url)
+            print(f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion.")
 
 
 def _chat_notify_watching(job_url: str) -> None:
@@ -342,13 +380,16 @@ def main() -> None:
     p.set_defaults(func=_cmd_show_results)
 
     # create-job
-    p = sub.add_parser("create-job", help="Create a new Pinpoint A/B try job")
-    p.add_argument("-b", "--benchmark", required=True,
-                   help='Benchmark name or alias ("js3" = jetstream-main.crossbench)')
-    p.add_argument("-c", "--configuration", required=True,
-                   help='Bot config or alias ("linux", "macm4")')
+    _template_names = ", ".join(pinpoint.BENCHMARK_ALIASES)
+    p = sub.add_parser("create-job", help="Create one or more Pinpoint A/B try jobs")
+    p.add_argument("-t", "--template", nargs="+", metavar="TEMPLATE", default=None,
+                   help=f"Benchmark template(s): {_template_names}")
+    p.add_argument("-b", "--benchmark", default=None,
+                   help="Benchmark name or alias (alternative to -t)")
+    p.add_argument("-c", "--configuration", nargs="+", required=True, metavar="CONFIG",
+                   help='Bot config(s) or alias(es) ("linux", "macm4")')
     p.add_argument("-s", "--story", default=None,
-                   help="Story within the benchmark")
+                   help="Story within the benchmark (only with -b)")
     p.add_argument("--story-tags", default=None, dest="story_tags",
                    help="Comma-separated story tags")
     p.add_argument("--base-git-hash", default="HEAD", dest="base_git_hash",
@@ -357,18 +398,18 @@ def main() -> None:
                    help="Experiment git hash (default: HEAD)")
     p.add_argument("--base-patch", default=None, dest="base_patch",
                    help="Gerrit patch for base (change ID, crrev/c/N, or URL)")
-    p.add_argument("--exp-patch", default=None, dest="exp_patch",
-                   help="Gerrit patch for experiment")
+    p.add_argument("--exp-patch", nargs="+", default=None, dest="exp_patch", metavar="PATCH",
+                   help="Gerrit patch(es) for experiment")
     p.add_argument("--base-js-flags", default=None, dest="base_js_flags",
                    help='V8 flags for base, e.g. "--turbofan"')
-    p.add_argument("--exp-js-flags", default=None, dest="exp_js_flags",
-                   help="V8 flags for experiment")
+    p.add_argument("--exp-js-flags", nargs="+", default=None, dest="exp_js_flags", metavar="FLAGS",
+                   help="V8 flag set(s) for experiment")
     p.add_argument("-r", "--repeat", type=int, default=100,
                    help="Bot runs per variant (default: 100)")
     p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
                    help="Buganizer issue ID")
     p.add_argument("-w", "--watch", action="store_true",
-                   help="Watch the created job and notify on completion")
+                   help="Watch created job(s) and notify on completion")
     p.set_defaults(func=_cmd_create_job)
 
     # watch
