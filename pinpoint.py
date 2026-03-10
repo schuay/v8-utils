@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import statistics
 import subprocess
+import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -361,6 +365,201 @@ def fetch_raw_values(job_id: str) -> list[dict]:
                 "unit":   h["unit"],
                 "value":  value,
             })
+    return rows
+
+
+# ── CAS data access ───────────────────────────────────────────────────────────
+
+_CAS_INSTANCE = "projects/chrome-swarming/instances/default_instance"
+
+# Maps Pinpoint benchmark name → crossbench probe file name (without .json)
+_BENCHMARK_TO_PROBE: dict[str, str] = {
+    "jetstream-main.crossbench": "jetstream_main",
+    "jetstream2.crossbench":     "jetstream_2.2",
+    "speedometer3.crossbench":   "speedometer_main",
+}
+
+
+def fetch_job_state(job_id: str) -> list[dict]:
+    """Return the job's 'state' list (base/experiment variants with attempts)."""
+    r = httpx.get(
+        f"{_PINPOINT_BASE}/api/job/{job_id}?o=STATE",
+        follow_redirects=True, timeout=120,
+    )
+    r.raise_for_status()
+    return r.json().get("state", [])
+
+
+def _extract_cas_digests(state: list[dict]) -> tuple[list[str], list[str]]:
+    """Return (base_digests, exp_digests) from job state.
+
+    state[0] = base variant, state[1] = experiment.
+    Each attempt's CAS digest lives at executions[1].details[key="isolate"].
+    """
+    def _digests(variant: dict) -> list[str]:
+        out = []
+        for attempt in variant.get("attempts", []):
+            execs = attempt.get("executions", [])
+            if len(execs) < 2:
+                continue
+            for detail in execs[1].get("details", []):
+                if detail.get("key") == "isolate" and detail.get("value"):
+                    out.append(detail["value"])
+                    break
+        return out
+
+    base = _digests(state[0]) if len(state) > 0 else []
+    exp  = _digests(state[1]) if len(state) > 1 else []
+    return base, exp
+
+
+def _cas_binary() -> str:
+    """Return path to the `cas` binary or raise a descriptive error."""
+    path = shutil.which("cas")
+    if not path:
+        raise FileNotFoundError(
+            "The `cas` binary is required for CAS data access but was not found in PATH.\n"
+            "Install it from CIPD:\n"
+            "  cipd install 'infra/tools/luci/cas/${platform}' latest -root ~/bin\n"
+            "  export PATH=$PATH:~/bin\n"
+            "Or download directly from:\n"
+            "  https://chrome-infra-packages.appspot.com/p/infra/tools/luci/cas"
+        )
+    return path
+
+
+def _download_cas_probe(
+    cas_bin: str,
+    digest: str,
+    probe_name: str,
+    tmp_root: Path,
+) -> dict | None:
+    """Download one CAS isolate and return the probe JSON, or None on failure."""
+    out = tmp_root / digest.replace("/", "_")
+    out.mkdir(parents=True, exist_ok=True)
+
+    r = subprocess.run(
+        [cas_bin, "download",
+         "-cas-instance", _CAS_INSTANCE,
+         "-digest", digest,
+         "-dir", str(out)],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0:
+        stderr = r.stderr.strip()
+        if any(w in stderr.lower() for w in ("unauthenticated", "permission", "forbidden")):
+            raise PermissionError(
+                f"CAS authentication failed.\n"
+                f"Ensure you are logged in:  gcloud auth application-default login\n"
+                f"Details: {stderr}"
+            )
+        return None  # isolate missing or other transient error — skip
+
+    probe_files = list(out.rglob(f"{probe_name}.json"))
+    if not probe_files:
+        return None
+    try:
+        return json.loads(probe_files[0].read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def pivot_results_cas(job_id: str) -> list[dict]:
+    """Like pivot_results, but fetches raw per-run values from CAS isolates.
+
+    Downloads each bot run's CAS isolate in parallel, reads the crossbench
+    probe JSON, and runs the same Mann-Whitney comparison as pivot_results.
+
+    For JetStream this surfaces Score, FirstIteration, Average, and Worst4 per
+    story rather than just the headline Score from the histogram HTML.
+
+    Requires `cas` on PATH and valid Application Default Credentials
+    (run: gcloud auth application-default login).
+    """
+    job = fetch_job(job_id)
+    status = job.get("status", "Unknown")
+    if status != "Completed":
+        raise ValueError(f"Job is not completed (status: {status})")
+
+    benchmark = job.get("arguments", {}).get("benchmark", "")
+    probe_name = _BENCHMARK_TO_PROBE.get(benchmark)
+    if not probe_name:
+        raise ValueError(
+            f"CAS data access is not supported for benchmark {benchmark!r}.\n"
+            f"Supported: {', '.join(_BENCHMARK_TO_PROBE)}"
+        )
+
+    cas_bin = _cas_binary()
+
+    state = fetch_job_state(job_id)
+    base_digests, exp_digests = _extract_cas_digests(state)
+    if not base_digests or not exp_digests:
+        raise ValueError("No CAS digests found in job state.")
+
+    base_label = (state[0].get("change", {}).get("label") or "base") if state else "base"
+    exp_label  = (state[1].get("change", {}).get("label") or "exp")  if len(state) > 1 else "exp"
+
+    # {(story, metric): {True: [base floats], False: [exp floats]}}
+    values: dict[tuple[str, str], dict[bool, list[float]]] = (
+        defaultdict(lambda: {True: [], False: []})
+    )
+
+    tasks = [(d, True) for d in base_digests] + [(d, False) for d in exp_digests]
+
+    def _dl(args: tuple[str, bool]) -> tuple[bool, dict | None]:
+        digest, is_base = args
+        data = _download_cas_probe(cas_bin, digest, probe_name, tmp_root)
+        return is_base, data
+
+    perm_error: PermissionError | None = None
+
+    with tempfile.TemporaryDirectory(prefix="v8-utils-cas-") as tmpdir:
+        tmp_root = Path(tmpdir)
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            futures = {executor.submit(_dl, t): t for t in tasks}
+            for future in as_completed(futures):
+                try:
+                    is_base, data = future.result()
+                except PermissionError as e:
+                    if perm_error is None:
+                        perm_error = e
+                    continue
+                except Exception:
+                    continue
+                if data is None:
+                    continue
+                for story, metrics in data.items():
+                    if not isinstance(metrics, dict):
+                        continue
+                    for metric, val in metrics.items():
+                        if isinstance(val, (int, float)):
+                            values[(story, metric)][is_base].append(float(val))
+
+    if perm_error:
+        raise perm_error
+    if not values:
+        raise ValueError(
+            "No probe data found in CAS isolates. "
+            f"Looked for {probe_name}.json under each isolate."
+        )
+
+    rows = []
+    for (story, metric), by_side in sorted(values.items()):
+        base_vals = by_side[True]
+        exp_vals  = by_side[False]
+        if not base_vals or not exp_vals:
+            continue
+        p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
+        rows.append({
+            "name":       f"{story}/{metric}",
+            "unit":       None,
+            "base_label": base_label,
+            **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
+            "exp_label":  exp_label,
+            **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
+            "p_value":    p,
+            "significant": bool(p < 0.05),
+        })
     return rows
 
 

@@ -73,7 +73,11 @@ def pinpoint_list_jobs(
 
 
 @mcp.tool()
-def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
+def pinpoint_show_results(
+    job_url: str,
+    show_all: bool = False,
+    use_cas: bool = False,
+) -> str:
     """Show a base-vs-experiment comparison table for a Pinpoint job.
 
     One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
@@ -81,9 +85,13 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
 
     show_all: if False (default), only show statistically significant results.
     job_url:  Pinpoint job URL or job ID
+    use_cas:  if True, fetch raw per-run values from CAS isolates instead of
+              the histogram HTML. Slower but surfaces richer metrics for
+              JetStream (Score, FirstIteration, Average, Worst4 per story).
+              Requires `cas` on PATH and: gcloud auth application-default login
     """
     job_id = pinpoint.job_id_from_url(job_url)
-    all_rows = pinpoint.pivot_results(job_id)
+    all_rows = pinpoint.pivot_results_cas(job_id) if use_cas else pinpoint.pivot_results(job_id)
     if not all_rows:
         return "No results found."
 

@@ -208,7 +208,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     for i, url in enumerate(args.job_urls):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        result = pinpoint_show_results(url, show_all=args.show_all)
+        result = pinpoint_show_results(url, show_all=args.show_all, use_cas=args.use_cas)
         if isinstance(result, str):
             print(_colorize_results(result))
         else:
@@ -419,6 +419,9 @@ def main() -> None:
     p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
     p.add_argument("--show-all", action="store_true",
                    help="Include non-significant results")
+    p.add_argument("--use-cas", action="store_true", dest="use_cas",
+                   help="Fetch raw per-run data from CAS isolates (richer metrics for JetStream; "
+                        "requires `cas` on PATH and gcloud ADC login)")
     p.set_defaults(func=_cmd_show_results)
 
     # create-job
