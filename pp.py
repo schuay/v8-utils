@@ -343,7 +343,8 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:
     os.execvp("uv", ["uv", "tool", "install",
-                     "git+https://github.com/schuay/v8-utils.git", "--reinstall"])
+                     "git+https://github.com/schuay/v8-utils.git", "--reinstall",
+                     "--index-url", "https://pypi.org/simple/"])
 
 
 def _cmd_logs(args: argparse.Namespace) -> None:
