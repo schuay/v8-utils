@@ -142,6 +142,14 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
 
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Periodically poll all watched jobs and notify on terminal status."""
+    try:
+        _poll_loop_inner(watched, lock)
+    except Exception:
+        log.error("poll loop crashed", exc_info=True)
+        raise
+
+
+def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
     cfg = config.load()
     while True:
         time.sleep(cfg.poll_interval)

@@ -1,11 +1,11 @@
 """pp — Pinpoint CLI wrapper around the v8-utils tool functions.
 
 Usage:
-  pp show-job <job_url>
+  pp show-job <job_url> [<job_url> ...]
   pp list-jobs [--count N] [--user EMAIL] [--filter KEY=VALUE]
-  pp show-results <job_url> [--show-all]
+  pp show-results <job_url> [<job_url> ...] [--show-all]
   pp create-job --benchmark BENCH --configuration CONFIG [options]
-  pp watch <job_url>
+  pp watch <job_url> [<job_url> ...]
   pp daemon-stop
 """
 
@@ -115,8 +115,7 @@ def _out(result) -> None:
 
 # ── Command handlers ───────────────────────────────────────────────────────────
 
-def _cmd_show_job(args: argparse.Namespace) -> None:
-    j = pinpoint_show_job(args.job_url)
+def _print_job(j: dict) -> None:
     url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.get('job_id')}{_RESET}"
     created = (j.get("created") or "")[:16].replace("T", " ")
     status = j.get("status") or "?"
@@ -153,6 +152,13 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         else:
             val_str = str(val)
         print(f"  {_DIM}{key:<{w}}{_RESET}  {val_str}")
+
+
+def _cmd_show_job(args: argparse.Namespace) -> None:
+    for i, url in enumerate(args.job_urls):
+        if i:
+            print(f"{_DIM}{'─' * 60}{_RESET}")
+        _print_job(pinpoint_show_job(url))
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
@@ -197,11 +203,14 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
-    result = pinpoint_show_results(args.job_url, show_all=args.show_all)
-    if isinstance(result, str):
-        print(_colorize_results(result))
-    else:
-        _out(result)
+    for i, url in enumerate(args.job_urls):
+        if i:
+            print(f"{_DIM}{'─' * 60}{_RESET}")
+        result = pinpoint_show_results(url, show_all=args.show_all)
+        if isinstance(result, str):
+            print(_colorize_results(result))
+        else:
+            _out(result)
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
@@ -242,10 +251,11 @@ def _chat_notify_watching(job_url: str) -> None:
 def _cmd_watch(args: argparse.Namespace) -> None:
     if not daemon.is_running():
         daemon.start_background()
-    daemon.send_job(args.job_url)
-    _chat_notify_watching(args.job_url)
-    job_id = args.job_url.split("/")[-1]
-    print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
+    for job_url in args.job_urls:
+        daemon.send_job(job_url)
+        _chat_notify_watching(job_url)
+        job_id = job_url.split("/")[-1]
+        print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 
 
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
@@ -311,7 +321,7 @@ def main() -> None:
 
     # show-job
     p = sub.add_parser("show-job", help="Show details of a Pinpoint job")
-    p.add_argument("job_url", help="Pinpoint job URL or job ID")
+    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
     p.set_defaults(func=_cmd_show_job)
 
     # list-jobs
@@ -326,7 +336,7 @@ def main() -> None:
 
     # show-results
     p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
-    p.add_argument("job_url", help="Pinpoint job URL or job ID")
+    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
     p.add_argument("--show-all", action="store_true",
                    help="Include non-significant results")
     p.set_defaults(func=_cmd_show_results)
@@ -363,7 +373,7 @@ def main() -> None:
 
     # watch
     p = sub.add_parser("watch", help="Notify via webhook when a job completes")
-    p.add_argument("job_url", help="Pinpoint job URL or job ID")
+    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
     p.set_defaults(func=_cmd_watch)
 
     # chat-setup

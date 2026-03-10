@@ -249,6 +249,8 @@ def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
     r.raise_for_status()
 
     # Histogram data is NDJSON embedded in the last HTML comment block.
+    # If this ever starts failing, switch to CAS: each bot run stores a CAS
+    # isolate with the raw crossbench output (requires gcloud ADC + cas CLI).
     comments = re.findall(r"<!--(.*?)-->", r.text, re.DOTALL)
     data_block = next((c for c in reversed(comments) if c.lstrip().startswith("{")), None)
     if not data_block:
