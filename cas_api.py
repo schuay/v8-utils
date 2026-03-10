@@ -8,9 +8,10 @@ trees.  Algorithm:
     Directory.FromString(), extract FileNode/DirectoryNode digests.
     All unique directory blobs at each BFS level are batched into as few
     API calls as possible (with deduplication across isolates).
-    Stop descending a branch as soon as the probe file is found.
+    All target filenames are searched in a single BFS pass; a branch is
+    only abandoned once all requested files have been found in it.
 
-  Phase 2 — BatchReadBlobs for all probe file blobs:
+  Phase 2 — BatchReadBlobs for all found file blobs:
     Collect all found file digests, fetch contents in one batched call.
 
 Auth uses Application Default Credentials (gcloud auth application-default
@@ -47,8 +48,9 @@ def _auth_headers() -> dict[str, str]:
         _creds, _ = _gauth_default(
             scopes=["https://www.googleapis.com/auth/cloud-platform"]
         )
-    log.debug("refreshing auth token")
-    _creds.refresh(_AuthRequest())
+    if not _creds.valid:
+        log.debug("refreshing auth token")
+        _creds.refresh(_AuthRequest())
     return {"Authorization": f"Bearer {_creds.token}"}
 
 
@@ -94,41 +96,42 @@ def _batch_read_blobs(
 
 def fetch_probe_files(
     root_digests: list[str],
-    probe_filename: str,
-) -> list[bytes | None]:
-    """Fetch probe JSON bytes for each CAS root digest.
+    probe_filenames: str | list[str],
+) -> dict[str, list[bytes | None]]:
+    """Fetch probe files for each CAS root digest in a single BFS pass.
 
-    root_digests:   list of "sha256hash/size" strings (one per bot run)
-    probe_filename: filename to search for, e.g. "jetstream_main.json"
+    root_digests:    list of "sha256hash/size" strings (one per bot run)
+    probe_filenames: filename or list of filenames to search for
 
-    Returns a list parallel to root_digests; each entry is the raw file bytes
-    or None if the file was not found or the fetch failed.
-
-    BFS walks the directory tree for all isolates in parallel, deduplicating
-    identical directory blobs across isolates.  All blob fetches are batched.
+    Returns {filename: [bytes|None, ...]} where each list is parallel to
+    root_digests.  All filenames are located in a single BFS traversal.
     """
+    if isinstance(probe_filenames, str):
+        probe_filenames = [probe_filenames]
+
     headers = _auth_headers()
 
-    # remaining[root_digest] = list of (hash, size) directory blobs still to explore
+    # file_digest[root][filename] = (hash, size) once found
+    file_digest: dict[str, dict[str, tuple[str, int] | None]] = {
+        d: {fn: None for fn in probe_filenames} for d in root_digests
+    }
+    # remaining[root] = directory blobs still to explore
     remaining: dict[str, list[tuple[str, int]]] = {
         d: [_parse_digest(d)] for d in root_digests
     }
-    # file_digest[root_digest] = (hash, size) once found, else None
-    file_digest: dict[str, tuple[str, int] | None] = {d: None for d in root_digests}
-    # cache of already-fetched directory blobs
     dir_cache: dict[tuple[str, int], rbe_pb2.Directory] = {}
 
     n_total = len(root_digests)
-    log.debug("starting BFS for %r across %d isolates", probe_filename, n_total)
+    log.debug("starting BFS for %r across %d isolates", probe_filenames, n_total)
 
     with httpx.Client(headers=headers, timeout=60) as client:
         bfs_level = 0
         while True:
-            # Collect unique directory blobs needed at this BFS level
             needed: set[tuple[str, int]] = set()
             pending = 0
-            for root_digest, dirs in remaining.items():
-                if file_digest[root_digest] is not None:
+            for root, dirs in remaining.items():
+                missing = {fn for fn, fd in file_digest[root].items() if fd is None}
+                if not missing:
                     continue
                 pending += 1
                 for key in dirs:
@@ -141,7 +144,6 @@ def fetch_probe_files(
             log.debug("BFS level %d: fetching %d unique dir blobs (%d isolates still searching)",
                       bfs_level, len(needed), pending)
 
-            # Fetch and parse all needed directory blobs
             raw_blobs = _batch_read_blobs(client, list(needed))
             parse_errors = 0
             for h, s in needed:
@@ -157,57 +159,61 @@ def fetch_probe_files(
             if parse_errors:
                 log.debug("  %d parse errors at this level", parse_errors)
 
-            # Advance BFS for each root
             next_remaining: dict[str, list[tuple[str, int]]] = {
                 d: [] for d in root_digests
             }
             found_this_level = 0
-            for root_digest, dirs in remaining.items():
-                if file_digest[root_digest] is not None:
+            for root, dirs in remaining.items():
+                missing = {fn for fn, fd in file_digest[root].items() if fd is None}
+                if not missing:
                     continue
                 for key in dirs:
                     d = dir_cache.get(key)
                     if d is None:
                         continue
                     for fn in d.files:
-                        if fn.name == probe_filename:
-                            file_digest[root_digest] = (
-                                fn.digest.hash, fn.digest.size_bytes
-                            )
+                        if fn.name in missing:
+                            file_digest[root][fn.name] = (fn.digest.hash, fn.digest.size_bytes)
+                            missing.discard(fn.name)
                             found_this_level += 1
-                            break
-                    if file_digest[root_digest] is not None:
-                        break
-                    for dn in d.directories:
-                        next_remaining[root_digest].append(
-                            (dn.digest.hash, dn.digest.size_bytes)
-                        )
+                    if missing:
+                        for dn in d.directories:
+                            next_remaining[root].append(
+                                (dn.digest.hash, dn.digest.size_bytes)
+                            )
 
             if found_this_level:
-                log.debug("  found %r in %d isolate(s) at level %d",
-                          probe_filename, found_this_level, bfs_level)
+                log.debug("  found %d file(s) across isolates at level %d",
+                          found_this_level, bfs_level)
 
             remaining = next_remaining
             bfs_level += 1
             if not any(remaining.values()):
                 break
 
-        found_total = sum(1 for fd in file_digest.values() if fd is not None)
-        log.debug("BFS complete: found file in %d/%d isolates", found_total, n_total)
+        found_total = sum(
+            1 for fds in file_digest.values()
+            if any(fd is not None for fd in fds.values())
+        )
+        log.debug("BFS complete: found files in %d/%d isolates", found_total, n_total)
 
-        # Batch-fetch all found file blobs
-        file_digests_needed = [
-            fd for fd in file_digest.values() if fd is not None
-        ]
-        deduped = list({(h, s) for h, s in file_digests_needed})
-        log.debug("fetching %d unique file blobs (%d total)", len(deduped), len(file_digests_needed))
+        all_file_digests: set[tuple[str, int]] = {
+            fd
+            for fds in file_digest.values()
+            for fd in fds.values()
+            if fd is not None
+        }
+        log.debug("fetching %d unique file blobs", len(all_file_digests))
         blob_by_hash: dict[str, bytes] = (
-            _batch_read_blobs(client, deduped) if deduped else {}
+            _batch_read_blobs(client, list(all_file_digests)) if all_file_digests else {}
         )
         log.debug("received %d file blobs", len(blob_by_hash))
 
-    out: list[bytes | None] = []
-    for root_digest in root_digests:
-        fd = file_digest.get(root_digest)
-        out.append(blob_by_hash.get(fd[0]) if fd else None)
-    return out
+    result: dict[str, list[bytes | None]] = {}
+    for fn in probe_filenames:
+        result[fn] = [
+            blob_by_hash.get(file_digest[root][fn][0])
+            if file_digest[root][fn] is not None else None
+            for root in root_digests
+        ]
+    return result

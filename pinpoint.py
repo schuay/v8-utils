@@ -480,8 +480,9 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     n_base = len(base_digests)
 
     try:
-        perf_blobs  = cas_api.fetch_probe_files(all_digests, "perf_results.json")
-        probe_blobs = cas_api.fetch_probe_files(all_digests, probe_filename)
+        blobs = cas_api.fetch_probe_files(all_digests, ["perf_results.json", probe_filename])
+        perf_blobs  = blobs["perf_results.json"]
+        probe_blobs = blobs[probe_filename]
     except PermissionError as e:
         raise PermissionError(
             "CAS authentication failed.\n"
