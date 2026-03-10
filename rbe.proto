@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package build.bazel.remote.execution.v2;
+
+message Digest {
+  string hash = 1;
+  int64 size_bytes = 2;
+}
+
+message FileNode {
+  string name = 1;
+  Digest digest = 2;
+  bool is_executable = 4;
+}
+
+message DirectoryNode {
+  string name = 1;
+  Digest digest = 2;
+}
+
+message SymlinkNode {
+  string name = 1;
+  string target = 2;
+}
+
+message Directory {
+  repeated FileNode files = 1;
+  repeated DirectoryNode directories = 2;
+  repeated SymlinkNode symlinks = 3;
+}

@@ -10,8 +10,7 @@ infrastructure.
 - [uv](https://docs.astral.sh/uv/)
 - [luci-auth](https://chromium.googlesource.com/infra/luci/luci-go/+/refs/heads/main/auth/client/cmd/luci-auth/)
   on `$PATH` (required for job creation; not needed for read-only operations)
-- [cas](https://chrome-infra-packages.appspot.com/p/infra/tools/luci/cas) on `$PATH`
-  *(optional — only needed for `--use-cas`)*
+- `gcloud auth application-default login` *(optional — only needed for `--use-cas`)*
 
 ## Installation
 
@@ -72,8 +71,8 @@ pp show-results <url1> <url2> ...
 # Show all results, including non-significant ones
 pp show-results --show-all https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
 
-# Richer JetStream results from CAS (Score + FirstIteration + Average + Worst4 per story)
-# Requires `cas` on PATH and: gcloud auth application-default login
+# Richer JetStream results from CAS (Score, First, Average, Worst4 per story)
+# Requires: gcloud auth application-default login
 pp show-results --use-cas https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
 ```
 
