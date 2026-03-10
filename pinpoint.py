@@ -455,13 +455,29 @@ def _download_cas_probe(
             )
         return None  # isolate missing or other transient error — skip
 
-    probe_files = list(out.rglob(f"{probe_name}.json"))
+    # The top-level output/<probe>.json is the merged result for this run.
+    # Prefer the shallowest match to avoid nested per-repetition files.
+    probe_files = sorted(out.rglob(f"{probe_name}.json"), key=lambda p: len(p.parts))
     if not probe_files:
         return None
     try:
-        return json.loads(probe_files[0].read_text())
+        raw = json.loads(probe_files[0].read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+    # File structure: {browser_label: {data: {"story/Metric": {values: [float]}}}}
+    # Flatten to {"story/Metric": float} using the mean of values[].
+    result: dict[str, float] = {}
+    for browser_data in raw.values():
+        if not isinstance(browser_data, dict):
+            continue
+        for metric_key, stats in browser_data.get("data", {}).items():
+            if not isinstance(stats, dict):
+                continue
+            vals = stats.get("values", [])
+            if vals:
+                result[metric_key] = sum(vals) / len(vals)
+    return result or None
 
 
 def pivot_results_cas(job_id: str) -> list[dict]:
@@ -499,10 +515,8 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     base_label = (state[0].get("change", {}).get("label") or "base") if state else "base"
     exp_label  = (state[1].get("change", {}).get("label") or "exp")  if len(state) > 1 else "exp"
 
-    # {(story, metric): {True: [base floats], False: [exp floats]}}
-    values: dict[tuple[str, str], dict[bool, list[float]]] = (
-        defaultdict(lambda: {True: [], False: []})
-    )
+    # {"story/Metric": {True: [base floats], False: [exp floats]}}
+    values: dict[str, dict[bool, list[float]]] = defaultdict(lambda: {True: [], False: []})
 
     tasks = [(d, True) for d in base_digests] + [(d, False) for d in exp_digests]
 
@@ -513,8 +527,9 @@ def pivot_results_cas(job_id: str) -> list[dict]:
 
     perm_error: PermissionError | None = None
 
-    with tempfile.TemporaryDirectory(prefix="v8-utils-cas-") as tmpdir:
-        tmp_root = Path(tmpdir)
+    tmp = tempfile.mkdtemp(prefix="v8-utils-cas-")
+    tmp_root = Path(tmp)
+    try:
         with ThreadPoolExecutor(max_workers=20) as executor:
             futures = {executor.submit(_dl, t): t for t in tasks}
             for future in as_completed(futures):
@@ -528,30 +543,37 @@ def pivot_results_cas(job_id: str) -> list[dict]:
                     continue
                 if data is None:
                     continue
-                for story, metrics in data.items():
-                    if not isinstance(metrics, dict):
-                        continue
-                    for metric, val in metrics.items():
-                        if isinstance(val, (int, float)):
-                            values[(story, metric)][is_base].append(float(val))
+                for metric_key, val in data.items():
+                    if isinstance(val, (int, float)):
+                        values[metric_key][is_base].append(float(val))
+    except Exception:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
+        raise
 
     if perm_error:
+        import shutil as _shutil
+        _shutil.rmtree(tmp, ignore_errors=True)
         raise perm_error
     if not values:
         raise ValueError(
             "No probe data found in CAS isolates. "
-            f"Looked for {probe_name}.json under each isolate."
+            f"Looked for {probe_name}.json under each isolate.\n"
+            f"Isolates left in: {tmp}"
         )
 
+    import shutil as _shutil
+    _shutil.rmtree(tmp, ignore_errors=True)
+
     rows = []
-    for (story, metric), by_side in sorted(values.items()):
+    for metric_key, by_side in sorted(values.items()):
         base_vals = by_side[True]
         exp_vals  = by_side[False]
         if not base_vals or not exp_vals:
             continue
         p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
         rows.append({
-            "name":       f"{story}/{metric}",
+            "name":       metric_key,
             "unit":       None,
             "base_label": base_label,
             **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
