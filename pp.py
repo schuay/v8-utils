@@ -297,13 +297,18 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         if job_url:
             urls.append(job_url)
 
-    if args.watch and urls:
+    cfg = config.load()
+    should_watch = args.watch or (
+        args.watch is None and (cfg.chat_webhook or cfg.chat_app_space)
+    )
+    if should_watch and urls:
         if not daemon.is_running():
             daemon.start_background()
         for url in urls:
             daemon.send_job(url)
             _chat_notify_watching(url)
             print(f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion.")
+
 
 
 def _chat_notify_watching(job_url: str) -> None:
@@ -447,8 +452,9 @@ def main() -> None:
                    help="Bot runs per variant (default: 100)")
     p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
                    help="Buganizer issue ID")
-    p.add_argument("-w", "--watch", action="store_true",
-                   help="Watch created job(s) and notify on completion")
+    p.add_argument("-w", "--watch", action="store_true", default=None,
+                   help="Watch created job(s) and notify on completion "
+                        "(default: on when chat integration is configured)")
     p.set_defaults(func=_cmd_create_job)
 
     # watch
