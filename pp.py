@@ -279,13 +279,18 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
 
 def _chat_notify_watching(job_url: str) -> None:
     cfg = config.load()
-    if not (cfg.chat_app_space and cfg.chat_service_account_email):
-        return
-    try:
-        chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
-                    f"👀 Watching: {job_url}")
-    except Exception:
-        pass
+    if cfg.chat_app_space and cfg.chat_service_account_email:
+        try:
+            chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
+                        f"👀 Watching: {job_url}")
+        except Exception:
+            pass
+    elif cfg.chat_webhook:
+        try:
+            import httpx
+            httpx.post(cfg.chat_webhook, json={"text": f"👀 Watching: {job_url}"}, timeout=10)
+        except Exception:
+            pass
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
