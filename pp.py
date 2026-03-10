@@ -95,6 +95,8 @@ def _colorize_results(text: str) -> str:
             out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
         elif re.fullmatch(r"-+", line):
             out.append(f"{_DIM}{line}{_RESET}")
+        elif line.startswith("(") and "omitted" in line:
+            out.append(f"{_DIM}{line}{_RESET}")
         elif "chg%" in line:
             out.append(f"{_BOLD}{line}{_RESET}")
         else:

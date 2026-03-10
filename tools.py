@@ -81,12 +81,12 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
     job_url:  Pinpoint job URL or job ID
     """
     job_id = pinpoint.job_id_from_url(job_url)
-    rows = pinpoint.pivot_results(job_id)
-    if not rows:
+    all_rows = pinpoint.pivot_results(job_id)
+    if not all_rows:
         return "No results found."
 
-    if not show_all:
-        rows = [r for r in rows if r["significant"]]
+    rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
+    omitted = len(all_rows) - len(rows)
     if not rows:
         return "No statistically significant results found."
 
@@ -129,7 +129,7 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
     unit_line = "unit: " + ",  ".join(fmt_unit(u) for u in units)
 
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
-    return "\n".join([
+    lines = [
         f"base: {rows[0]['base_label']}",
         f"exp:  {rows[0]['exp_label']}",
         unit_line,
@@ -137,7 +137,10 @@ def pinpoint_show_results(job_url: str, show_all: bool = False) -> str:
         fmt_row(hdrs),
         sep,
         *[fmt_row(c) for c in cells],
-    ])
+    ]
+    if omitted:
+        lines.append(f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)")
+    return "\n".join(lines)
 
 
 @mcp.tool()

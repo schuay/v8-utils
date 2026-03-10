@@ -36,7 +36,7 @@ def _luci_run(command: str) -> str:
 
 
 def get_current_user_email() -> str:
-    """Return the email of the currently logged-in user via the Google userinfo API."""
+    """Return the email of the currently logged-in user, preferring chromium.org."""
     token = _luci_run("token").strip()
     r = httpx.get(
         "https://www.googleapis.com/oauth2/v3/userinfo",
@@ -47,15 +47,26 @@ def get_current_user_email() -> str:
     email = r.json().get("email")
     if not email:
         raise ValueError("Could not retrieve email from userinfo API")
+    if email.endswith("@google.com"):
+        chromium_email = email.split("@")[0] + "@chromium.org"
+        if get_auth_headers(chromium_email):
+            return chromium_email
     return email
 
 
-def get_auth_headers() -> dict[str, str]:
-    """Return Authorization headers for the current LUCI user, or {} if not logged in."""
+def get_auth_headers(email: str | None = None) -> dict[str, str]:
+    """Return Authorization headers for the given email (or current LUCI user).
+
+    Pass email to request a token for a specific account via luci-auth -email.
+    Returns {} if not logged in or the account is unavailable.
+    """
     try:
-        token = _luci_run("token").strip()
+        cmd = ["luci-auth", "token"]
+        if email:
+            cmd += ["-email", email]
+        token = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).strip()
         return {"Authorization": f"Bearer {token}"}
-    except ValueError:
+    except (subprocess.CalledProcessError, FileNotFoundError):
         return {}
 
 
@@ -411,6 +422,15 @@ def create_job(
     headers = get_auth_headers()
     if not headers:
         raise ValueError(_LOGIN_INSTRUCTIONS)
+    # Prefer chromium.org if available (get_current_user_email already resolves the preference)
+    try:
+        email = get_current_user_email()
+        if not email.endswith("@google.com"):
+            alt = get_auth_headers(email)
+            if alt:
+                headers = alt
+    except Exception:
+        pass
 
     r = httpx.post(
         f"{_PINPOINT_BASE}/api/new", data=payload,
