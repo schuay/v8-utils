@@ -3,6 +3,7 @@
 from mcp.server.fastmcp import FastMCP
 
 import config
+import gerrit as gerrit_tools
 import perf as perf_tools
 import pinpoint
 
@@ -193,6 +194,54 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
+
+
+# ── gerrit tools ─────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def gerrit_comments(change_url: str) -> list[dict]:
+    """Fetch all published comments on a Gerrit CL, threaded by file and line.
+
+    Each entry represents a comment thread and includes:
+      file, line, patch_set, author, message, updated, replies[]
+
+    Threads are sorted by file path then line number.  Use this to understand
+    reviewer feedback or the current state of a code review.
+
+    change_url: Gerrit CL URL, e.g.:
+      https://chromium-review.googlesource.com/c/v8/v8/+/7650974
+      https://chromium-review.googlesource.com/7650974
+    """
+    return gerrit_tools.comments(change_url)
+
+
+@mcp.tool()
+def gerrit_fetch(
+    change_url: str,
+    repo_path: str = ".",
+    fetch: bool = True,
+) -> dict:
+    """Return the git ref for a Gerrit CL patchset, optionally fetching it.
+
+    Gerrit stores each patchset at refs/changes/NN/CHANGE_ID/PATCHSET.
+    If fetch=True (default), runs `git fetch` in repo_path so the ref is
+    available as FETCH_HEAD for standard git commands:
+
+      git diff FETCH_HEAD           # diff patchset vs working tree
+      git diff main..FETCH_HEAD     # all changes in the CL vs main
+      git log main..FETCH_HEAD      # commits in the CL
+      git show FETCH_HEAD           # top commit
+
+    If no patchset is in the URL, the latest patchset is fetched.
+
+    Returns: ref, remote, patchset, fetch_head (commit SHA, if fetched)
+
+    change_url: Gerrit CL URL (with or without patchset suffix)
+    repo_path:  local git repo to fetch into (default: current directory)
+    fetch:      if False, return ref/remote without running git fetch
+                (useful for getting the ref name to fetch manually)
+    """
+    return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
 
 # ── perf tools ────────────────────────────────────────────────────────────────
