@@ -394,8 +394,6 @@ def _cmd_logs(args: argparse.Namespace) -> None:
 
 def main() -> None:
     import logging
-    logging.getLogger().setLevel(logging.WARNING)
-
     parser = argparse.ArgumentParser(prog="pp", description="Pinpoint CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -482,7 +480,14 @@ def main() -> None:
     p.add_argument("-f", "--follow", action="store_true", help="Follow log output")
     p.set_defaults(func=_cmd_logs)
 
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="Enable verbose logging (useful for debugging --use-cas)")
+
     args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.WARNING,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     try:
         args.func(args)
     except Exception as e:
