@@ -138,6 +138,35 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
         _notify_webhook(cfg.chat_webhook, job, results)
 
 
+# ── Results poller ────────────────────────────────────────────────────────────
+
+_RESULTS_TIMEOUT = 30 * 60  # seconds to wait for results page after job completes
+
+
+def _fetch_results_when_ready(job_id: str, poll_interval: int) -> list[dict] | None:
+    """Poll until the results page is ready, then return pivot_results.
+
+    Returns None if the results page never appears within _RESULTS_TIMEOUT.
+    """
+    deadline = time.time() + _RESULTS_TIMEOUT
+    while time.time() < deadline:
+        time.sleep(poll_interval)
+        try:
+            return pinpoint.pivot_results(job_id)
+        except Exception as e:
+            log.info("results not ready for %s: %s", job_id, e)
+    log.warning("timed out waiting for results page for %s", job_id)
+    return None
+
+
+def _notify_with_results(cfg: config.Config, job: dict) -> None:
+    """Wait for the results page, then send a notification. Runs in its own thread."""
+    job_id = job.get("job_id", "")
+    log.info("waiting for results page for %s", job_id)
+    results = _fetch_results_when_ready(job_id, cfg.poll_interval)
+    _notify(cfg, job, results)
+
+
 # ── Poll loop ─────────────────────────────────────────────────────────────────
 
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
@@ -168,16 +197,15 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
             log.info("%s  status=%s", job_id, status)
             if status in _TERMINAL_STATES:
                 log.info("%s  %s: %s", job_id, status, job.get("name", ""))
-                results = None
-                if status == "Completed" and (cfg.chat_app_space or cfg.chat_webhook):
-                    try:
-                        results = pinpoint.pivot_results(job_id)
-                    except Exception as e:
-                        log.warning("could not fetch results for %s: %s", job_id, e)
-                if cfg.chat_app_space or cfg.chat_webhook:
-                    _notify(cfg, job, results)
                 with lock:
                     watched.pop(job_id, None)
+                if cfg.chat_app_space or cfg.chat_webhook:
+                    if status == "Completed":
+                        threading.Thread(
+                            target=_notify_with_results, args=(cfg, job), daemon=True,
+                        ).start()
+                    else:
+                        _notify(cfg, job, None)
 
 
 # ── Socket listener ───────────────────────────────────────────────────────────
