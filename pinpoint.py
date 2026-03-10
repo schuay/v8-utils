@@ -464,8 +464,17 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     if not base_digests or not exp_digests:
         raise ValueError("No CAS digests found in job state.")
 
-    base_label = (state[0].get("change", {}).get("label") or "base") if state else "base"
-    exp_label  = (state[1].get("change", {}).get("label") or "exp")  if len(state) > 1 else "exp"
+    # Fetch the full labels (e.g. "base: chromium@abc123 (...)") from histograms.
+    # Fall back to the short state labels if the results page isn't available yet.
+    try:
+        _histograms, _guids = fetch_histograms(job_id)
+        _groups = _collect_groups(_histograms, _guids)
+        _labels = sorted({label for _, label in _groups})
+        base_label = next((l for l in _labels if l.startswith("base:")), _labels[0] if _labels else "base")
+        exp_label  = next((l for l in _labels if l.startswith("exp:")),  _labels[1] if len(_labels) > 1 else "exp")
+    except Exception:
+        base_label = (state[0].get("change", {}).get("label") or "base") if state else "base"
+        exp_label  = (state[1].get("change", {}).get("label") or "exp")  if len(state) > 1 else "exp"
 
     all_digests = base_digests + exp_digests
     probe_filename = f"{probe_name}.json"

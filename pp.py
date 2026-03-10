@@ -488,6 +488,9 @@ def main() -> None:
         level=logging.DEBUG if args.verbose else logging.WARNING,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    if not args.verbose:
+        for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
+            logging.getLogger(_noisy).setLevel(logging.WARNING)
     try:
         args.func(args)
     except Exception as e:
