@@ -225,5 +225,5 @@ your MCP client configuration, for example in `~/.gemini/settings.json`:
 |------|-------------|
 | `pinpoint_show_job` | Fetch key details of a Pinpoint job |
 | `pinpoint_list_jobs` | List recent jobs for a user, excluding CQ jobs |
-| `pinpoint_show_results` | Base-vs-experiment comparison table; `use_cas=True` for richer JetStream metrics |
+| `pinpoint_show_results` | Base-vs-experiment comparison table; `use_cas=True` for richer JetStream sub-metrics (Score/First/Average/Worst4 per story) |
 | `pinpoint_create_job` | Create a new Pinpoint A/B try job |

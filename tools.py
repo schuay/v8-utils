@@ -86,9 +86,9 @@ def pinpoint_show_results(
     show_all: if False (default), only show statistically significant results.
     job_url:  Pinpoint job URL or job ID
     use_cas:  if True, fetch raw per-run values from CAS isolates instead of
-              the histogram HTML. Slower but surfaces richer metrics for
-              JetStream (Score, FirstIteration, Average, Worst4 per story).
-              Requires `cas` on PATH and: gcloud auth application-default login
+              the histogram HTML. Slower but surfaces richer sub-metrics for
+              JetStream (Score, First, Average, Worst4 per story).
+              Requires: gcloud auth application-default login
     """
     job_id = pinpoint.job_id_from_url(job_url)
     all_rows = pinpoint.pivot_results_cas(job_id) if use_cas else pinpoint.pivot_results(job_id)
