@@ -395,27 +395,35 @@ def perf_tma(
     symbol: str | None = None,
     n: int = 20,
 ) -> dict:
-    """Microarchitecture bottleneck analysis (TMA) per symbol.
+    """Microarchitecture bottleneck analysis (TMA Level 1) per symbol.
 
     Always safe to call — returns {available: false, message: ...} when the
     perf.data was not recorded with TMA events, so callers can handle both
     cases without branching.
 
+    Uses real Skylake-SP kernel PMU topdown events (topdown-fetch-bubbles,
+    topdown-slots-issued/retired, topdown-recovery-bubbles, topdown-total-slots)
+    rather than the unreliable stalled-cycles-frontend/-backend aliases.
+
+    Intensity fields = event_pct / cycles_pct for each symbol:
+      ~1.0  proportional to cycle share (average)
+      >1.0  disproportionately high — likely bottleneck
+      <1.0  below average
+
     When available=true, each symbol entry includes:
-      cycles_pct:          share of total cycle samples (hotness rank)
-      frontend_bound_pct:  share of frontend-stall samples
-      backend_bound_pct:   share of backend-stall samples
-      instructions_pct:    share of instruction samples
-      branch_misses_pct:   share of branch-miss samples
-      fe_intensity:        frontend_bound_pct / cycles_pct
-                           >1.2 = more frontend-bound than profile average
-      be_intensity:        backend_bound_pct / cycles_pct
-                           >1.2 = more backend-bound than profile average
-      dominant:            "Frontend Bound" | "Backend Bound" |
+      cycles_pct:          share of cycle samples (hotness)
+      fe_intensity:        Frontend Bound  (fetch bubbles / cycles)
+      retiring_intensity:  Retiring        (slots retired / cycles; high = efficient)
+      bad_spec_intensity:  Bad Speculation (issued - retired slots / cycles)
+      mem_intensity:       Backend→Memory  (L3-stall cycles / cycles)
+                           only present when recorded with --topdown
+      dominant:            "Frontend Bound" | "Backend Bound (Memory)" |
+                           "Backend Bound (Core)" | "Bad Speculation" |
                            "Retiring (efficient)" | "Mixed"
+      has_mem_detail:      true if mem_intensity is populated
 
     To enable: re-record with linux-perf-d8.py --topdown
-    (targets Intel Skylake-SP / any arch_perfmon CPU)
+    (Intel Skylake-SP; requires topdown-* kernel PMU events)
 
     Recommended workflow:
       1. perf_hotspots       — rank hot symbols

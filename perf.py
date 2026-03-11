@@ -518,15 +518,17 @@ def flamegraph(
 
 # ── perf tma ──────────────────────────────────────────────────────────────────
 
-# Events recorded by linux-perf-d8.py --topdown (Skylake-SP / arch_perfmon).
-# Order matters: cycles is the anchor for relative-intensity ratios.
-_TMA_EVENTS = [
+# Kernel PMU event names for Skylake-SP TMA Level 1 + L3 stall sub-metric.
+# Recorded by linux-perf-d8.py --topdown as a single group.
+_TMA_CORE_EVENTS = [
     "cycles",
-    "stalled-cycles-frontend",
-    "stalled-cycles-backend",
-    "instructions",
-    "branch-misses",
+    "topdown-total-slots",
+    "topdown-fetch-bubbles",     # Frontend Bound numerator
+    "topdown-slots-issued",      # Bad Speculation + Retiring numerator
+    "topdown-slots-retired",     # Retiring numerator
+    "topdown-recovery-bubbles",  # Bad Speculation numerator
 ]
+_TMA_MEM_EVENT = "cycle_activity.stalls_l3_miss"  # Level 2: memory-bound
 
 _TMA_RECORD_HINT = (
     "Re-record with linux-perf-d8.py --topdown to enable "
@@ -553,45 +555,55 @@ def tma(
     symbol: str | None = None,
     n: int = 20,
 ) -> dict:
-    """Per-symbol microarchitecture breakdown from stall event data.
+    """Per-symbol TMA Level 1 breakdown using Skylake-SP topdown PMU events.
 
-    Probes the perf.data for TMA events.  Always returns a dict with an
+    Probes the perf.data for topdown events.  Always returns a dict with an
     'available' key so callers can handle both cases gracefully:
 
-      available=False  →  only 'message' is present; explains how to re-record
+      available=False  →  only 'message' present; explains how to re-record
       available=True   →  'symbols' list with per-symbol TMA breakdown
 
-    Each symbol entry includes:
-      cycles_pct:           % of total cycle samples on this symbol
-      frontend_bound_pct:   % of frontend-stall samples on this symbol
-      backend_bound_pct:    % of backend-stall samples on this symbol
-      instructions_pct:     % of instruction samples on this symbol
-      branch_misses_pct:    % of branch-miss samples on this symbol
-      fe_intensity:         frontend_bound_pct / cycles_pct  (>1 = above avg)
-      be_intensity:         backend_bound_pct  / cycles_pct  (>1 = above avg)
-      dominant:             most likely bottleneck category
+    Intensity fields are event_pct / cycles_pct — how much of each event
+    type this symbol attracts relative to its share of cycle time:
+      > 1.0  more of this event than profile average (notable)
+      ~ 1.0  proportional
+      < 1.0  less than average
+
+    Each symbol entry:
+      cycles_pct:         % of cycle samples on this symbol (hotness)
+      fe_intensity:       topdown-fetch-bubbles / cycles  (Frontend Bound)
+      retiring_intensity: topdown-slots-retired / cycles  (Retiring / efficient)
+      bad_spec_intensity: (slots-issued - slots-retired) / cycles  (Bad Spec)
+      mem_intensity:      cycle_activity.stalls_l3_miss / cycles  (Memory Bound)
+                          — only present when recorded with --topdown
+      dominant:           "Frontend Bound" | "Backend Bound (Memory)" |
+                          "Backend Bound (Core)" | "Bad Speculation" |
+                          "Retiring (efficient)" | "Mixed"
 
     symbol:  filter to symbols containing this substring
-    n:       max symbols to return (sorted by cycles_pct, default 20)
+    n:       max symbols to return, sorted by cycles_pct (default 20)
     """
     event_data: dict[str, dict[str, float]] = {}
-    for ev in _TMA_EVENTS:
+    for ev in _TMA_CORE_EVENTS + [_TMA_MEM_EVENT]:
         result = _probe_event(perf_data, ev)
         if result is not None:
             event_data[ev] = result
 
-    if "cycles" not in event_data or "stalled-cycles-frontend" not in event_data:
+    # Need at minimum: cycles + one topdown event to be useful.
+    if "cycles" not in event_data or "topdown-fetch-bubbles" not in event_data:
         return {
             "available": False,
             "events_found": list(event_data.keys()),
             "message": _TMA_RECORD_HINT,
         }
 
-    cycles  = event_data["cycles"]
-    fe      = event_data.get("stalled-cycles-frontend", {})
-    be      = event_data.get("stalled-cycles-backend", {})
-    instrs  = event_data.get("instructions", {})
-    brmiss  = event_data.get("branch-misses", {})
+    cycles   = event_data["cycles"]
+    slots    = event_data.get("topdown-total-slots", cycles)  # fallback to cycles
+    fe_bub   = event_data.get("topdown-fetch-bubbles", {})
+    issued   = event_data.get("topdown-slots-issued", {})
+    retired  = event_data.get("topdown-slots-retired", {})
+    recovery = event_data.get("topdown-recovery-bubbles", {})
+    l3stall  = event_data.get(_TMA_MEM_EVENT)  # None if not recorded
 
     syms = sorted(cycles, key=lambda s: cycles[s], reverse=True)
     if symbol:
@@ -601,36 +613,50 @@ def tma(
     rows: list[dict] = []
     for sym in syms:
         cyc = cycles[sym]
-        fe_pct = fe.get(sym, 0.0)
-        be_pct = be.get(sym, 0.0)
-        fe_int = round(fe_pct / cyc, 2) if cyc else 0.0
-        be_int = round(be_pct / cyc, 2) if cyc else 0.0
+        if not cyc:
+            continue
 
-        # Classify: intensity > 1.2 means 20% more of that stall type than
-        # the profile average; < 0.7 means significantly below average.
-        if fe_int >= 1.2 and fe_int >= be_int:
+        # Intensity = share of this event on symbol / share of cycles on symbol.
+        # All topdown events are normalised against total-slots (≈ 4×cycles);
+        # since we're computing ratios, using cycles_pct as denominator is
+        # equivalent and avoids a separate total-slots lookup per symbol.
+        fe_int      = round(fe_bub.get(sym, 0.0)  / cyc, 2)
+        retiring_int = round(retired.get(sym, 0.0) / cyc, 2)
+        # Bad spec proxy: issued slots that didn't retire (wasted work).
+        bad_spec_int = round(
+            max(issued.get(sym, 0.0) - retired.get(sym, 0.0), 0.0) / cyc, 2
+        )
+        mem_int = round(l3stall[sym] / cyc, 2) if l3stall and sym in l3stall else None
+
+        # Classify dominant bottleneck.
+        if fe_int >= 1.3:
             dominant = "Frontend Bound"
-        elif be_int >= 1.2 and be_int > fe_int:
-            dominant = "Backend Bound"
-        elif fe_int < 0.7 and be_int < 0.7:
+        elif bad_spec_int >= 0.5:
+            dominant = "Bad Speculation"
+        elif mem_int is not None and mem_int >= 1.3:
+            dominant = "Backend Bound (Memory)"
+        elif retiring_int >= 1.2 and fe_int < 0.8:
             dominant = "Retiring (efficient)"
+        elif fe_int < 0.8 and bad_spec_int < 0.3:
+            dominant = "Backend Bound (Core)"
         else:
             dominant = "Mixed"
 
-        rows.append({
-            "symbol":              sym,
-            "cycles_pct":          cyc,
-            "frontend_bound_pct":  fe_pct,
-            "backend_bound_pct":   be_pct,
-            "instructions_pct":    instrs.get(sym, 0.0),
-            "branch_misses_pct":   brmiss.get(sym, 0.0),
-            "fe_intensity":        fe_int,
-            "be_intensity":        be_int,
-            "dominant":            dominant,
-        })
+        entry: dict = {
+            "symbol":          sym,
+            "cycles_pct":      cyc,
+            "fe_intensity":    fe_int,
+            "retiring_intensity": retiring_int,
+            "bad_spec_intensity": bad_spec_int,
+            "dominant":        dominant,
+        }
+        if mem_int is not None:
+            entry["mem_intensity"] = mem_int
+        rows.append(entry)
 
     return {
         "available": True,
         "events_recorded": list(event_data.keys()),
+        "has_mem_detail": l3stall is not None,
         "symbols": rows,
     }
