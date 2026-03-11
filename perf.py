@@ -343,7 +343,7 @@ def diff(
       after_pct:    self% in the after profile (None if absent)
       delta_pct:    after_pct - baseline_pct (positive = got hotter)
     """
-    args = ["perf", "diff", "--stdio", "--no-header", perf_before, perf_after]
+    args = ["perf", "diff", perf_before, perf_after]
     if dso:
         args += ["--dso", dso]
     text = _run(args)
