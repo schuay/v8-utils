@@ -8,6 +8,7 @@ import statistics
 import subprocess
 from collections import defaultdict
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from scipy.stats import mannwhitneyu
@@ -79,23 +80,28 @@ def user_email_variants(email: str) -> list[str]:
 
 # ── Gerrit patch resolver ──────────────────────────────────────────────────────
 
-_RE_CRREV = re.compile(
-    r"^(?:https?://)?(?:crrev(?:\.com)?/)?(?:c/)?(\d+)(?:/(\d+))?$", re.IGNORECASE
-)
+def _parse_change_patchset(path: str) -> tuple[str, str | None] | None:
+    """Extract (change_id, patchset) from a path segment like /CHANGE[/PATCHSET].
 
-# Short-form Gerrit URL: https://chromium-review.googlesource.com/CHANGE_ID[/PATCHSET]
-# (missing the /c/PROJECT/+/ segment — needs resolution to canonical form)
-_RE_GERRIT_SHORT = re.compile(
-    r"^https?://chromium-review\.googlesource\.com/(\d+)(?:/(\d+))?/?$", re.IGNORECASE
-)
+    Returns None if the first path component is not a numeric change ID.
+    """
+    parts = [p for p in path.strip("/").split("/") if p]
+    if parts and parts[0].isdigit():
+        patchset = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+        return parts[0], patchset
+    return None
 
 
 def resolve_patch(patch: str) -> str:
     """Resolve a Gerrit patch shorthand to a full chromium-review URL.
 
-    Accepts: bare change ID (12345), crrev/c/12345, crrev.com/c/12345,
-             short Gerrit URL (https://chromium-review.googlesource.com/CHANGE_ID),
-             or a canonical https://chromium-review.googlesource.com/c/PROJECT/+/... URL.
+    Accepts:
+      12345                                                    bare change ID
+      12345/1                                                  change ID + patchset
+      c/12345[/1]                                              Gerrit short path
+      https://crrev.com/c/12345[/1]                           crrev URL
+      https://chromium-review.googlesource.com/12345[/1]      short Gerrit URL
+      https://chromium-review.googlesource.com/c/v8/v8/+/...  canonical (pass-through)
     """
     patch = patch.strip()
 
@@ -107,16 +113,39 @@ def resolve_patch(patch: str) -> str:
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
         return f"{url}/{patchset}" if patchset else url
 
-    m = _RE_CRREV.match(patch)
-    if m:
-        return _resolve_change_id(m.group(1), m.group(2))
+    parsed = urlparse(patch)
 
-    m = _RE_GERRIT_SHORT.match(patch)
-    if m:
-        return _resolve_change_id(m.group(1), m.group(2))
+    if parsed.scheme in ("http", "https"):
+        host = parsed.hostname or ""
 
-    if patch.startswith("http"):
+        if host == "crrev.com":
+            # https://crrev.com/c/CHANGE[/PATCHSET]
+            path = parsed.path.lstrip("/")
+            if path.startswith("c/"):
+                path = path[2:]
+            result = _parse_change_patchset(path)
+            if result:
+                return _resolve_change_id(*result)
+
+        if host == "chromium-review.googlesource.com":
+            if parsed.path.startswith("/c/"):
+                # Already canonical — strip any query/fragment and return
+                return f"{_GERRIT_BASE}{parsed.path}"
+            # Short form: /CHANGE[/PATCHSET]
+            result = _parse_change_patchset(parsed.path)
+            if result:
+                return _resolve_change_id(*result)
+
+        # Unknown or already-canonical http URL — pass through
         return patch
+
+    # No scheme: bare change ID, c/CHANGE[/PATCHSET], or CHANGE/PATCHSET
+    path = patch.lstrip("/")
+    if path.startswith("c/"):
+        path = path[2:]
+    result = _parse_change_patchset(path)
+    if result:
+        return _resolve_change_id(*result)
 
     raise ValueError(
         f"Unrecognised patch format: {patch!r}. "
@@ -124,7 +153,20 @@ def resolve_patch(patch: str) -> str:
     )
 
 
-_RE_GERRIT_CHANGE_ID = re.compile(r"/(\d+)(?:/\d+)?/?$")
+def _gerrit_change_id_from_url(url: str) -> str | None:
+    """Extract a Gerrit change ID from any supported URL format, or return None."""
+    parsed = urlparse(url)
+    if parsed.hostname != "chromium-review.googlesource.com":
+        return None
+    # Canonical: /c/PROJECT/+/CHANGE[/PATCHSET] — change ID is after /+/
+    path = parsed.path
+    plus_idx = path.find("/+/")
+    if plus_idx != -1:
+        result = _parse_change_patchset(path[plus_idx + 3:])
+        return result[0] if result else None
+    # Short: /CHANGE[/PATCHSET]
+    result = _parse_change_patchset(path)
+    return result[0] if result else None
 
 
 def fetch_gerrit_subject(patch_url: str) -> str | None:
@@ -132,11 +174,11 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
 
     Returns None if the change ID cannot be extracted or the request fails.
     """
-    m = _RE_GERRIT_CHANGE_ID.search(patch_url)
-    if not m:
+    change_id = _gerrit_change_id_from_url(patch_url)
+    if not change_id:
         return None
     try:
-        r = httpx.get(f"{_GERRIT_BASE}/changes/{m.group(1)}", timeout=15)
+        r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
         text = r.text[r.text.find("{"):]
         return json.loads(text).get("subject")
