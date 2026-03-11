@@ -232,17 +232,19 @@ def gerrit_fetch(
     """Return the git ref for a Gerrit CL patchset, optionally fetching it.
 
     Gerrit stores each patchset at refs/changes/NN/CHANGE_ID/PATCHSET.
-    If fetch=True (default), runs `git fetch` in repo_path so the ref is
-    available as FETCH_HEAD for standard git commands:
-
-      git diff FETCH_HEAD           # diff patchset vs working tree
-      git diff main..FETCH_HEAD     # all changes in the CL vs main
-      git log main..FETCH_HEAD      # commits in the CL
-      git show FETCH_HEAD           # top commit
-
-    If no patchset is in the URL, the latest patchset is fetched.
+    If fetch=True (default), runs `git fetch` in repo_path.
 
     Returns: ref, remote, patchset, fetch_head (commit SHA, if fetched)
+
+    After a successful fetch, use the returned `fetch_head` SHA to inspect
+    the patchset — do NOT use FETCH_HEAD (it may have changed by the time
+    you run the next command):
+
+      git show <fetch_head>                 # view the patchset commit
+      git diff <fetch_head>^..<fetch_head>  # diff introduced by the commit
+      git log <fetch_head>                  # history up to the patchset
+
+    If no patchset is in the URL, the latest patchset is fetched.
 
     change_url: Gerrit CL URL (with or without patchset suffix)
     repo_path:  local git repo to fetch into (default: current directory)
