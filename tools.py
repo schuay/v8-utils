@@ -236,13 +236,17 @@ def gerrit_fetch(
 
     Returns: ref, remote, patchset, fetch_head (commit SHA, if fetched)
 
-    After a successful fetch, use the returned `fetch_head` SHA to inspect
-    the patchset — do NOT use FETCH_HEAD (it may have changed by the time
-    you run the next command):
+    The patchset is fetched but NOT checked out — the working tree is
+    unchanged.  To read file contents or diffs, use git commands that
+    reference the commit directly.
 
-      git show <fetch_head>                 # view the patchset commit
-      git diff <fetch_head>^..<fetch_head>  # diff introduced by the commit
-      git log <fetch_head>                  # history up to the patchset
+    After a successful fetch, use the returned `fetch_head` SHA — do NOT
+    use FETCH_HEAD (it may have changed by the time you run the next command):
+
+      git show <fetch_head>                    # view the patchset commit
+      git show <fetch_head>:path/to/file.cc   # read a file as it is in the patch
+      git diff <fetch_head>^..<fetch_head>     # diff introduced by the commit
+      git log <fetch_head>                     # history up to the patchset
 
     If no patchset is in the URL, the latest patchset is fetched.
 
