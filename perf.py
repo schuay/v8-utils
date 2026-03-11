@@ -380,3 +380,137 @@ def diff(
 
     rows.sort(key=lambda r: abs(r["delta_pct"] or 0), reverse=True)
     return rows[:n]
+
+
+# ── perf flamegraph ────────────────────────────────────────────────────────────
+
+# Matches call-graph branch lines in `perf report -g callee --stdio` output:
+#   "           --80.00%-- NativeRegExpExec"
+#   "           |           --60.00%-- malloc"
+_CG_BRANCH_RE = re.compile(r'^([\s|]*?)--+(\d+\.\d+)%--\s+(.+?)\s*$')
+
+
+def _parse_cg_paths(
+    block_lines: list[str],
+    root_sym: str,
+    root_pct: float,
+    max_depth: int,
+) -> list[tuple[float, list[str]]]:
+    """DFS a callee call-graph block into (abs_pct, path) leaf entries.
+
+    Percentages on branch lines are relative to the parent; we multiply down
+    the tree to produce absolute percentages for each leaf path.
+    """
+    branches: list[tuple[int, str, float]] = []
+    for line in block_lines:
+        m = _CG_BRANCH_RE.match(line)
+        if m:
+            indent = len(m.group(1))
+            rel_pct = float(m.group(2)) / 100.0
+            sym = m.group(3).strip()
+            branches.append((indent, sym, rel_pct))
+
+    if not branches:
+        return [(root_pct, [root_sym])]
+
+    # Build tree using an indent-based parent stack.
+    root_node: dict = {"sym": root_sym, "pct": root_pct, "children": []}
+    stack: list[tuple[int, dict]] = [(-1, root_node)]
+
+    for indent, sym, rel_pct in branches:
+        while len(stack) > 1 and stack[-1][0] >= indent:
+            stack.pop()
+        parent = stack[-1][1]
+        node: dict = {"sym": sym, "pct": parent["pct"] * rel_pct, "children": []}
+        parent["children"].append(node)
+        stack.append((indent, node))
+
+    # DFS → collect leaf paths (or paths at max_depth).
+    results: list[tuple[float, list[str]]] = []
+
+    def dfs(node: dict, path: list[str], depth: int) -> None:
+        cur = path + [node["sym"]]
+        if not node["children"] or depth >= max_depth:
+            results.append((node["pct"], cur))
+        else:
+            for child in node["children"]:
+                dfs(child, cur, depth + 1)
+
+    dfs(root_node, [], 0)
+    return results
+
+
+def flamegraph(
+    perf_data: str,
+    focus_symbol: str | None = None,
+    dso: str | None = None,
+    min_pct: float = 0.5,
+    depth: int = 8,
+) -> str:
+    """Aggregate hot call paths into a single text flamegraph view.
+
+    Runs perf report in callee call-graph mode, parses each top-level
+    symbol's subtree, and emits root→leaf paths sorted by absolute sample
+    percentage.  Each path represents a distinct hot call chain.
+
+    focus_symbol: restrict to call trees whose root matches this substring
+    dso:          restrict to a specific shared object, e.g. "libv8.so"
+    min_pct:      omit paths below this % of total samples (default 0.5)
+    depth:        maximum call-chain depth to expand (default 8)
+    """
+    args = [
+        "perf", "report", "--stdio", "--no-header",
+        # callee mode: tree extends downward (what does this symbol call?)
+        # use 0.01 as perf's internal threshold; we filter by min_pct in Python
+        "-g", "callee,0.01,caller",
+        "--no-children",
+        "-i", perf_data,
+    ]
+    if dso:
+        args += ["--dso", dso]
+    if focus_symbol:
+        args += ["--symbol-filter", focus_symbol]
+    text = _run(args)
+
+    # Split perf output into per-symbol blocks and parse each one.
+    all_paths: list[tuple[float, list[str]]] = []
+    current_sym: str | None = None
+    current_pct: float = 0.0
+    block_lines: list[str] = []
+
+    def flush() -> None:
+        if current_sym is None:
+            return
+        if focus_symbol and focus_symbol not in current_sym:
+            return
+        for pct, path in _parse_cg_paths(block_lines, current_sym, current_pct, depth):
+            if pct >= min_pct:
+                all_paths.append((pct, path))
+
+    for line in text.splitlines():
+        m = _REPORT_RE.match(line)
+        if m:
+            flush()
+            current_pct = float(m.group(1))
+            current_sym = m.group(3).strip()
+            block_lines = []
+        elif current_sym is not None:
+            block_lines.append(line)
+    flush()
+
+    if not all_paths:
+        msg = "No call paths found"
+        if focus_symbol:
+            msg += f" for {focus_symbol!r}"
+        return msg + f" above {min_pct}%."
+
+    # Deduplicate and sort by descending percentage.
+    seen: set[tuple[str, ...]] = set()
+    unique: list[tuple[float, list[str]]] = []
+    for pct, path in sorted(all_paths, key=lambda x: x[0], reverse=True):
+        key = tuple(path)
+        if key not in seen:
+            seen.add(key)
+            unique.append((pct, path))
+
+    return "\n".join(f"{pct:6.2f}%  {' > '.join(path)}" for pct, path in unique)

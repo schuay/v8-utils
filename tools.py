@@ -361,6 +361,35 @@ def perf_annotate_read_around(
 
 
 @mcp.tool()
+def perf_flamegraph(
+    perf_data: str,
+    focus_symbol: str | None = None,
+    dso: str | None = None,
+    min_pct: float = 0.5,
+    depth: int = 8,
+) -> str:
+    """Aggregated text flamegraph: all hot call paths in one view.
+
+    Shows root→leaf call chains sorted by absolute sample percentage, so
+    the dominant execution paths are immediately visible without iterative
+    perf_callers traversal.
+
+    Typical workflow:
+      1. perf_hotspots  — find the hottest symbols
+      2. perf_flamegraph(focus_symbol=X)  — understand full call context
+      3. perf_annotate  — drill into hot instructions
+
+    focus_symbol: restrict to call trees whose root matches this substring,
+                  e.g. "RegExpPrototypeExec" or "Heap::AllocateRaw"
+    dso:          restrict to a specific shared object, e.g. "libv8.so"
+    min_pct:      omit paths below this % of total samples (default 0.5)
+    depth:        maximum call-chain depth to expand (default 8)
+    """
+    return perf_tools.flamegraph(perf_data, focus_symbol=focus_symbol,
+                                 dso=dso, min_pct=min_pct, depth=depth)
+
+
+@mcp.tool()
 def perf_diff(
     perf_before: str,
     perf_after: str,
