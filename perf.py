@@ -343,7 +343,9 @@ def diff(
       after_pct:    self% in the after profile (None if absent)
       delta_pct:    after_pct - baseline_pct (positive = got hotter)
     """
-    args = ["perf", "diff", perf_before, perf_after]
+    # Sort by symbol only (not dso) so that JIT functions with PID-tagged DSO
+    # names (e.g. jitted-115625-22.so) are matched across runs by name.
+    args = ["perf", "diff", "--sort=symbol", perf_before, perf_after]
     if dso:
         args += ["--dso", dso]
     text = _run(args)
@@ -357,6 +359,14 @@ def diff(
         delta_str    = m.group(2).rstrip("%")
         dso_name     = m.group(3)
         sym          = m.group(4).strip()
+
+        # Normalize V8 JIT symbols: strip transient source location suffix
+        # "JS:*foo (script.js):123:45" -> "JS:*foo"
+        # "Builtin:Foo (d8):12:3"      -> "Builtin:Foo"
+        sym = re.sub(r"\s+\([^)]+\):\d+:\d+$", "", sym)
+        # Collapse PID-tagged JIT DSOs: "jitted-115625-22.so" -> "v8_jit"
+        if re.match(r"jitted-\d+-\d+\.so$", dso_name):
+            dso_name = "v8_jit"
 
         baseline = float(baseline_str) if baseline_str else None
         delta    = float(delta_str)    if delta_str    else None
