@@ -523,11 +523,10 @@ def flamegraph(
 _TMA_CORE_EVENTS = [
     "cycles",
     "topdown-total-slots",
-    "topdown-fetch-bubbles",   # Frontend Bound numerator
-    "topdown-slots-issued",    # Bad Speculation + Retiring numerator
-    "topdown-slots-retired",   # Retiring numerator
-    # topdown-recovery-bubbles omitted: requires system-wide (-a) in
-    # per-thread mode.  Bad Speculation approximated as issued - retired.
+    "topdown-fetch-bubbles",     # Frontend Bound numerator
+    "topdown-slots-issued",      # Bad Speculation + Retiring numerator
+    "topdown-slots-retired",     # Retiring numerator
+    "topdown-recovery-bubbles",  # Bad Speculation numerator
 ]
 _TMA_MEM_EVENT = "cycle_activity.stalls_l3_miss"  # Level 2: memory-bound
 
@@ -621,11 +620,14 @@ def tma(
         # All topdown events are normalised against total-slots (≈ 4×cycles);
         # since we're computing ratios, using cycles_pct as denominator is
         # equivalent and avoids a separate total-slots lookup per symbol.
-        fe_int      = round(fe_bub.get(sym, 0.0)  / cyc, 2)
+        fe_int       = round(fe_bub.get(sym, 0.0) / cyc, 2)
         retiring_int = round(retired.get(sym, 0.0) / cyc, 2)
-        # Bad spec proxy: issued slots that didn't retire (wasted work).
+        # Bad Speculation: wasted issue slots + recovery overhead.
+        # Uses recovery-bubbles when available (system-wide recording),
+        # falls back to issued - retired when recorded per-thread.
         bad_spec_int = round(
-            max(issued.get(sym, 0.0) - retired.get(sym, 0.0), 0.0) / cyc, 2
+            max(issued.get(sym, 0.0) - retired.get(sym, 0.0)
+                + recovery.get(sym, 0.0), 0.0) / cyc, 2
         )
         mem_int = round(l3stall[sym] / cyc, 2) if l3stall and sym in l3stall else None
 
