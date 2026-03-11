@@ -526,7 +526,10 @@ _TMA_CORE_EVENTS = [
     "topdown-fetch-bubbles",     # Frontend Bound numerator
     "topdown-slots-issued",      # Bad Speculation + Retiring numerator
     "topdown-slots-retired",     # Retiring numerator
-    "topdown-recovery-bubbles",  # Bad Speculation numerator
+    # topdown-recovery-bubbles (INT_MISC.RECOVERY_CYCLES) not available on
+    # Skylake-SP — returns EINVAL.  Probed opportunistically so it works if
+    # present on other hardware; bad_spec falls back to issued - retired.
+    "topdown-recovery-bubbles",
 ]
 _TMA_MEM_EVENT = "cycle_activity.stalls_l3_miss"  # Level 2: memory-bound
 
