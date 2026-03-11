@@ -206,7 +206,7 @@ def _parse_annotate(text: str) -> list[dict]:
 def _get_annotate_lines(
     perf_data: str, symbol: str, dso: str | None
 ) -> list[dict]:
-    args = ["perf", "annotate", "--stdio", "--no-header",
+    args = ["perf", "annotate", "--stdio",
             "-s", symbol, "-i", perf_data]
     if dso:
         args += ["--dso", dso]
