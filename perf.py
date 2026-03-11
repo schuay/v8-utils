@@ -539,11 +539,34 @@ _TMA_RECORD_HINT = (
 )
 
 
+def _evlist(perf_data: str) -> list[str]:
+    """Return event names recorded in a perf.data file."""
+    try:
+        text = _run(["perf", "evlist", "-i", perf_data])
+        return [l.strip() for l in text.splitlines() if l.strip()]
+    except RuntimeError:
+        return []
+
+
 def _probe_event(perf_data: str, event: str) -> dict[str, float] | None:
-    """Return {symbol: overhead_pct} for one event, or None if not recorded."""
+    """Return {symbol: overhead_pct} for one event, or None if not recorded.
+
+    In system-wide (-a) group recordings perf may use a 'dummy' sampling
+    trigger, making the real events counting-only.  perf report still accepts
+    --event=<name> for counting events in a group and returns the weighted
+    per-symbol distribution, but the event name in the file must match exactly.
+    We resolve the name via perf evlist before querying.
+    """
+    # Resolve the event name as it actually appears in the file (handles
+    # aliases like cycles vs cpu-cycles, and :u/:S suffixes added by perf).
+    recorded = _evlist(perf_data)
+    matched = next((e for e in recorded if event in e or e in event), None)
+    if matched is None:
+        return None
+
     args = [
         "perf", "report", "--stdio", "--no-header",
-        "--no-children", f"--event={event}", "-i", perf_data,
+        "--no-children", f"--event={matched}", "-i", perf_data,
     ]
     try:
         text = _run(args)
