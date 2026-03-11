@@ -390,6 +390,46 @@ def perf_flamegraph(
 
 
 @mcp.tool()
+def perf_tma(
+    perf_data: str,
+    symbol: str | None = None,
+    n: int = 20,
+) -> dict:
+    """Microarchitecture bottleneck analysis (TMA) per symbol.
+
+    Always safe to call — returns {available: false, message: ...} when the
+    perf.data was not recorded with TMA events, so callers can handle both
+    cases without branching.
+
+    When available=true, each symbol entry includes:
+      cycles_pct:          share of total cycle samples (hotness rank)
+      frontend_bound_pct:  share of frontend-stall samples
+      backend_bound_pct:   share of backend-stall samples
+      instructions_pct:    share of instruction samples
+      branch_misses_pct:   share of branch-miss samples
+      fe_intensity:        frontend_bound_pct / cycles_pct
+                           >1.2 = more frontend-bound than profile average
+      be_intensity:        backend_bound_pct / cycles_pct
+                           >1.2 = more backend-bound than profile average
+      dominant:            "Frontend Bound" | "Backend Bound" |
+                           "Retiring (efficient)" | "Mixed"
+
+    To enable: re-record with linux-perf-d8.py --topdown
+    (targets Intel Skylake-SP / any arch_perfmon CPU)
+
+    Recommended workflow:
+      1. perf_hotspots       — rank hot symbols
+      2. perf_tma            — characterise bottleneck (works or tells you how)
+      3. perf_flamegraph     — understand call context
+      4. perf_annotate       — inspect hot instructions
+
+    symbol:  filter to symbols containing this substring
+    n:       max symbols to return, sorted by cycles_pct (default 20)
+    """
+    return perf_tools.tma(perf_data, symbol=symbol, n=n)
+
+
+@mcp.tool()
 def perf_diff(
     perf_before: str,
     perf_after: str,

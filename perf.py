@@ -514,3 +514,123 @@ def flamegraph(
             unique.append((pct, path))
 
     return "\n".join(f"{pct:6.2f}%  {' > '.join(path)}" for pct, path in unique)
+
+
+# ── perf tma ──────────────────────────────────────────────────────────────────
+
+# Events recorded by linux-perf-d8.py --topdown (Skylake-SP / arch_perfmon).
+# Order matters: cycles is the anchor for relative-intensity ratios.
+_TMA_EVENTS = [
+    "cycles",
+    "stalled-cycles-frontend",
+    "stalled-cycles-backend",
+    "instructions",
+    "branch-misses",
+]
+
+_TMA_RECORD_HINT = (
+    "Re-record with linux-perf-d8.py --topdown to enable "
+    "microarchitecture analysis."
+)
+
+
+def _probe_event(perf_data: str, event: str) -> dict[str, float] | None:
+    """Return {symbol: overhead_pct} for one event, or None if not recorded."""
+    args = [
+        "perf", "report", "--stdio", "--no-header",
+        "--no-children", f"--event={event}", "-i", perf_data,
+    ]
+    try:
+        text = _run(args)
+    except RuntimeError:
+        return None
+    result = {sym: pct for sym, (pct, _) in _parse_flat_report(text).items()}
+    return result if result else None
+
+
+def tma(
+    perf_data: str,
+    symbol: str | None = None,
+    n: int = 20,
+) -> dict:
+    """Per-symbol microarchitecture breakdown from stall event data.
+
+    Probes the perf.data for TMA events.  Always returns a dict with an
+    'available' key so callers can handle both cases gracefully:
+
+      available=False  →  only 'message' is present; explains how to re-record
+      available=True   →  'symbols' list with per-symbol TMA breakdown
+
+    Each symbol entry includes:
+      cycles_pct:           % of total cycle samples on this symbol
+      frontend_bound_pct:   % of frontend-stall samples on this symbol
+      backend_bound_pct:    % of backend-stall samples on this symbol
+      instructions_pct:     % of instruction samples on this symbol
+      branch_misses_pct:    % of branch-miss samples on this symbol
+      fe_intensity:         frontend_bound_pct / cycles_pct  (>1 = above avg)
+      be_intensity:         backend_bound_pct  / cycles_pct  (>1 = above avg)
+      dominant:             most likely bottleneck category
+
+    symbol:  filter to symbols containing this substring
+    n:       max symbols to return (sorted by cycles_pct, default 20)
+    """
+    event_data: dict[str, dict[str, float]] = {}
+    for ev in _TMA_EVENTS:
+        result = _probe_event(perf_data, ev)
+        if result is not None:
+            event_data[ev] = result
+
+    if "cycles" not in event_data or "stalled-cycles-frontend" not in event_data:
+        return {
+            "available": False,
+            "events_found": list(event_data.keys()),
+            "message": _TMA_RECORD_HINT,
+        }
+
+    cycles  = event_data["cycles"]
+    fe      = event_data.get("stalled-cycles-frontend", {})
+    be      = event_data.get("stalled-cycles-backend", {})
+    instrs  = event_data.get("instructions", {})
+    brmiss  = event_data.get("branch-misses", {})
+
+    syms = sorted(cycles, key=lambda s: cycles[s], reverse=True)
+    if symbol:
+        syms = [s for s in syms if symbol in s]
+    syms = syms[:n]
+
+    rows: list[dict] = []
+    for sym in syms:
+        cyc = cycles[sym]
+        fe_pct = fe.get(sym, 0.0)
+        be_pct = be.get(sym, 0.0)
+        fe_int = round(fe_pct / cyc, 2) if cyc else 0.0
+        be_int = round(be_pct / cyc, 2) if cyc else 0.0
+
+        # Classify: intensity > 1.2 means 20% more of that stall type than
+        # the profile average; < 0.7 means significantly below average.
+        if fe_int >= 1.2 and fe_int >= be_int:
+            dominant = "Frontend Bound"
+        elif be_int >= 1.2 and be_int > fe_int:
+            dominant = "Backend Bound"
+        elif fe_int < 0.7 and be_int < 0.7:
+            dominant = "Retiring (efficient)"
+        else:
+            dominant = "Mixed"
+
+        rows.append({
+            "symbol":              sym,
+            "cycles_pct":          cyc,
+            "frontend_bound_pct":  fe_pct,
+            "backend_bound_pct":   be_pct,
+            "instructions_pct":    instrs.get(sym, 0.0),
+            "branch_misses_pct":   brmiss.get(sym, 0.0),
+            "fe_intensity":        fe_int,
+            "be_intensity":        be_int,
+            "dominant":            dominant,
+        })
+
+    return {
+        "available": True,
+        "events_recorded": list(event_data.keys()),
+        "symbols": rows,
+    }
