@@ -38,7 +38,10 @@ def load() -> Config:
         _cache = Config()
         return _cache
     with CONFIG_PATH.open("rb") as f:
-        data = tomllib.load(f)
+        try:
+            data = tomllib.load(f)
+        except tomllib.TOMLDecodeError as e:
+            raise ValueError(f"Failed to parse config file {CONFIG_PATH}: {e}") from e
     _cache = Config(
         user=data.get("user"),
         poll_interval=int(data.get("poll_interval", 60)),
