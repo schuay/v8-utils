@@ -83,23 +83,37 @@ _RE_CRREV = re.compile(
     r"^(?:https?://)?(?:crrev(?:\.com)?/)?(?:c/)?(\d+)(?:/(\d+))?$", re.IGNORECASE
 )
 
+# Short-form Gerrit URL: https://chromium-review.googlesource.com/CHANGE_ID[/PATCHSET]
+# (missing the /c/PROJECT/+/ segment — needs resolution to canonical form)
+_RE_GERRIT_SHORT = re.compile(
+    r"^https?://chromium-review\.googlesource\.com/(\d+)(?:/(\d+))?/?$", re.IGNORECASE
+)
+
 
 def resolve_patch(patch: str) -> str:
     """Resolve a Gerrit patch shorthand to a full chromium-review URL.
 
     Accepts: bare change ID (12345), crrev/c/12345, crrev.com/c/12345,
-             or a full https://chromium-review.googlesource.com/... URL.
+             short Gerrit URL (https://chromium-review.googlesource.com/CHANGE_ID),
+             or a canonical https://chromium-review.googlesource.com/c/PROJECT/+/... URL.
     """
     patch = patch.strip()
-    m = _RE_CRREV.match(patch)
-    if m:
-        change_id, patchset = m.group(1), m.group(2)
+
+    def _resolve_change_id(change_id: str, patchset: str | None) -> str:
         r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
         text = r.text[r.text.find("{"):]  # strip Gerrit's XSSI prefix ")]}'"
         project = json.loads(text)["project"]
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
         return f"{url}/{patchset}" if patchset else url
+
+    m = _RE_CRREV.match(patch)
+    if m:
+        return _resolve_change_id(m.group(1), m.group(2))
+
+    m = _RE_GERRIT_SHORT.match(patch)
+    if m:
+        return _resolve_change_id(m.group(1), m.group(2))
 
     if patch.startswith("http"):
         return patch
