@@ -523,10 +523,11 @@ def flamegraph(
 _TMA_CORE_EVENTS = [
     "cycles",
     "topdown-total-slots",
-    "topdown-fetch-bubbles",     # Frontend Bound numerator
-    "topdown-slots-issued",      # Bad Speculation + Retiring numerator
-    "topdown-slots-retired",     # Retiring numerator
-    "topdown-recovery-bubbles",  # Bad Speculation numerator
+    "topdown-fetch-bubbles",   # Frontend Bound numerator
+    "topdown-slots-issued",    # Bad Speculation + Retiring numerator
+    "topdown-slots-retired",   # Retiring numerator
+    # topdown-recovery-bubbles omitted: requires system-wide (-a) in
+    # per-thread mode.  Bad Speculation approximated as issued - retired.
 ]
 _TMA_MEM_EVENT = "cycle_activity.stalls_l3_miss"  # Level 2: memory-bound
 
