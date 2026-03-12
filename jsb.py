@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, stdev
 
+from scipy.stats import ttest_ind
+
 import config as cfg_module
 
 
@@ -133,12 +135,19 @@ def _fmt_stat(vals: list[float]) -> str:
     return f"{m:.2f} ±{pct:.1f}%"
 
 
-def _fmt_delta(base: list[float], exp: list[float]) -> str:
+def _fmt_delta(base: list[float], exp: list[float]) -> tuple[str, str]:
+    """Return (delta_str, significance_marker). Welch's t-test, α=0.05."""
     bm, em = mean(base), mean(exp)
     if bm == 0:
-        return "N/A"
+        return "N/A", ""
     d = 100 * (em - bm) / bm
-    return f"{'+' if d > 0 else ''}{d:.1f}%"
+    delta = f"{'+' if d > 0 else ''}{d:.1f}%"
+    if len(base) >= 2 and len(exp) >= 2:
+        _, p = ttest_ind(base, exp, equal_var=False)
+        marker = "*" if p < 0.05 else ""
+    else:
+        marker = ""
+    return delta, marker
 
 
 def format_table(
@@ -158,7 +167,7 @@ def format_table(
     mcol = max(16, max((len(m) for m in ordered), default=10) + 2)
     vcol = max(18, max(len(l) for l in labels) + 2)
     has_delta = len(variants) == 2
-    dcol = 10
+    dcol = 12  # wide enough for "+18.0%  *"
 
     lines = [f"\n{bench}  ({suite}, {n} run{'s' if n > 1 else ''})\n"]
 
@@ -167,14 +176,23 @@ def format_table(
         hdr += f"{'delta':>{dcol}}"
     lines += [hdr, "-" * len(hdr)]
 
+    any_significant = False
     for metric in ordered:
         row = f"{metric:<{mcol}}"
         vals_list = [r.get(metric, []) for r in results]
         for vals in vals_list:
             row += f"{_fmt_stat(vals) if vals else 'N/A':>{vcol}}"
         if has_delta and vals_list[0] and vals_list[1]:
-            row += f"{_fmt_delta(vals_list[0], vals_list[1]):>{dcol}}"
+            delta, marker = _fmt_delta(vals_list[0], vals_list[1])
+            if marker:
+                any_significant = True
+            row += f"{delta + ' ' + marker:>{dcol}}"
         lines.append(row)
+
+    if has_delta and n >= 2:
+        lines.append("")
+        lines.append("* p < 0.05 (Welch's t-test)" if any_significant
+                     else "(no statistically significant differences)")
 
     return "\n".join(lines)
 
@@ -196,6 +214,17 @@ def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
                 "stdev_pct": round(100 * s / m, 2) if m else 0.0,
             }
         out.append(variant_summary)
+
+    # Attach p-values when there are exactly two variants
+    if len(results) == 2:
+        a, b = results
+        for metric in a.keys() & b.keys():
+            va, vb = a[metric], b[metric]
+            if len(va) >= 2 and len(vb) >= 2:
+                _, p = ttest_ind(va, vb, equal_var=False)
+                out[0][metric]["p_value"] = round(float(p), 4)
+                out[1][metric]["p_value"] = round(float(p), 4)
+
     return out
 
 
