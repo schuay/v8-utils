@@ -375,6 +375,10 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
         print(f"  pp daemon-stop && pp watch <job_url>")
 
 
+def _cmd_config(args: argparse.Namespace) -> None:
+    print(config.template())
+
+
 def _cmd_upgrade(args: argparse.Namespace) -> None:
     os.execvp("uv", ["uv", "tool", "install",
                      "git+https://github.com/schuay/v8-utils.git", "--reinstall",
@@ -467,6 +471,10 @@ def main() -> None:
     # chat-setup
     p = sub.add_parser("chat-setup", help="Authenticate with Google Chat for direct notifications")
     p.set_defaults(func=_cmd_chat_setup)
+
+    # config
+    p = sub.add_parser("config", help=f"Print a config template (write to {config.CONFIG_PATH})")
+    p.set_defaults(func=_cmd_config)
 
     # upgrade
     p = sub.add_parser("upgrade", help="Upgrade pp to the latest version")

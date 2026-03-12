@@ -231,11 +231,23 @@ def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
 # ---------- CLI ----------
 
 def main(argv: list[str] | None = None) -> None:
+    if argv is None:
+        argv = sys.argv[1:]
+
+    # `jsb config` is handled before the bench parser so that "config" is
+    # never mistaken for a benchmark name.
+    if argv and argv[0] == "config":
+        print(cfg_module.template())
+        return
+
     p = argparse.ArgumentParser(
         prog="jsb",
         description="JetStream bench runner for d8",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+subcommands:
+  config                                               # print config template
+
 examples:
   jsb regexp-octane                                    # single run, passthrough
   jsb regexp-octane -b release -n 5                   # 5 runs, aggregated
@@ -266,7 +278,7 @@ examples:
                    help="Profile via linux-perf-d8.py (single variant)")
     p.add_argument("--perf-args", default="",
                    help="Extra args forwarded verbatim to linux-perf-d8.py")
-    args = p.parse_args(argv)
+    args = p.parse_args(argv or None)
 
     cfg = cfg_module.load()
     v8_out   = cfg.v8_out

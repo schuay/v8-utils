@@ -2,53 +2,187 @@
 
 from __future__ import annotations
 
+import dataclasses
 import re
+import sys
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 CONFIG_PATH = Path("~/.config/v8-utils/config.toml").expanduser()
 
+_SECTION = "section"   # metadata key for section headings
+_HELP    = "help"      # metadata key for description
+_TOML    = "toml"      # metadata key for the literal TOML default string (overrides computed)
+_OPT     = "optional"  # metadata key: if True, render commented-out in template
+
+
+def _f(help: str, toml: str | None = None, section: str | None = None, optional: bool = False):
+    """Shorthand for field(metadata=...)."""
+    meta: dict = {_HELP: help, _OPT: optional}
+    if toml is not None:
+        meta[_TOML] = toml
+    if section is not None:
+        meta[_SECTION] = section
+    return field(default=dataclasses.MISSING, metadata=meta)  # type: ignore[call-overload]
+
 
 @dataclass
 class Config:
-    user: str | None = None
-    poll_interval: int = 60
+    # ── General ──────────────────────────────────────────────────────────────
+    user: str | None = field(
+        default=None,
+        metadata={
+            _SECTION:  "General",
+            _HELP:     "Your @chromium.org email — used as default for Pinpoint and other tools",
+            _OPT:      True,
+        },
+    )
+    poll_interval: int = field(
+        default=60,
+        metadata={
+            _HELP: "How often the watch daemon polls for job completion, in seconds",
+        },
+    )
 
-    # Google Chat — incoming webhook (simple, no auth required)
-    chat_webhook: str | None = None
+    # ── Google Chat ───────────────────────────────────────────────────────────
+    chat_webhook: str | None = field(
+        default=None,
+        metadata={
+            _SECTION: "Google Chat",
+            _HELP:    "Incoming webhook URL for job-completion notifications (simplest setup)",
+            _OPT:     True,
+        },
+    )
+    chat_service_account_email: str | None = field(
+        default=None,
+        metadata={
+            _HELP: "Service account email for the Chat app — enables direct DMs to your account",
+            _OPT:  True,
+        },
+    )
+    chat_app_space: str | None = field(
+        default=None,
+        metadata={
+            _HELP: "DM space name — written automatically by `pp chat-setup`",
+            _OPT:  True,
+        },
+    )
 
-    # Google Chat — service account impersonation (supports direct user DMs)
-    # chat_service_account_email: the service account associated with the Chat app
-    # chat_app_space: DM space name, written by `pp chat-setup`, e.g. spaces/AAA...
-    chat_service_account_email: str | None = None
-    chat_app_space: str | None = None
+    # ── jsb — JetStream bench runner ─────────────────────────────────────────
+    v8_out: Path = field(
+        default=Path("~/v8/out").expanduser(),
+        metadata={
+            _SECTION: "jsb — JetStream bench runner",
+            _HELP:    "Root of V8 build outputs; build dirs live here, e.g. out/release/d8",
+            _TOML:    "~/v8/out",
+        },
+    )
+    js2_dir: Path = field(
+        default=Path("~/JetStream2").expanduser(),
+        metadata={
+            _HELP: "Path to a JetStream2 checkout",
+            _TOML: "~/JetStream2",
+        },
+    )
+    js3_dir: Path = field(
+        default=Path("~/JetStream3").expanduser(),
+        metadata={
+            _HELP: "Path to a JetStream3 checkout",
+            _TOML: "~/JetStream3",
+        },
+    )
+    default_build: str = field(
+        default="release",
+        metadata={
+            _HELP: "Default build name used by jsb when -b is not specified",
+        },
+    )
+    perf_script: Path = field(
+        default=Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
+        metadata={
+            _HELP: "Path to linux-perf-d8.py, used by `jsb --perf`",
+            _TOML: "~/v8/tools/profiling/linux-perf-d8.py",
+        },
+    )
 
-    # jsb — JetStream bench runner
-    v8_out: Path = Path("~/v8/out").expanduser()
-    js2_dir: Path = Path("~/JetStream2").expanduser()
-    js3_dir: Path = Path("~/JetStream3").expanduser()
-    default_build: str = "release"
-    perf_script: Path = Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser()
+
+# ── Template generation ───────────────────────────────────────────────────────
+
+def template() -> str:
+    """Generate a fully-commented TOML template from the Config dataclass.
+
+    Derived from the live Config definition — always current, never drifts.
+    """
+    lines = [
+        "# v8-utils configuration",
+        f"# Write to: {CONFIG_PATH}",
+        "#",
+        "# Run `pp config` or `jsb config` to regenerate this template.",
+        "",
+    ]
+
+    for f in dataclasses.fields(Config):
+        meta = f.metadata
+
+        # Section heading
+        if section := meta.get(_SECTION):
+            bar = "─" * max(0, 60 - len(section))
+            lines += ["", f"# ── {section} {bar}"]
+
+        # Help comment
+        if help_text := meta.get(_HELP):
+            lines.append(f"# {help_text}")
+
+        # Compute the TOML value string
+        if (toml_str := meta.get(_TOML)) is not None:
+            val = f'"{toml_str}"'
+        elif f.default is None:
+            val = '"..."'
+        elif isinstance(f.default, str):
+            val = f'"{f.default}"'
+        elif isinstance(f.default, int):
+            val = str(f.default)
+        elif isinstance(f.default, Path):
+            val = f'"{f.default}"'
+        else:
+            val = repr(f.default)
+
+        line = f"{f.name} = {val}"
+        if meta.get(_OPT):
+            line = f"# {line}"
+        lines.append(line)
+
+    return "\n".join(lines)
 
 
+# ── Loading ───────────────────────────────────────────────────────────────────
 
 _cache: Config | None = None
+_hinted = False
 
 
 def load() -> Config:
     """Load and cache config from CONFIG_PATH. Missing file → defaults."""
-    global _cache
+    global _cache, _hinted
     if _cache is not None:
         return _cache
     if not CONFIG_PATH.exists():
         _cache = Config()
+        if not _hinted and sys.stderr.isatty():
+            _hinted = True
+            print(
+                f"hint: no config file found at {CONFIG_PATH}\n"
+                f"      run `pp config` or `jsb config` to see available options",
+                file=sys.stderr,
+            )
         return _cache
     with CONFIG_PATH.open("rb") as f:
         try:
             data = tomllib.load(f)
         except tomllib.TOMLDecodeError as e:
             raise ValueError(f"Failed to parse config file {CONFIG_PATH}: {e}") from e
+
     def _path(key: str, default: Path) -> Path:
         return Path(data[key]).expanduser() if key in data else default
 
@@ -92,5 +226,3 @@ def _set_value(key: str, value: str) -> None:
 
 def update_chat_app_space(space: str) -> None:
     _set_value("chat_app_space", space)
-
-
