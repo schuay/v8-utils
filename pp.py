@@ -267,6 +267,18 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
     combos = list(itertools.product(args.configuration, pairs, exp_patches, exp_flags_list))
     multi  = len(combos) > 1
 
+    # Resolve git hashes: if neither --base-git-hash nor --exp-git-hash was
+    # given, look up the most recent cached CI build per configuration.
+    auto_hashes: dict[str, str] = {}   # cfg -> commit hash
+    if args.base_git_hash is None and args.exp_git_hash is None:
+        for cfg in args.configuration:
+            try:
+                commit, build_num = pinpoint.fetch_latest_build_commit(cfg)
+                auto_hashes[cfg] = commit
+                print(f"{_DIM}git hash ({cfg}): {commit[:12]} (build #{build_num}){_RESET}")
+            except Exception as e:
+                print(f"{_YELLOW}warning: could not fetch latest build for {cfg}: {e}{_RESET}")
+
     urls = []
     for i, (cfg, (benchmark, story), exp_patch, exp_js_flags) in enumerate(combos):
         if multi and i:
@@ -277,13 +289,14 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             if exp_patch:    parts.append(exp_patch)
             if exp_js_flags: parts.append(f"flags:{exp_js_flags}")
             print(f"{_DIM}[{i+1}/{len(combos)}] {' / '.join(parts)}{_RESET}")
+        git_hash = auto_hashes.get(cfg) if cfg in auto_hashes else None
         result = pinpoint_create_job(
             benchmark=benchmark,
             configuration=cfg,
             story=story,
             story_tags=args.story_tags,
-            base_git_hash=args.base_git_hash,
-            exp_git_hash=args.exp_git_hash,
+            base_git_hash=args.base_git_hash or git_hash or "HEAD",
+            exp_git_hash=args.exp_git_hash or git_hash or "HEAD",
             base_patch=args.base_patch,
             exp_patch=exp_patch,
             base_js_flags=args.base_js_flags,
@@ -444,10 +457,10 @@ def main() -> None:
                    help="Story within the benchmark (only with -b)")
     p.add_argument("--story-tags", default=None, dest="story_tags",
                    help="Comma-separated story tags")
-    p.add_argument("--base-git-hash", default="HEAD", dest="base_git_hash",
-                   help="Base git hash (default: HEAD)")
-    p.add_argument("--exp-git-hash", default="HEAD", dest="exp_git_hash",
-                   help="Experiment git hash (default: HEAD)")
+    p.add_argument("--base-git-hash", default=None, dest="base_git_hash",
+                   help="Base git hash (default: latest cached CI build)")
+    p.add_argument("--exp-git-hash", default=None, dest="exp_git_hash",
+                   help="Experiment git hash (default: latest cached CI build)")
     p.add_argument("--base-patch", default=None, dest="base_patch",
                    help="Gerrit patch for base (change ID, crrev/c/N, or URL)")
     p.add_argument("--exp-patch", nargs="+", default=None, dest="exp_patch", metavar="PATCH",

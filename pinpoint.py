@@ -660,6 +660,36 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     return rows
 
 
+# ── Build lookup ──────────────────────────────────────────────────────────────
+
+def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
+    """Return (commit_hash, build_number) for the most recent successful CI build.
+
+    Uses Pinpoint's /api/builds/<configuration> endpoint, which resolves the
+    configuration to its compile builder and queries Buildbucket.
+
+    Raises ValueError if no builds are found or auth fails.
+    """
+    configuration = CONFIGURATION_ALIASES.get(configuration, configuration)
+    headers = get_auth_headers()
+    if not headers:
+        raise ValueError(_LOGIN_INSTRUCTIONS)
+    r = httpx.get(
+        f"{_PINPOINT_BASE}/api/builds/{configuration}",
+        headers=headers, follow_redirects=True, timeout=15,
+    )
+    r.raise_for_status()
+    builds = r.json().get("builds", [])
+    if not builds:
+        raise ValueError(f"No recent builds found for configuration {configuration!r}")
+    b = builds[0]
+    commit = b.get("input", {}).get("gitilesCommit", {}).get("id", "")
+    number  = b.get("number", 0)
+    if not commit:
+        raise ValueError(f"Build {b.get('id')} has no gitilesCommit")
+    return commit, number
+
+
 # ── Job creation ──────────────────────────────────────────────────────────────
 
 BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
