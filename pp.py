@@ -414,7 +414,8 @@ def main() -> None:
     p.add_argument("-u", "--user", default=None,
                    help="User email (default: current luci-auth user)")
     p.add_argument("-f", "--filter", default=None, metavar="KEY=VALUE",
-                   help='Client-side filter, e.g. "status=Completed", "comparison_mode=try"')
+                   help='Client-side filter, e.g. "status=Completed", "comparison_mode=try", '
+                        '"patch=1234567" (any Gerrit URL form accepted)')
     p.set_defaults(func=_cmd_list_jobs)
 
     # show-results

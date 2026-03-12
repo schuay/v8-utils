@@ -169,6 +169,33 @@ def _gerrit_change_id_from_url(url: str) -> str | None:
     return result[0] if result else None
 
 
+def _extract_change_id(patch: str) -> str | None:
+    """Extract a numeric Gerrit change ID from any supported patch form.
+
+    Handles: bare change ID, CHANGE/PATCHSET, crrev.com URLs, full Gerrit URLs.
+    Returns None if no numeric change ID can be found.
+    """
+    patch = patch.strip()
+    parsed = urlparse(patch)
+    if parsed.scheme in ("http", "https"):
+        host = parsed.hostname or ""
+        path = parsed.path
+        if "chromium-review.googlesource.com" in host:
+            plus_idx = path.find("/+/")
+            seg = path[plus_idx + 3:] if plus_idx != -1 else path
+            result = _parse_change_patchset(seg)
+            return result[0] if result else None
+        if "crrev.com" in host:
+            # crrev.com/c/CHANGE[/PATCHSET]
+            seg = re.sub(r"^/c/", "/", path)
+            result = _parse_change_patchset(seg)
+            return result[0] if result else None
+        return None
+    # No scheme: bare change ID or CHANGE/PATCHSET
+    result = _parse_change_patchset(patch.lstrip("/"))
+    return result[0] if result else None
+
+
 def fetch_gerrit_subject(patch_url: str) -> str | None:
     """Return the subject (first line of commit message) for a Gerrit change URL.
 
@@ -213,20 +240,29 @@ def _is_cq_job(job: dict) -> bool:
 def _job_matches_filter(job: dict, filter_str: str) -> bool:
     """Test a job against a "key=value" filter string (case-insensitive substring).
 
-    Supported keys: status, benchmark, configuration, comparison_mode.
+    Supported keys: status, benchmark, configuration, comparison_mode, patch.
+    For "patch", the value is normalised to a numeric change ID so any Gerrit
+    URL form (full URL, crrev, bare number) matches correctly.
     """
     if "=" not in filter_str:
         return True
     key, _, value = filter_str.partition("=")
-    key, value = key.strip().lower(), value.strip().lower()
+    key, value = key.strip().lower(), value.strip()
     args = job.get("arguments", {})
+
+    if key == "patch":
+        needle = _extract_change_id(value) or value.lower()
+        stored = args.get("experiment_patch") or args.get("base_patch") or ""
+        change_id = _extract_change_id(stored)
+        return needle == change_id if change_id else needle in stored.lower()
+
     field = {
         "status":          job.get("status", ""),
         "benchmark":       args.get("benchmark", ""),
         "configuration":   job.get("configuration", ""),
         "comparison_mode": job.get("comparison_mode", ""),
     }.get(key, "")
-    return value in field.lower()
+    return value.lower() in field.lower()
 
 
 def _fetch_jobs_for_email(email: str, count: int, extra_filter: str | None) -> list[dict]:
