@@ -16,6 +16,7 @@ dependencies = [
 [project.scripts]
 v8-mcp = "server:mcp.run"
 pp = "pp:main"
+jsb = "jsb:main"
 
 [build-system]
 requires = ["hatchling"]

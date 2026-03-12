@@ -24,6 +24,13 @@ class Config:
     chat_service_account_email: str | None = None
     chat_app_space: str | None = None
 
+    # jsb — JetStream bench runner
+    v8_out: Path = Path("~/v8/out").expanduser()
+    js2_dir: Path = Path("~/JetStream2").expanduser()
+    js3_dir: Path = Path("~/JetStream3").expanduser()
+    default_build: str = "release"
+    perf_script: Path = Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser()
+
 
 
 _cache: Config | None = None
@@ -42,12 +49,23 @@ def load() -> Config:
             data = tomllib.load(f)
         except tomllib.TOMLDecodeError as e:
             raise ValueError(f"Failed to parse config file {CONFIG_PATH}: {e}") from e
+    def _path(key: str, default: Path) -> Path:
+        return Path(data[key]).expanduser() if key in data else default
+
     _cache = Config(
         user=data.get("user"),
         poll_interval=int(data.get("poll_interval", 60)),
         chat_webhook=data.get("chat_webhook"),
         chat_service_account_email=data.get("chat_service_account_email"),
         chat_app_space=data.get("chat_app_space"),
+        v8_out=_path("v8_out", Path("~/v8/out").expanduser()),
+        js2_dir=_path("js2_dir", Path("~/JetStream2").expanduser()),
+        js3_dir=_path("js3_dir", Path("~/JetStream3").expanduser()),
+        default_build=data.get("default_build", "release"),
+        perf_script=_path(
+            "perf_script",
+            Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
+        ),
     )
     return _cache
 

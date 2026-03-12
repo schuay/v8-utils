@@ -4,6 +4,7 @@ from mcp.server.fastmcp import FastMCP
 
 import config
 import gerrit as gerrit_tools
+import jsb as jsb_module
 import perf as perf_tools
 import pinpoint
 
@@ -202,6 +203,60 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
+
+
+# ── jsb tools ────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def jsb_run_bench(
+    bench: str,
+    builds: list[str],
+    runs: int = 5,
+    suite: str = "js3",
+) -> dict:
+    """Run a JetStream2/3 story with one or more d8 builds and return scores.
+
+    bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
+    builds: list of "build[:flags]" specs under v8_out, e.g.:
+              ["release-main", "release-lto:--turbolev-future"]
+    runs:   number of runs per variant (default: 5)
+    suite:  "js2" or "js3" (default: "js3")
+
+    Returns per-variant scores with mean, stdev, stdev_pct, and a
+    formatted comparison table when multiple variants are given.
+
+    Configure paths in ~/.config/v8-utils/config.toml:
+      v8_out        = "~/v8/out"
+      js2_dir       = "~/JetStream2"
+      js3_dir       = "~/JetStream3"
+      default_build = "release"
+    """
+    cfg = config.load()
+    js3 = suite.lower() != "js2"
+    suite_dir = cfg.js3_dir if js3 else cfg.js2_dir
+    suite_label = "JS3" if js3 else "JS2"
+
+    variants = [jsb_module.Variant.parse(b) for b in builds]
+    for v in variants:
+        d8 = v.d8(cfg.v8_out)
+        if not d8.exists():
+            raise ValueError(f"d8 not found: {d8}")
+
+    results = [
+        jsb_module.run_variant(v, suite_dir, bench, runs, js3, cfg.v8_out)
+        for v in variants
+    ]
+
+    return {
+        "bench": bench,
+        "suite": suite_label,
+        "runs": runs,
+        "variants": [
+            {"label": v.label, "scores": s}
+            for v, s in zip(variants, jsb_module.summarise(results))
+        ],
+        "table": jsb_module.format_table(bench, suite_label, runs, variants, results),
+    }
 
 
 # ── gerrit tools ─────────────────────────────────────────────────────────────
