@@ -269,10 +269,12 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
 
     urls = []
     for i, (cfg, (benchmark, story), exp_patch, exp_js_flags) in enumerate(combos):
+        if multi and i:
+            print(f"{_DIM}{'─' * 60}{_RESET}")
         if multi:
             parts = [cfg, benchmark]
-            if story:       parts.append(story)
-            if exp_patch:   parts.append(exp_patch)
+            if story:        parts.append(story)
+            if exp_patch:    parts.append(exp_patch)
             if exp_js_flags: parts.append(f"flags:{exp_js_flags}")
             print(f"{_DIM}[{i+1}/{len(combos)}] {' / '.join(parts)}{_RESET}")
         result = pinpoint_create_job(
@@ -290,12 +292,11 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             bug_id=args.bug_id,
         )
         job_url = result.get("url")
-        if multi:
-            print(f"  {_GREEN}✓{_RESET} {_CYAN}{job_url or '?'}{_RESET}")
+        if job_url:
+            _print_job(pinpoint_show_job(job_url))
+            urls.append(job_url)
         else:
             _out(result)
-        if job_url:
-            urls.append(job_url)
 
     cfg = config.load()
     should_watch = args.watch or (
