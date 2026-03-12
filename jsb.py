@@ -95,15 +95,22 @@ def run_variant(
     n: int,
     js3: bool,
     v8_out: Path,
+    progress: bool = False,
 ) -> dict[str, list[float]]:
     """Run one variant N times. Returns metric → list of values."""
     d8 = variant.d8(v8_out)
     cmd = variant.cmd(d8, suite_dir, bench)
     all_scores: dict[str, list[float]] = {}
+    if progress:
+        print(f"{variant.label}: ", end="", flush=True, file=sys.stderr)
     for _ in range(n):
         scores = _run_captured(cmd, suite_dir, js3)
         for metric, val in scores.items():
             all_scores.setdefault(metric, []).append(val)
+        if progress:
+            print(".", end="", flush=True, file=sys.stderr)
+    if progress:
+        print(file=sys.stderr)
     return all_scores
 
 
@@ -280,7 +287,7 @@ examples:
 
     # --- Multi-run / multi-variant: capture, parse, print table ---
     results = [
-        run_variant(v, suite_dir, args.bench, args.runs, js3, v8_out)
+        run_variant(v, suite_dir, args.bench, args.runs, js3, v8_out, progress=True)
         for v in variants
     ]
     print(format_table(args.bench, suite, args.runs, variants, results))
