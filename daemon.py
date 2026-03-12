@@ -111,7 +111,8 @@ def _message_text(job: dict, results: list[dict] | None = None) -> str:
     icon    = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
     details   = _format_job_details_for_chat(job)
     exception = job.get("exception")
-    text      = f"{icon} *{status}*: {name}\n{url}"
+    show_cmd  = f"`pp show-results {job_id}`"
+    text      = f"{icon} *{status}*: {name}\n{url}\n{show_cmd}"
     if details:
         text += f"\n{details}"
     if exception:
