@@ -86,6 +86,11 @@ def parse_js3(output: str) -> dict[str, float]:
 
 def _run_captured(cmd: list[str], cwd: Path, js3: bool) -> dict[str, float]:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if result.returncode != 0:
+        output = (result.stdout + result.stderr).strip()
+        raise RuntimeError(
+            f"d8 exited with code {result.returncode}\n{output}"
+        )
     out = result.stdout + result.stderr
     return parse_js3(out) if js3 else parse_js2(out)
 
@@ -327,10 +332,14 @@ examples:
         return
 
     # --- Multi-run / multi-variant: capture, parse, print table ---
-    results = [
-        run_variant(v, suite_dir, args.bench, args.runs, js3, v8_out, progress=True)
-        for v in variants
-    ]
+    try:
+        results = [
+            run_variant(v, suite_dir, args.bench, args.runs, js3, v8_out, progress=True)
+            for v in variants
+        ]
+    except RuntimeError as e:
+        print(file=sys.stderr)  # end progress line if interrupted mid-run
+        sys.exit(f"error: {e}")
     print(format_table(args.bench, suite, args.runs, variants, results))
 
 
