@@ -159,17 +159,25 @@ def callers(perf_data: str, symbol: str, n: int = 20) -> str:
 
 # ── perf annotate ─────────────────────────────────────────────────────────────
 
-# Instruction line: optional leading percentage, colon, hex address, colon, asm
-# Examples:
-#   "  12.34  :   1234ab:   mov    (%rax),%rbx"
-#   "         :   1234ab:   push   %rbp"          <- 0%, blank pct field
+# Instruction line: "  12.34 :   80ab:   mov    (%rax),%rbx"
+#   pct field is a decimal or blank (blank = 0 samples).
+#   addr is 1+ hex chars (short addresses like "80" are common in JIT'd code).
 _ANNOT_INSTR_RE = re.compile(
-    r"^(?P<pct>[ \d]*(?:\.\d+)?)?\s*:\s+(?P<addr>[0-9a-f]{4,}):\s+(?P<asm>.+)$"
+    r"^\s*(?P<pct>\d+\.\d+)?\s*:\s+(?P<addr>[0-9a-f]+):\s+(?P<asm>.+)$"
+)
+
+# Lines that look like instructions but didn't match — used to detect
+# unexpected format changes without silently swallowing hot samples.
+_ANNOT_LOOKALIKE_RE = re.compile(
+    r"^\s*[\d.]*\s*:\s+\S+:\s+\S"
 )
 
 
-def _parse_annotate(text: str) -> list[dict]:
+def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
     """Parse `perf annotate --stdio` output into a numbered list of line dicts.
+
+    Returns (lines, warnings).  warnings is non-empty when suspicious
+    unmatched lines were found, which likely indicates a format mismatch.
 
     Each dict has:
       lineno: 1-based line number (stable reference for read_around)
@@ -180,11 +188,17 @@ def _parse_annotate(text: str) -> list[dict]:
       raw:    original line text (used for faithful reproduction)
     """
     parsed: list[dict] = []
+    suspicious: list[str] = []
+
     for lineno, raw in enumerate(text.splitlines(), start=1):
+        # Skip the "Percent |" header and "---" separator lines.
+        if raw.startswith("Percent |") or raw.startswith("---"):
+            continue
+
         m = _ANNOT_INSTR_RE.match(raw)
         if m:
             pct_str = m.group("pct") or ""
-            pct = float(pct_str.strip()) if pct_str.strip() else 0.0
+            pct = float(pct_str) if pct_str else 0.0
             parsed.append({
                 "lineno": lineno,
                 "kind":   "instr",
@@ -200,12 +214,31 @@ def _parse_annotate(text: str) -> list[dict]:
                 "pct":    0.0,
                 "raw":    raw,
             })
-    return parsed
+            if _ANNOT_LOOKALIKE_RE.match(raw):
+                suspicious.append(raw.rstrip())
+
+    warnings: list[str] = []
+    n_instr = sum(1 for l in parsed if l["kind"] == "instr")
+
+    if suspicious:
+        examples = "; ".join(f'"{s[:60]}"' for s in suspicious[:3])
+        warnings.append(
+            f"{len(suspicious)} line(s) looked like instructions but failed to "
+            f"parse — possible perf output format change. Examples: {examples}"
+        )
+
+    if n_instr == 0 and len(parsed) > 5:
+        warnings.append(
+            f"No instruction lines found in {len(parsed)}-line annotation output. "
+            "The perf annotate format may have changed or the wrong symbol/DSO was specified."
+        )
+
+    return parsed, warnings
 
 
 def _get_annotate_lines(
     perf_data: str, symbol: str, dso: str | None
-) -> list[dict]:
+) -> tuple[list[dict], list[str]]:
     args = ["perf", "annotate", "--stdio",
             "-s", symbol, "-i", perf_data]
     if dso:
@@ -237,7 +270,7 @@ def annotate(
     min_pct:  minimum sample % to consider an instruction "hot" (default 0.5)
     context:  lines of context around each hot cluster (default 8)
     """
-    lines = _get_annotate_lines(perf_data, symbol, dso)
+    lines, parse_warnings = _get_annotate_lines(perf_data, symbol, dso)
     total = len(lines)
 
     # Top 20 hottest instructions
@@ -275,7 +308,7 @@ def annotate(
 
     hot_blocks.sort(key=lambda b: b["peak_pct"], reverse=True)
 
-    return {
+    result: dict = {
         "symbol":            symbol,
         "total_lines":       total,
         "min_pct_threshold": min_pct,
@@ -290,6 +323,9 @@ def annotate(
         ],
         "hot_blocks": hot_blocks,
     }
+    if parse_warnings:
+        result["parse_warnings"] = parse_warnings
+    return result
 
 
 def annotate_read_around(
@@ -307,14 +343,18 @@ def annotate_read_around(
 
     Each output line is prefixed with its line number for further navigation.
     """
-    lines = _get_annotate_lines(perf_data, symbol, dso)
+    lines, parse_warnings = _get_annotate_lines(perf_data, symbol, dso)
     total = len(lines)
     center = line - 1  # convert to 0-based
     if not (0 <= center < total):
         raise ValueError(f"Line {line} out of range (1–{total})")
     lo = max(0, center - context)
     hi = min(total - 1, center + context)
-    return "\n".join(f"{l['lineno']:5d}  {l['raw']}" for l in lines[lo : hi + 1])
+    output = "\n".join(f"{l['lineno']:5d}  {l['raw']}" for l in lines[lo : hi + 1])
+    if parse_warnings:
+        header = "\n".join(f"[parse warning] {w}" for w in parse_warnings)
+        output = header + "\n" + output
+    return output
 
 
 # ── perf diff ─────────────────────────────────────────────────────────────────
