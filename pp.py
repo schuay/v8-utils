@@ -130,6 +130,7 @@ def _print_job(j: dict) -> None:
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
     fields = [
+        ("user",          j.get("user")),
         ("configuration", j.get("configuration")),
         ("benchmark",     j.get("benchmark")),
         ("story",         j.get("story")),
