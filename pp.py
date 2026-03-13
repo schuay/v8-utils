@@ -23,7 +23,9 @@ import daemon
 import pinpoint
 
 from tools import (
-    pinpoint_create_job,
+    chat_notify_watching,
+    create_pinpoint_jobs,
+    get_gerrit_issue_url,
     pinpoint_list_jobs,
     pinpoint_show_job,
     pinpoint_show_results,
@@ -215,130 +217,71 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
             _out(result)
 
 
-def _get_gerrit_issue_url() -> str | None:
-    """Read the Gerrit CL URL for the current git branch from git config.
-
-    Returns a full URL including patchset, e.g.:
-      https://chromium-review.googlesource.com/7650974/1
-    Returns None if not inside a git repo or the branch has no associated CL.
-    """
-    import subprocess as _sp
-    def _git(*args: str) -> str:
-        r = _sp.run(["git"] + list(args), capture_output=True, text=True)
-        return r.stdout.strip() if r.returncode == 0 else ""
-
-    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
-    if not branch or branch == "HEAD":
-        return None
-    issue   = _git("config", f"branch.{branch}.gerritissue")
-    if not issue:
-        return None
-    server   = _git("config", f"branch.{branch}.gerritserver") \
-               or "https://chromium-review.googlesource.com"
-    patchset = _git("config", f"branch.{branch}.gerritpatchset")
-    url = f"{server}/{issue}"
-    return f"{url}/{patchset}" if patchset else url
-
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
-    import itertools
-
-    # Resolve benchmark/story axes from template or explicit --benchmark
+    # Resolve benchmark list from template or explicit --benchmark
     if args.benchmark:
-        pairs = [(args.benchmark, args.story)]
+        benchmarks = [args.benchmark]
     else:
-        pairs = []
         for t in args.template:
             if t not in pinpoint.BENCHMARK_ALIASES:
                 known = ", ".join(pinpoint.BENCHMARK_ALIASES)
                 raise ValueError(f"Unknown template {t!r}. Known: {known}")
-            pairs.append(pinpoint.BENCHMARK_ALIASES[t])
+        benchmarks = list(args.template)
 
-    # Resolve exp-patch: use explicit value, or auto-detect from current branch
+    # Resolve exp-patch: use explicit value, or let create_pinpoint_jobs auto-detect
     if args.exp_patch:
         exp_patches = args.exp_patch
     else:
-        detected = _get_gerrit_issue_url()
+        detected = get_gerrit_issue_url()
         if detected:
             print(f"{_DIM}exp-patch: {detected} (from current branch){_RESET}")
         exp_patches = [detected]  # None is valid (job with no patch)
 
-    exp_flags_list = args.exp_js_flags or [None]
-    combos = list(itertools.product(args.configuration, pairs, exp_patches, exp_flags_list))
-    multi  = len(combos) > 1
+    def on_auto_hash(cfg, commit, build_num_or_err):
+        if commit:
+            print(f"{_DIM}git hash ({cfg}): {commit[:12]} (build #{build_num_or_err}){_RESET}")
+        else:
+            print(f"{_YELLOW}warning: could not fetch latest build for {cfg}: {build_num_or_err}{_RESET}")
 
-    # Resolve git hashes: if neither --base-git-hash nor --exp-git-hash was
-    # given, look up the most recent cached CI build per configuration.
-    auto_hashes: dict[str, str] = {}   # cfg -> commit hash
-    if args.base_git_hash is None and args.exp_git_hash is None:
-        for cfg in args.configuration:
-            try:
-                commit, build_num = pinpoint.fetch_latest_build_commit(cfg)
-                auto_hashes[cfg] = commit
-                print(f"{_DIM}git hash ({cfg}): {commit[:12]} (build #{build_num}){_RESET}")
-            except Exception as e:
-                print(f"{_YELLOW}warning: could not fetch latest build for {cfg}: {e}{_RESET}")
-
-    urls = []
-    for i, (cfg, (benchmark, story), exp_patch, exp_js_flags) in enumerate(combos):
-        if multi and i:
+    def on_job_created(index, total, combo, job):
+        cfg_name, bench, story, exp_patch, exp_js_flags = combo
+        if total > 1 and index:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        if multi:
-            parts = [cfg, benchmark]
+        if total > 1:
+            parts = [cfg_name, bench]
             if story:        parts.append(story)
             if exp_patch:    parts.append(exp_patch)
             if exp_js_flags: parts.append(f"flags:{exp_js_flags}")
-            print(f"{_DIM}[{i+1}/{len(combos)}] {' / '.join(parts)}{_RESET}")
-        git_hash = auto_hashes.get(cfg) if cfg in auto_hashes else None
-        result = pinpoint_create_job(
-            benchmark=benchmark,
-            configuration=cfg,
-            story=story,
-            story_tags=args.story_tags,
-            base_git_hash=args.base_git_hash or git_hash or "HEAD",
-            exp_git_hash=args.exp_git_hash or git_hash or "HEAD",
-            base_patch=args.base_patch,
-            exp_patch=exp_patch,
-            base_js_flags=args.base_js_flags,
-            exp_js_flags=exp_js_flags,
-            repeat=args.repeat,
-            bug_id=args.bug_id,
-        )
-        job_url = result.get("url")
-        if job_url:
-            _print_job(pinpoint_show_job(job_url))
-            urls.append(job_url)
+            print(f"{_DIM}[{index+1}/{total}] {' / '.join(parts)}{_RESET}")
+        if job.get("job_id"):
+            _print_job(job)
         else:
-            _out(result)
+            _out(job)
 
-    cfg = config.load()
-    should_watch = args.watch or (
-        args.watch is None and (cfg.chat_webhook or cfg.chat_app_space)
+    def on_watching(url):
+        print(f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion.")
+
+    create_pinpoint_jobs(
+        benchmarks=benchmarks,
+        configurations=args.configuration,
+        story=args.story,
+        story_tags=args.story_tags,
+        base_git_hash=args.base_git_hash,
+        exp_git_hash=args.exp_git_hash,
+        base_patch=args.base_patch,
+        exp_patches=exp_patches,
+        base_js_flags=args.base_js_flags,
+        exp_js_flags_list=args.exp_js_flags or [None],
+        repeat=args.repeat,
+        bug_id=args.bug_id,
+        on_auto_hash=on_auto_hash,
+        on_job_created=on_job_created,
+        on_watching=on_watching,
+        watch=args.watch,
     )
-    if should_watch and urls:
-        if not daemon.is_running():
-            daemon.start_background()
-        for url in urls:
-            daemon.send_job(url)
-            _chat_notify_watching(url)
-            print(f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion.")
 
 
-
-def _chat_notify_watching(job_url: str) -> None:
-    cfg = config.load()
-    if cfg.chat_app_space and cfg.chat_service_account_email:
-        try:
-            chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
-                        f"👀 Watching: {job_url}")
-        except Exception:
-            pass
-    elif cfg.chat_webhook:
-        try:
-            import httpx
-            httpx.post(cfg.chat_webhook, json={"text": f"👀 Watching: {job_url}"}, timeout=10)
-        except Exception:
-            pass
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
@@ -346,7 +289,7 @@ def _cmd_watch(args: argparse.Namespace) -> None:
         daemon.start_background()
     for job_url in args.job_urls:
         daemon.send_job(job_url)
-        _chat_notify_watching(job_url)
+        chat_notify_watching(job_url)
         job_id = job_url.split("/")[-1]
         print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 

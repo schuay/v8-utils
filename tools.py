@@ -3,6 +3,7 @@
 from mcp.server.fastmcp import FastMCP
 
 import config
+import daemon
 import gerrit as gerrit_tools
 import jsb as jsb_module
 import perf as perf_tools
@@ -154,14 +155,176 @@ def pinpoint_show_results(
     return "\n".join(lines)
 
 
-@mcp.tool()
-def pinpoint_create_job(
-    benchmark: str,
-    configuration: str,
+def get_gerrit_issue_url() -> str | None:
+    """Read the Gerrit CL URL for the current git branch from git config.
+
+    Returns a full URL including patchset, e.g.:
+      https://chromium-review.googlesource.com/7650974/1
+    Returns None if not inside a git repo or the branch has no associated CL.
+    """
+    import subprocess as _sp
+    def _git(*args: str) -> str:
+        r = _sp.run(["git"] + list(args), capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if not branch or branch == "HEAD":
+        return None
+    issue = _git("config", f"branch.{branch}.gerritissue")
+    if not issue:
+        return None
+    server = _git("config", f"branch.{branch}.gerritserver") \
+             or "https://chromium-review.googlesource.com"
+    patchset = _git("config", f"branch.{branch}.gerritpatchset")
+    url = f"{server}/{issue}"
+    return f"{url}/{patchset}" if patchset else url
+
+
+def chat_notify_watching(job_url: str) -> None:
+    """Send a 'Watching' notification to Google Chat if configured."""
+    cfg = config.load()
+    if cfg.chat_app_space and cfg.chat_service_account_email:
+        try:
+            import chat
+            chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
+                        f"👀 Watching: {job_url}")
+        except Exception:
+            pass
+    elif cfg.chat_webhook:
+        try:
+            import httpx
+            httpx.post(cfg.chat_webhook, json={"text": f"👀 Watching: {job_url}"}, timeout=10)
+        except Exception:
+            pass
+
+
+def _job_url(job: dict) -> str | None:
+    """Extract the Pinpoint job URL from a job detail dict."""
+    jid = job.get("job_id")
+    if not jid:
+        return None
+    return job.get("url") or f"https://pinpoint-dot-chromeperf.appspot.com/job/{jid}"
+
+
+def create_pinpoint_jobs(
+    benchmarks: list[str],
+    configurations: list[str],
+    *,
     story: str | None = None,
     story_tags: str | None = None,
-    base_git_hash: str = "HEAD",
-    exp_git_hash: str = "HEAD",
+    base_git_hash: str | None = None,
+    exp_git_hash: str | None = None,
+    base_patch: str | None = None,
+    exp_patches: list[str | None] | None = None,
+    base_js_flags: str | None = None,
+    exp_js_flags_list: list[str | None] | None = None,
+    repeat: int = 100,
+    bug_id: int | None = None,
+    on_auto_hash: callable = None,
+    on_job_created: callable = None,
+    on_watching: callable = None,
+    watch: bool | None = None,
+) -> list[dict]:
+    """Shared core for creating Pinpoint A/B jobs.
+
+    Creates one job per combination of configuration × benchmark × exp_patch × exp_js_flags.
+
+    Callbacks (optional, used by CLI for terminal output):
+      on_auto_hash(cfg, commit, build_num):  called when a git hash is auto-detected
+      on_job_created(index, total, combo, job): called after each job is created
+      on_watching(url):  called for each job URL being watched
+
+    watch:  True = always watch, None = auto (when chat is configured), False = never
+
+    Returns a list of job detail dicts.
+    """
+    import itertools
+
+    # Resolve benchmark aliases to (benchmark, story) pairs
+    pairs = []
+    for b in benchmarks:
+        if b in pinpoint.BENCHMARK_ALIASES:
+            pairs.append(pinpoint.BENCHMARK_ALIASES[b])
+        else:
+            pairs.append((b, story))
+
+    # Auto-detect exp-patch from current git branch when not provided
+    if exp_patches is None:
+        detected = get_gerrit_issue_url()
+        exp_patches = [detected]  # None is valid (job with no patch)
+
+    if exp_js_flags_list is None:
+        exp_js_flags_list = [None]
+
+    # Auto-detect latest cached CI build when no git hash is specified
+    auto_hashes: dict[str, str] = {}
+    if base_git_hash is None and exp_git_hash is None:
+        for cfg in configurations:
+            try:
+                commit, build_num = pinpoint.fetch_latest_build_commit(cfg)
+                auto_hashes[cfg] = commit
+                if on_auto_hash:
+                    on_auto_hash(cfg, commit, build_num)
+            except Exception as e:
+                if on_auto_hash:
+                    on_auto_hash(cfg, None, e)
+
+    combos = list(itertools.product(configurations, pairs, exp_patches, exp_js_flags_list))
+    jobs = []
+    for i, (cfg, (bench, default_story), exp_patch, exp_js_flags) in enumerate(combos):
+        git_hash = auto_hashes.get(cfg)
+        result = pinpoint.create_job(
+            benchmark=bench,
+            configuration=cfg,
+            story=story or default_story,
+            story_tags=story_tags,
+            base_git_hash=base_git_hash or git_hash or "HEAD",
+            exp_git_hash=exp_git_hash or git_hash or "HEAD",
+            base_patch=base_patch,
+            exp_patch=exp_patch,
+            base_js_flags=base_js_flags,
+            exp_js_flags=exp_js_flags,
+            repeat=repeat,
+            bug_id=bug_id,
+        )
+        job_url = result.get("url")
+        if job_url:
+            job_detail = pinpoint_show_job(job_url)
+            jobs.append(job_detail)
+        else:
+            jobs.append(result)
+        if on_job_created:
+            on_job_created(i, len(combos),
+                           (cfg, bench, default_story, exp_patch, exp_js_flags),
+                           jobs[-1])
+
+    # Watch jobs
+    cfg_obj = config.load()
+    should_watch = watch or (
+        watch is None and (cfg_obj.chat_webhook or cfg_obj.chat_app_space)
+    )
+    if should_watch:
+        urls = [u for j in jobs if (u := _job_url(j))]
+        if urls:
+            if not daemon.is_running():
+                daemon.start_background()
+            for url in urls:
+                daemon.send_job(url)
+                chat_notify_watching(url)
+                if on_watching:
+                    on_watching(url)
+
+    return jobs
+
+
+@mcp.tool()
+def pinpoint_create_job(
+    benchmark: str = "js3 sp3",
+    configuration: str = "m1",
+    story: str | None = None,
+    story_tags: str | None = None,
+    base_git_hash: str | None = None,
+    exp_git_hash: str | None = None,
     base_patch: str | None = None,
     exp_patch: str | None = None,
     base_js_flags: str | None = None,
@@ -171,17 +334,22 @@ def pinpoint_create_job(
 ) -> dict:
     """Create a new Pinpoint A/B try job. Requires luci-auth login.
 
-    benchmark:      benchmark name or alias:
+    Creates jobs for each combination of benchmark × configuration.
+    When chat integration is configured, created jobs are automatically
+    watched and a notification is sent on completion.
+
+    benchmark:      space-separated benchmark names or aliases (default: "js3 sp3"):
                       "js3"  → jetstream-main.crossbench (story: JetStream)
                       "js2"  → jetstream2.crossbench     (story: JetStream2)
                       "sp3"  → speedometer3.crossbench   (story: Speedometer3)
-    configuration:  bot config or alias:
+    configuration:  space-separated bot config(s) or alias(es) (default: "m1"):
                       "linux" → linux-r350-perf
-                      "macm4" → mac-m4-mini-perf
+                      "m1"    → mac-m1_mini_2020-perf
+                      "m4"    → mac-m4-mini-perf
     story:          story within the benchmark (overrides alias default)
     story_tags:     comma-separated story tags to select stories
-    base_git_hash:  git hash for the base build (default: HEAD)
-    exp_git_hash:   git hash for the experiment build (default: HEAD)
+    base_git_hash:  git hash for the base build (default: latest cached CI build)
+    exp_git_hash:   git hash for the experiment build (default: latest cached CI build)
     base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
     exp_patch:      Gerrit patch for experiment — same formats
     base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
@@ -189,20 +357,21 @@ def pinpoint_create_job(
     repeat:         number of bot runs per variant (default: 100)
     bug_id:         buganizer issue ID to associate with the job
     """
-    return pinpoint.create_job(
-        benchmark=benchmark,
-        configuration=configuration,
+    jobs = create_pinpoint_jobs(
+        benchmarks=benchmark.split(),
+        configurations=configuration.split(),
         story=story,
         story_tags=story_tags,
         base_git_hash=base_git_hash,
         exp_git_hash=exp_git_hash,
         base_patch=base_patch,
-        exp_patch=exp_patch,
+        exp_patches=[exp_patch],
         base_js_flags=base_js_flags,
-        exp_js_flags=exp_js_flags,
+        exp_js_flags_list=[exp_js_flags],
         repeat=repeat,
         bug_id=bug_id,
     )
+    return {"jobs": jobs} if len(jobs) != 1 else jobs[0]
 
 
 # ── jsb tools ────────────────────────────────────────────────────────────────
