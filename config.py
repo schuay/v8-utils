@@ -11,13 +11,18 @@ from pathlib import Path
 
 CONFIG_PATH = Path("~/.config/v8-utils/config.toml").expanduser()
 
-_SECTION = "section"   # metadata key for section headings
-_HELP    = "help"      # metadata key for description
-_TOML    = "toml"      # metadata key for the literal TOML default string (overrides computed)
-_OPT     = "optional"  # metadata key: if True, render commented-out in template
+_SECTION = "section"  # metadata key for section headings
+_HELP = "help"  # metadata key for description
+_TOML = "toml"  # metadata key for the literal TOML default string (overrides computed)
+_OPT = "optional"  # metadata key: if True, render commented-out in template
 
 
-def _f(help: str, toml: str | None = None, section: str | None = None, optional: bool = False):
+def _f(
+    help: str,
+    toml: str | None = None,
+    section: str | None = None,
+    optional: bool = False,
+):
     """Shorthand for field(metadata=...)."""
     meta: dict = {_HELP: help, _OPT: optional}
     if toml is not None:
@@ -33,9 +38,9 @@ class Config:
     user: str | None = field(
         default=None,
         metadata={
-            _SECTION:  "General",
-            _HELP:     "Your @chromium.org email — used as default for Pinpoint and other tools",
-            _OPT:      True,
+            _SECTION: "General",
+            _HELP: "Your @chromium.org email — used as default for Pinpoint and other tools",
+            _OPT: True,
         },
     )
     poll_interval: int = field(
@@ -50,22 +55,22 @@ class Config:
         default=None,
         metadata={
             _SECTION: "Google Chat",
-            _HELP:    "Incoming webhook URL for job-completion notifications (simplest setup)",
-            _OPT:     True,
+            _HELP: "Incoming webhook URL for job-completion notifications (simplest setup)",
+            _OPT: True,
         },
     )
     chat_service_account_email: str | None = field(
         default=None,
         metadata={
             _HELP: "Service account email for the Chat app — enables direct DMs to your account",
-            _OPT:  True,
+            _OPT: True,
         },
     )
     chat_app_space: str | None = field(
         default=None,
         metadata={
             _HELP: "DM space name — written automatically by `pp chat-setup`",
-            _OPT:  True,
+            _OPT: True,
         },
     )
 
@@ -74,8 +79,8 @@ class Config:
         default=Path("~/v8/out").expanduser(),
         metadata={
             _SECTION: "jsb — JetStream bench runner",
-            _HELP:    "Root of V8 build outputs; build dirs live here, e.g. out/release/d8",
-            _TOML:    "~/v8/out",
+            _HELP: "Root of V8 build outputs; build dirs live here, e.g. out/release/d8",
+            _TOML: "~/v8/out",
         },
     )
     js2_dir: Path = field(
@@ -106,8 +111,26 @@ class Config:
         },
     )
 
+    # ── repos — related source repos for cross-reference ──────────────────────
+    jsc_dir: Path | None = field(
+        default=None,
+        metadata={
+            _SECTION: "repos — related source repos for cross-reference",
+            _HELP: "Path to JavaScriptCore source (WebKit/Source/JavaScriptCore)",
+            _OPT: True,
+        },
+    )
+    spidermonkey_dir: Path | None = field(
+        default=None,
+        metadata={
+            _HELP: "Path to SpiderMonkey source (gecko-dev/js/src)",
+            _OPT: True,
+        },
+    )
+
 
 # ── Template generation ───────────────────────────────────────────────────────
+
 
 def template() -> str:
     """Generate a fully-commented TOML template from the Config dataclass.
@@ -200,6 +223,10 @@ def load() -> Config:
             "perf_script",
             Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
         ),
+        jsc_dir=Path(data["jsc_dir"]).expanduser() if "jsc_dir" in data else None,
+        spidermonkey_dir=Path(data["spidermonkey_dir"]).expanduser()
+        if "spidermonkey_dir" in data
+        else None,
     )
     return _cache
 

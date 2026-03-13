@@ -1,5 +1,7 @@
 """MCP tool definitions for v8-utils."""
 
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 
 import config
@@ -18,26 +20,26 @@ def _fetch_job_detail(job_url: str) -> dict:
     data = pinpoint.fetch_job(job_id)
     args = data.get("arguments", {})
     result = {
-        "job_id":                data.get("job_id"),
-        "url":                   f"https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}",
-        "name":                  data.get("name"),
-        "status":                data.get("status"),
-        "user":                  data.get("user"),
-        "created":               data.get("created"),
-        "updated":               data.get("updated"),
-        "comparison_mode":       data.get("comparison_mode"),
-        "configuration":         data.get("configuration"),
-        "benchmark":             args.get("benchmark"),
-        "story":                 args.get("story"),
-        "base_git_hash":         args.get("base_git_hash"),
-        "end_git_hash":          args.get("end_git_hash"),
-        "experiment_patch":      args.get("experiment_patch"),
-        "base_extra_args":       args.get("base_extra_args"),
+        "job_id": data.get("job_id"),
+        "url": f"https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}",
+        "name": data.get("name"),
+        "status": data.get("status"),
+        "user": data.get("user"),
+        "created": data.get("created"),
+        "updated": data.get("updated"),
+        "comparison_mode": data.get("comparison_mode"),
+        "configuration": data.get("configuration"),
+        "benchmark": args.get("benchmark"),
+        "story": args.get("story"),
+        "base_git_hash": args.get("base_git_hash"),
+        "end_git_hash": args.get("end_git_hash"),
+        "experiment_patch": args.get("experiment_patch"),
+        "base_extra_args": args.get("base_extra_args"),
         "experiment_extra_args": args.get("experiment_extra_args"),
-        "difference_count":      data.get("difference_count"),
-        "exception":             data.get("exception"),
-        "bug_id":                data.get("bug_id"),
-        "results_url":           data.get("results_url"),
+        "difference_count": data.get("difference_count"),
+        "exception": data.get("exception"),
+        "bug_id": data.get("bug_id"),
+        "results_url": data.get("results_url"),
     }
     return {k: v for k, v in result.items() if v is not None}
 
@@ -52,8 +54,9 @@ def pinpoint_show_job(job_url: str) -> str:
     return _format_job_detail(_fetch_job_detail(job_url))
 
 
-def _fetch_jobs_list(count: int = 20, user: str | None = None,
-                     filter: str | None = None) -> list[dict]:
+def _fetch_jobs_list(
+    count: int = 20, user: str | None = None, filter: str | None = None
+) -> list[dict]:
     """Fetch job list as dicts (internal helper)."""
     if user is None:
         user = config.load().user or pinpoint.get_current_user_email()
@@ -91,10 +94,12 @@ def _format_job_list(jobs: list[dict]) -> str:
 
     patches = [j.get("experiment_patch") or "" for j in jobs]
     with concurrent.futures.ThreadPoolExecutor() as ex:
-        subjects = list(ex.map(
-            lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
-            patches,
-        ))
+        subjects = list(
+            ex.map(
+                lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
+                patches,
+            )
+        )
 
     blocks = []
     for j, subject in zip(jobs, subjects):
@@ -124,7 +129,6 @@ def _format_job_list(jobs: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-
 @mcp.tool()
 def pinpoint_show_results(
     job_url: str,
@@ -144,7 +148,11 @@ def pinpoint_show_results(
               Requires: gcloud auth application-default login
     """
     job_id = pinpoint.job_id_from_url(job_url)
-    all_rows = pinpoint.pivot_results_cas(job_id) if use_cas else pinpoint.pivot_results(job_id)
+    all_rows = (
+        pinpoint.pivot_results_cas(job_id)
+        if use_cas
+        else pinpoint.pivot_results(job_id)
+    )
     if not all_rows:
         return "No results found."
 
@@ -162,15 +170,17 @@ def pinpoint_show_results(
     cells = []
     for r in rows:
         bm, bs = r["base_mean"] or 0, r["base_stdev"] or 0
-        em, es = r["exp_mean"]  or 0, r["exp_stdev"]  or 0
-        cells.append((
-            r["name"],
-            f"{bm:.3f} ±{bs:.3f}",
-            f"{em:.3f} ±{es:.3f}",
-            f"{pct(r):+.2f}%",
-            f"{r['p_value']:.4f}",
-            "*" if r["significant"] else "",
-        ))
+        em, es = r["exp_mean"] or 0, r["exp_stdev"] or 0
+        cells.append(
+            (
+                r["name"],
+                f"{bm:.3f} ±{bs:.3f}",
+                f"{em:.3f} ±{es:.3f}",
+                f"{pct(r):+.2f}%",
+                f"{r['p_value']:.4f}",
+                "*" if r["significant"] else "",
+            )
+        )
 
     hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p", "sig")
     widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
@@ -183,9 +193,9 @@ def pinpoint_show_results(
 
     def fmt_unit(raw: str) -> str:
         if raw.endswith("_biggerIsBetter"):
-            return raw[:-len("_biggerIsBetter")] + " (bigger is better)"
+            return raw[: -len("_biggerIsBetter")] + " (bigger is better)"
         if raw.endswith("_smallerIsBetter"):
-            return raw[:-len("_smallerIsBetter")] + " (smaller is better)"
+            return raw[: -len("_smallerIsBetter")] + " (smaller is better)"
         return raw
 
     units = sorted({r["unit"] for r in rows if r.get("unit")})
@@ -202,7 +212,9 @@ def pinpoint_show_results(
         *[fmt_row(c) for c in cells],
     ]
     if omitted:
-        lines.append(f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)")
+        lines.append(
+            f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)"
+        )
     return "\n".join(lines)
 
 
@@ -214,6 +226,7 @@ def get_gerrit_issue_url() -> str | None:
     Returns None if not inside a git repo or the branch has no associated CL.
     """
     import subprocess as _sp
+
     def _git(*args: str) -> str:
         r = _sp.run(["git"] + list(args), capture_output=True, text=True)
         return r.stdout.strip() if r.returncode == 0 else ""
@@ -224,8 +237,10 @@ def get_gerrit_issue_url() -> str | None:
     issue = _git("config", f"branch.{branch}.gerritissue")
     if not issue:
         return None
-    server = _git("config", f"branch.{branch}.gerritserver") \
-             or "https://chromium-review.googlesource.com"
+    server = (
+        _git("config", f"branch.{branch}.gerritserver")
+        or "https://chromium-review.googlesource.com"
+    )
     patchset = _git("config", f"branch.{branch}.gerritpatchset")
     url = f"{server}/{issue}"
     return f"{url}/{patchset}" if patchset else url
@@ -237,14 +252,21 @@ def chat_notify_watching(job_url: str) -> None:
     if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
             import chat
-            chat.notify(cfg.chat_app_space, cfg.chat_service_account_email,
-                        f"👀 Watching: {job_url}")
+
+            chat.notify(
+                cfg.chat_app_space,
+                cfg.chat_service_account_email,
+                f"👀 Watching: {job_url}",
+            )
         except Exception:
             pass
     elif cfg.chat_webhook:
         try:
             import httpx
-            httpx.post(cfg.chat_webhook, json={"text": f"👀 Watching: {job_url}"}, timeout=10)
+
+            httpx.post(
+                cfg.chat_webhook, json={"text": f"👀 Watching: {job_url}"}, timeout=10
+            )
         except Exception:
             pass
 
@@ -320,7 +342,9 @@ def create_pinpoint_jobs(
                 if on_auto_hash:
                     on_auto_hash(cfg, None, e)
 
-    combos = list(itertools.product(configurations, pairs, exp_patches, exp_js_flags_list))
+    combos = list(
+        itertools.product(configurations, pairs, exp_patches, exp_js_flags_list)
+    )
     jobs = []
     for i, (cfg, (bench, default_story), exp_patch, exp_js_flags) in enumerate(combos):
         git_hash = auto_hashes.get(cfg)
@@ -345,9 +369,12 @@ def create_pinpoint_jobs(
         else:
             jobs.append(result)
         if on_job_created:
-            on_job_created(i, len(combos),
-                           (cfg, bench, default_story, exp_patch, exp_js_flags),
-                           jobs[-1])
+            on_job_created(
+                i,
+                len(combos),
+                (cfg, bench, default_story, exp_patch, exp_js_flags),
+                jobs[-1],
+            )
 
     # Watch jobs
     cfg_obj = config.load()
@@ -379,20 +406,20 @@ def _format_job_detail(j: dict) -> str:
 
     lines = [f"{created}  {status}  {url}"]
     fields = [
-        ("user",          j.get("user")),
+        ("user", j.get("user")),
         ("configuration", j.get("configuration")),
-        ("benchmark",     j.get("benchmark")),
-        ("story",         j.get("story")),
-        ("mode",          j.get("comparison_mode")),
-        ("base",          j.get("base_git_hash")),
-        ("end",           j.get("end_git_hash")),
-        ("patch",         patch_url),
-        ("base-flags",    j.get("base_extra_args")),
-        ("exp-flags",     j.get("experiment_extra_args")),
-        ("diffs",         j.get("difference_count")),
-        ("bug",           j.get("bug_id")),
-        ("results",       j.get("results_url")),
-        ("exception",     j.get("exception")),
+        ("benchmark", j.get("benchmark")),
+        ("story", j.get("story")),
+        ("mode", j.get("comparison_mode")),
+        ("base", j.get("base_git_hash")),
+        ("end", j.get("end_git_hash")),
+        ("patch", patch_url),
+        ("base-flags", j.get("base_extra_args")),
+        ("exp-flags", j.get("experiment_extra_args")),
+        ("diffs", j.get("difference_count")),
+        ("bug", j.get("bug_id")),
+        ("results", j.get("results_url")),
+        ("exception", j.get("exception")),
     ]
     w = max((len(k) for k, v in fields if v is not None), default=0)
     for key, val in fields:
@@ -471,6 +498,7 @@ def pinpoint_create_job(
 
 # ── jsb tools ────────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 def jsb_run_bench(
     bench: str,
@@ -525,6 +553,7 @@ def jsb_run_bench(
 
 # ── gerrit tools ─────────────────────────────────────────────────────────────
 
+
 @mcp.tool()
 def gerrit_comments(change_url: str) -> list[dict]:
     """Fetch all published comments on a Gerrit CL, threaded by file and line.
@@ -577,7 +606,123 @@ def gerrit_fetch(
     return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
 
+# ── repo tools ───────────────────────────────────────────────────────────────
+
+_REPO_ALIASES: dict[str, str] = {
+    "jsc": "jsc_dir",
+    "js2": "js2_dir",
+    "js3": "js3_dir",
+    "spidermonkey": "spidermonkey_dir",
+}
+
+_MAX_READ_LINES = 2000
+_MAX_GREP_MATCHES = 100
+
+
+def _resolve_repo(repo: str) -> Path:
+    """Resolve a repo alias to its configured path, or raise ValueError."""
+    key = _REPO_ALIASES.get(repo)
+    if key is None:
+        valid = ", ".join(sorted(_REPO_ALIASES))
+        raise ValueError(f"Unknown repo {repo!r}. Valid repos: {valid}")
+    cfg = config.load()
+    path = getattr(cfg, key)
+    if path is None:
+        raise ValueError(
+            f"Repo {repo!r} is not configured. "
+            f"Set {key} in ~/.config/v8-utils/config.toml, e.g.:\n"
+            f'  {key} = "~/path/to/{repo}"'
+        )
+    if not path.is_dir():
+        raise ValueError(f"Repo {repo!r} path does not exist: {path}")
+    return path
+
+
+@mcp.tool()
+def repo_read(
+    repo: str,
+    path: str,
+    offset: int = 0,
+    limit: int = _MAX_READ_LINES,
+) -> str:
+    """Read a file from a related source repo.
+
+    repo:   repo alias — one of: jsc, js2, js3, spidermonkey
+    path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
+    offset: 0-based line offset to start reading from (default: 0)
+    limit:  max lines to return (default: 2000)
+
+    Configure repo paths in ~/.config/v8-utils/config.toml:
+      jsc_dir          = "~/WebKit/Source/JavaScriptCore"
+      js2_dir          = "~/JetStream2"
+      js3_dir          = "~/JetStream3"
+      spidermonkey_dir = "~/gecko-dev/js/src"
+    """
+    root = _resolve_repo(repo)
+    target = (root / path).resolve()
+    # Prevent path traversal outside repo root
+    if not str(target).startswith(str(root)):
+        raise ValueError(f"Path escapes repo root: {path}")
+    if not target.is_file():
+        raise ValueError(f"File not found: {path} (in {root})")
+
+    lines = target.read_text(errors="replace").splitlines()
+    total = len(lines)
+    selected = lines[offset : offset + limit]
+    result = "\n".join(f"{i + offset + 1:6}\t{line}" for i, line in enumerate(selected))
+    if offset + limit < total:
+        result += f"\n(truncated — showing lines {offset + 1}–{offset + len(selected)} of {total}; use offset/limit to paginate)"
+    return result
+
+
+@mcp.tool()
+def repo_grep(
+    repo: str,
+    pattern: str,
+    glob: str | None = None,
+    context: int = 0,
+    limit: int = _MAX_GREP_MATCHES,
+) -> str:
+    """Search for a pattern in a related source repo using git grep.
+
+    repo:    repo alias — one of: jsc, js2, js3, spidermonkey
+    pattern: regex pattern to search for
+    glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"
+    context: lines of context around each match (default: 0)
+    limit:   max matches to return (default: 100)
+
+    Configure repo paths in ~/.config/v8-utils/config.toml:
+      jsc_dir          = "~/WebKit/Source/JavaScriptCore"
+      js2_dir          = "~/JetStream2"
+      js3_dir          = "~/JetStream3"
+      spidermonkey_dir = "~/gecko-dev/js/src"
+    """
+    import subprocess
+
+    root = _resolve_repo(repo)
+    cmd = ["git", "grep", "-n", "--no-color", "-E", pattern]
+    if context > 0:
+        cmd.extend([f"-C{context}"])
+    if glob:
+        cmd.extend(["--", glob])
+
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=root)
+    if r.returncode == 1:
+        return "No matches found."
+    if r.returncode not in (0, 1):
+        raise ValueError(f"git grep failed: {r.stderr.strip()[:500]}")
+
+    lines = r.stdout.splitlines()
+    if len(lines) > limit:
+        result = "\n".join(lines[:limit])
+        result += f"\n(truncated — showing first {limit} of {len(lines)} matches)"
+    else:
+        result = "\n".join(lines)
+    return result
+
+
 # ── perf tools ────────────────────────────────────────────────────────────────
+
 
 @mcp.tool()
 def perf_stat(stat_file: str) -> dict:
@@ -656,8 +801,9 @@ def perf_annotate(
     min_pct:   minimum sample % to qualify as hot (default 0.5)
     context:   lines of context around each hot cluster (default 8)
     """
-    return perf_tools.annotate(perf_data, symbol, dso=dso,
-                               min_pct=min_pct, context=context)
+    return perf_tools.annotate(
+        perf_data, symbol, dso=dso, min_pct=min_pct, context=context
+    )
 
 
 @mcp.tool()
@@ -681,8 +827,9 @@ def perf_annotate_read_around(
     context:   lines before and after to include (default 30)
     dso:       shared object filter (must match perf_annotate call if used)
     """
-    return perf_tools.annotate_read_around(perf_data, symbol, line,
-                                           context=context, dso=dso)
+    return perf_tools.annotate_read_around(
+        perf_data, symbol, line, context=context, dso=dso
+    )
 
 
 @mcp.tool()
@@ -710,8 +857,9 @@ def perf_flamegraph(
     min_pct:      omit paths below this % of total samples (default 0.5)
     depth:        maximum call-chain depth to expand (default 8)
     """
-    return perf_tools.flamegraph(perf_data, focus_symbol=focus_symbol,
-                                 dso=dso, min_pct=min_pct, depth=depth)
+    return perf_tools.flamegraph(
+        perf_data, focus_symbol=focus_symbol, dso=dso, min_pct=min_pct, depth=depth
+    )
 
 
 @mcp.tool()
