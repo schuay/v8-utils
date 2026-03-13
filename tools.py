@@ -332,11 +332,19 @@ def pinpoint_create_job(
     repeat: int = 100,
     bug_id: int | None = None,
 ) -> dict:
-    """Create a new Pinpoint A/B try job. Requires luci-auth login.
+    """Create Pinpoint A/B try jobs. Requires luci-auth login.
 
-    Creates jobs for each combination of benchmark × configuration.
-    When chat integration is configured, created jobs are automatically
-    watched and a notification is sent on completion.
+    IMPORTANT — this tool auto-detects sensible defaults. In most cases you
+    only need to specify what differs from the defaults. Just call it:
+      - No args at all → runs js3+sp3 on m1 with the current branch's CL
+      - configuration="m4" → same but on m4
+      - benchmark="js3" configuration="m4" → js3 on m4
+    Do NOT manually look up git hashes, Gerrit CL URLs, or build status —
+    the tool handles all of that automatically:
+      - exp_patch: auto-detected from the current git branch's Gerrit CL
+      - base/exp git hash: auto-resolved to the latest cached CI build
+      - benchmark/story: resolved from aliases (js3, sp3, js2)
+    If chat notifications are configured, jobs are automatically watched.
 
     benchmark:      space-separated benchmark names or aliases (default: "js3 sp3"):
                       "js3"  → jetstream-main.crossbench (story: JetStream)
@@ -348,10 +356,10 @@ def pinpoint_create_job(
                       "m4"    → mac-m4-mini-perf
     story:          story within the benchmark (overrides alias default)
     story_tags:     comma-separated story tags to select stories
-    base_git_hash:  git hash for the base build (default: latest cached CI build)
-    exp_git_hash:   git hash for the experiment build (default: latest cached CI build)
+    base_git_hash:  git hash for the base build (default: auto-detected latest CI build)
+    exp_git_hash:   git hash for the experiment build (default: auto-detected latest CI build)
     base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
-    exp_patch:      Gerrit patch for experiment — same formats
+    exp_patch:      Gerrit patch for experiment — auto-detected from current git branch if omitted
     base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
     exp_js_flags:   V8 flags for experiment, same format
     repeat:         number of bot runs per variant (default: 100)
