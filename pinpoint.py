@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from scipy.stats import mannwhitneyu
+from scipy.stats import false_discovery_control, mannwhitneyu
 
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
 _GERRIT_BASE = "https://chromium-review.googlesource.com"
@@ -388,6 +388,22 @@ def _value_stats(vals: list[float]) -> dict:
     }
 
 
+def _apply_fdr(rows: list[dict], alpha: float = 0.05) -> list[dict]:
+    """Apply Benjamini-Hochberg FDR correction to p-values.
+
+    Replaces raw p-values with adjusted p-values and sets 'significant'
+    based on whether the adjusted p-value falls below alpha.
+    """
+    if not rows:
+        return rows
+    raw_ps = [r["p_value"] for r in rows]
+    adjusted = false_discovery_control(raw_ps, method="bh")
+    for r, adj_p in zip(rows, adjusted):
+        r["p_value"] = float(adj_p)
+        r["significant"] = bool(adj_p < alpha)
+    return rows
+
+
 def pivot_results(job_id: str) -> list[dict]:
     """Return one row per metric comparing base vs experiment.
 
@@ -395,7 +411,8 @@ def pivot_results(job_id: str) -> list[dict]:
     exp_label, exp_mean, exp_stdev, exp_n, p_value, significant.
 
     Labels with "base:"/"exp:" prefix are assigned accordingly; otherwise
-    alphabetical order is used. Mann-Whitney U (two-sided, α=0.05).
+    alphabetical order is used. Mann-Whitney U (two-sided) with
+    Benjamini-Hochberg FDR correction (α=0.05).
     Only metrics with exactly two labels are included.
     """
     histograms, guids = fetch_histograms(job_id)
@@ -428,9 +445,8 @@ def pivot_results(job_id: str) -> list[dict]:
             "exp_label":   exp_label,
             **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
             "p_value":     p,
-            "significant": bool(p < 0.05),
         })
-    return rows
+    return _apply_fdr(rows)
 
 
 def fetch_raw_values(job_id: str) -> list[dict]:
@@ -655,9 +671,8 @@ def pivot_results_cas(job_id: str) -> list[dict]:
             "exp_label":   exp_label or "exp",
             **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
             "p_value":     p,
-            "significant": bool(p < 0.05),
         })
-    return rows
+    return _apply_fdr(rows)
 
 
 # ── Build lookup ──────────────────────────────────────────────────────────────
