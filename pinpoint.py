@@ -393,12 +393,27 @@ def _apply_fdr(rows: list[dict], alpha: float = 0.05) -> list[dict]:
 
     Replaces raw p-values with adjusted p-values and sets 'significant'
     based on whether the adjusted p-value falls below alpha.
+
+    Rows with NaN p-values (from degenerate inputs) are marked as
+    not significant and excluded from the correction.
     """
+    import math
     if not rows:
         return rows
-    raw_ps = [r["p_value"] for r in rows]
+
+    # Separate valid and NaN p-values (NaN crashes false_discovery_control)
+    valid = [(i, r) for i, r in enumerate(rows) if not math.isnan(r["p_value"])]
+    for r in rows:
+        if math.isnan(r["p_value"]):
+            r["p_value"] = 1.0
+            r["significant"] = False
+
+    if not valid:
+        return rows
+
+    raw_ps = [r["p_value"] for _, r in valid]
     adjusted = false_discovery_control(raw_ps, method="bh")
-    for r, adj_p in zip(rows, adjusted):
+    for (_, r), adj_p in zip(valid, adjusted):
         r["p_value"] = float(adj_p)
         r["significant"] = bool(adj_p < alpha)
     return rows
