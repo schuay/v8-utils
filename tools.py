@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import TextContent
 
 import config
 import daemon
@@ -542,7 +543,7 @@ def jsb_run_bench(
     suite: str = "js3",
     perf: bool = False,
     perf_upload: bool = False,
-) -> str:
+) -> list[TextContent]:
     """Run a JetStream2/3 story with one or more d8 builds and return scores.
 
     bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
@@ -580,7 +581,7 @@ def jsb_run_bench(
             raise ValueError("perf and perf_upload are mutually exclusive")
         if len(variants) != 1:
             raise ValueError("perf/perf_upload requires exactly one build")
-        return jsb_module.run_perf(
+        text = jsb_module.run_perf(
             variants[0],
             suite_dir,
             bench,
@@ -588,13 +589,19 @@ def jsb_run_bench(
             cfg.perf_script,
             upload=perf_upload,
         )
+        return [TextContent(type="text", text=text)]
 
     results = [
         jsb_module.run_variant(v, suite_dir, bench, runs, js3, cfg.v8_out)
         for v in variants
     ]
 
-    return jsb_module.format_table(bench, suite_label, runs, variants, results)
+    return [
+        TextContent(
+            type="text",
+            text=jsb_module.format_table(bench, suite_label, runs, variants, results),
+        )
+    ]
 
 
 # ── gerrit tools ─────────────────────────────────────────────────────────────
