@@ -22,8 +22,9 @@ def pinpoint_show_job(job_url: str) -> dict:
     job_id = pinpoint.job_id_from_url(job_url)
     data = pinpoint.fetch_job(job_id)
     args = data.get("arguments", {})
-    return {
+    result = {
         "job_id":                data.get("job_id"),
+        "url":                   f"https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}",
         "name":                  data.get("name"),
         "status":                data.get("status"),
         "user":                  data.get("user"),
@@ -42,8 +43,9 @@ def pinpoint_show_job(job_url: str) -> dict:
         "exception":             data.get("exception"),
         "bug_id":                data.get("bug_id"),
         "results_url":           data.get("results_url"),
-        "bots":                  data.get("bots"),
     }
+    # Drop null fields to keep output compact
+    return {k: v for k, v in result.items() if v is not None}
 
 
 @mcp.tool()
@@ -317,6 +319,30 @@ def create_pinpoint_jobs(
     return jobs
 
 
+def _format_jobs(jobs: list[dict]) -> str:
+    """Format job dicts as a compact text summary (like pp's terminal output)."""
+    blocks = []
+    for j in jobs:
+        created = (j.get("created") or "")[:16].replace("T", " ")
+        status = j.get("status") or "?"
+        url = j.get("url") or ""
+        lines = [f"{created}  {status}  {url}"]
+        fields = [
+            ("configuration", j.get("configuration")),
+            ("benchmark",     j.get("benchmark")),
+            ("story",         j.get("story")),
+            ("patch",         j.get("experiment_patch")),
+            ("base-flags",    j.get("base_extra_args")),
+            ("exp-flags",     j.get("experiment_extra_args")),
+        ]
+        w = max((len(k) for k, v in fields if v), default=0)
+        for key, val in fields:
+            if val:
+                lines.append(f"  {key:<{w}}  {val}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 @mcp.tool()
 def pinpoint_create_job(
     benchmark: str = "js3 sp3",
@@ -331,7 +357,7 @@ def pinpoint_create_job(
     exp_js_flags: str | None = None,
     repeat: int = 100,
     bug_id: int | None = None,
-) -> dict:
+) -> str:
     """Create Pinpoint A/B try jobs. Requires luci-auth login.
 
     IMPORTANT — this tool auto-detects sensible defaults. In most cases you
@@ -379,7 +405,7 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
-    return {"jobs": jobs} if len(jobs) != 1 else jobs[0]
+    return _format_jobs(jobs)
 
 
 # ── jsb tools ────────────────────────────────────────────────────────────────
