@@ -264,6 +264,30 @@ def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
     return parsed, warnings
 
 
+def _find_matching_symbols(perf_data: str, symbol: str, dso: str | None) -> list[str]:
+    """Find symbols in the profile that contain the given substring."""
+    args = [
+        "perf",
+        "report",
+        "--stdio",
+        "--no-header",
+        "--no-children",
+        "--symbol-filter",
+        symbol,
+        "-i",
+        perf_data,
+    ]
+    if dso:
+        args += ["--dso", dso]
+    text = _run(args)
+    matches: list[str] = []
+    for line in text.splitlines():
+        m = _REPORT_RE.match(line)
+        if m:
+            matches.append(m.group(3).strip())
+    return matches
+
+
 def _get_annotate_lines(
     perf_data: str, symbol: str, dso: str | None
 ) -> tuple[list[dict], list[str]]:
@@ -272,6 +296,13 @@ def _get_annotate_lines(
         args += ["--dso", dso]
     text = _run(args)
     if not text.strip():
+        candidates = _find_matching_symbols(perf_data, symbol, dso)
+        if candidates:
+            listing = "\n  ".join(candidates)
+            raise RuntimeError(
+                f"No exact match for symbol {symbol!r}. "
+                f"Similar symbols in the profile:\n  {listing}"
+            )
         raise RuntimeError(f"No annotation found for symbol {symbol!r}")
     return _parse_annotate(text)
 
