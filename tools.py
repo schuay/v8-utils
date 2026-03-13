@@ -540,7 +540,7 @@ def jsb_run_bench(
     builds: list[str],
     runs: int = 5,
     suite: str = "js3",
-) -> dict:
+) -> str:
     """Run a JetStream2/3 story with one or more d8 builds and return scores.
 
     bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
@@ -549,8 +549,8 @@ def jsb_run_bench(
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
 
-    Returns per-variant scores with mean, stdev, stdev_pct, and a
-    formatted comparison table when multiple variants are given.
+    Returns a formatted comparison table with mean, stdev, and delta
+    (with significance) when two variants are given.
 
     Configure paths in ~/.config/v8-utils/config.toml:
       v8_out        = "~/v8/out"
@@ -574,23 +574,14 @@ def jsb_run_bench(
         for v in variants
     ]
 
-    return {
-        "bench": bench,
-        "suite": suite_label,
-        "runs": runs,
-        "variants": [
-            {"label": v.label, "scores": s}
-            for v, s in zip(variants, jsb_module.summarise(results))
-        ],
-        "table": jsb_module.format_table(bench, suite_label, runs, variants, results),
-    }
+    return jsb_module.format_table(bench, suite_label, runs, variants, results)
 
 
 # ── gerrit tools ─────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def gerrit_comments(change_url: str) -> list[dict]:
+def gerrit_comments(change_url: str) -> str:
     """Fetch all published comments on a Gerrit CL, threaded by file and line.
 
     Each entry represents a comment thread and includes:
@@ -603,7 +594,31 @@ def gerrit_comments(change_url: str) -> list[dict]:
       https://chromium-review.googlesource.com/c/v8/v8/+/7650974
       https://chromium-review.googlesource.com/7650974
     """
-    return gerrit_tools.comments(change_url)
+    threads = gerrit_tools.comments(change_url)
+    if not threads:
+        return "No comments found."
+    return _format_gerrit_comments(threads)
+
+
+def _format_gerrit_comments(threads: list[dict]) -> str:
+    blocks = []
+    for t in threads:
+        loc = t["file"]
+        if t.get("line"):
+            loc += f":{t['line']}"
+        if t.get("patch_set"):
+            loc += f" (ps{t['patch_set']})"
+        status = " [unresolved]" if t.get("unresolved") else ""
+        header = f"{loc}{status}"
+        author = t.get("author", "unknown")
+        msg = t.get("message", "").strip()
+        lines = [header, f"  {author}: {msg}"]
+        for r in t.get("replies", []):
+            r_author = r.get("author", "unknown")
+            r_msg = r.get("message", "").strip()
+            lines.append(f"  {r_author}: {r_msg}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 @mcp.tool()
