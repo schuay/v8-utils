@@ -4,7 +4,7 @@ Run a specific JetStream2/3 story with one or more d8 builds, with support
 for multi-run aggregation, build/flag comparison, and debugger/profiler modes.
 
 Usage:
-  jsb BENCH [-b BUILD[:FLAGS]]... [-n RUNS] [--js2] [--gdb|--rr|--perf]
+  jsb BENCH [-b BUILD[:FLAGS]]... [-n RUNS] [--js2] [--gdb|--rr|--perf|--perf-upload]
 
 Build spec syntax:
   release-main            # no extra flags
@@ -27,6 +27,7 @@ import config as cfg_module
 
 
 # ---------- Variant ----------
+
 
 @dataclass
 class Variant:
@@ -84,13 +85,12 @@ def parse_js3(output: str) -> dict[str, float]:
 
 # ---------- Running ----------
 
+
 def _run_captured(cmd: list[str], cwd: Path, js3: bool) -> dict[str, float]:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
         output = (result.stdout + result.stderr).strip()
-        raise RuntimeError(
-            f"d8 exited with code {result.returncode}\n{output}"
-        )
+        raise RuntimeError(f"d8 exited with code {result.returncode}\n{output}")
     out = result.stdout + result.stderr
     return parse_js3(out) if js3 else parse_js2(out)
 
@@ -121,12 +121,45 @@ def run_variant(
     return all_scores
 
 
+def run_perf(
+    variant: Variant,
+    suite_dir: Path,
+    bench: str,
+    v8_out: Path,
+    perf_script: Path,
+    upload: bool = False,
+) -> str:
+    """Record a perf trace via linux-perf-d8.py.
+
+    Returns the output from linux-perf-d8.py (includes the perf.data path).
+    When upload=False, passes --skip-pprof to keep the trace local.
+    """
+    extra = [] if upload else ["--skip-pprof"]
+    cmd = (
+        ["python3", str(perf_script)]
+        + extra
+        + [str(variant.d8(v8_out))]
+        + (variant.flags.split() if variant.flags else [])
+        + [str(suite_dir / "cli.js"), "--", bench]
+    )
+    r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
+    output = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"linux-perf-d8.py failed (exit {r.returncode}):\n{output[:1000]}"
+        )
+    return output
+
+
 # ---------- Formatting ----------
 
 _METRIC_ORDER = [
-    "Score", "Total-Score",
-    "First-Score", "Startup-Score",
-    "Worst-Score", "Worst-Case-Score",
+    "Score",
+    "Total-Score",
+    "First-Score",
+    "Startup-Score",
+    "Worst-Score",
+    "Worst-Case-Score",
     "Average-Score",
 ]
 
@@ -196,13 +229,17 @@ def format_table(
 
     if has_delta and n >= 2:
         lines.append("")
-        lines.append("* p < 0.05 (Welch's t-test)" if any_significant
-                     else "(no statistically significant differences)")
+        lines.append(
+            "* p < 0.05 (Welch's t-test)"
+            if any_significant
+            else "(no statistically significant differences)"
+        )
 
     return "\n".join(lines)
 
 
 # ---------- Stats helper (used by MCP tool) ----------
+
 
 def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
     """Convert raw run lists to per-variant summary dicts for MCP output."""
@@ -235,6 +272,7 @@ def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
 
 # ---------- CLI ----------
 
+
 def main(argv: list[str] | None = None) -> None:
     if argv is None:
         argv = sys.argv[1:]
@@ -266,32 +304,53 @@ examples:
     )
     p.add_argument("bench", help="Benchmark story name, e.g. regexp-octane")
     p.add_argument(
-        "-b", "--build", dest="builds", action="append", default=[],
+        "-b",
+        "--build",
+        dest="builds",
+        action="append",
+        default=[],
         metavar="BUILD[:FLAGS]",
         help="Build name under v8_out, optionally with d8 flags after ':'. "
-             "Repeatable — each -b creates one variant.",
+        "Repeatable — each -b creates one variant.",
     )
-    p.add_argument("-n", "--runs", type=int, default=1,
-                   help="Number of runs per variant (default: 1)")
-    p.add_argument("--js2", action="store_true",
-                   help="Use JetStream2 (default: JetStream3)")
-    p.add_argument("--gdb", action="store_true",
-                   help="Run under gdb (single variant, single run)")
-    p.add_argument("--rr", action="store_true",
-                   help="Run under rr record (single variant, single run)")
-    p.add_argument("--perf", action="store_true",
-                   help="Profile via linux-perf-d8.py (single variant)")
-    p.add_argument("--perf-args", default="",
-                   help="Extra args forwarded verbatim to linux-perf-d8.py")
+    p.add_argument(
+        "-n",
+        "--runs",
+        type=int,
+        default=1,
+        help="Number of runs per variant (default: 1)",
+    )
+    p.add_argument(
+        "--js2", action="store_true", help="Use JetStream2 (default: JetStream3)"
+    )
+    p.add_argument(
+        "--gdb", action="store_true", help="Run under gdb (single variant, single run)"
+    )
+    p.add_argument(
+        "--rr",
+        action="store_true",
+        help="Run under rr record (single variant, single run)",
+    )
+    perf_group = p.add_mutually_exclusive_group()
+    perf_group.add_argument(
+        "--perf",
+        action="store_true",
+        help="Record a perf trace locally via linux-perf-d8.py (single variant)",
+    )
+    perf_group.add_argument(
+        "--perf-upload",
+        action="store_true",
+        help="Record a perf trace and upload via pprof (single variant)",
+    )
     args = p.parse_args(argv or None)
 
     cfg = cfg_module.load()
-    v8_out   = cfg.v8_out
+    v8_out = cfg.v8_out
     suite_dir = cfg.js2_dir if args.js2 else cfg.js3_dir
-    suite    = "JS2" if args.js2 else "JS3"
-    js3      = not args.js2
+    suite = "JS2" if args.js2 else "JS3"
+    js3 = not args.js2
 
-    builds   = args.builds or [cfg.default_build]
+    builds = args.builds or [cfg.default_build]
     variants = [Variant.parse(b) for b in builds]
 
     for v in variants:
@@ -300,19 +359,14 @@ examples:
             sys.exit(f"error: d8 not found: {d8}")
 
     # --- Profiling ---
-    if args.perf:
+    if args.perf or args.perf_upload:
         if len(variants) != 1:
-            sys.exit("error: --perf requires exactly one build")
+            sys.exit("error: --perf/--perf-upload requires exactly one build")
         v = variants[0]
-        extra = args.perf_args.split() if args.perf_args else []
-        cmd = (
-            ["python3", str(cfg.perf_script)]
-            + extra
-            + [str(v.d8(v8_out))]
-            + (v.flags.split() if v.flags else [])
-            + [str(suite_dir / "cli.js"), "--", args.bench]
+        result = run_perf(
+            v, suite_dir, args.bench, v8_out, cfg.perf_script, upload=args.perf_upload
         )
-        subprocess.run(cmd, cwd=suite_dir)
+        print(result)
         return
 
     # --- Debugger (single variant, single run, passthrough) ---
