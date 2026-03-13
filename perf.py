@@ -13,6 +13,7 @@ from pathlib import Path
 
 # ── subprocess helper ─────────────────────────────────────────────────────────
 
+
 def _run(args: list[str]) -> str:
     r = subprocess.run(args, capture_output=True, text=True)
     # perf exits non-zero for harmless warnings; only fail when stdout is empty
@@ -25,6 +26,7 @@ def _run(args: list[str]) -> str:
 
 
 # ── perf stat ─────────────────────────────────────────────────────────────────
+
 
 def parse_stat(stat_file: str) -> dict:
     """Parse a saved `perf stat` output file into structured data.
@@ -42,7 +44,7 @@ def parse_stat(stat_file: str) -> dict:
         # Counter line:  "   12,345.67 msec task-clock  #  3.45 CPUs utilized"
         #            or: "        1,234      context-switches  #  100.00 K/sec"
         m = re.match(
-            r'^\s+([\d,]+(?:\.\d+)?)\s+(?:msec\s+)?(\S.*?\S)\s{2,}(?:#\s+(.*))?$',
+            r"^\s+([\d,]+(?:\.\d+)?)\s+(?:msec\s+)?(\S.*?\S)\s{2,}(?:#\s+(.*))?$",
             line,
         )
         if m:
@@ -51,11 +53,13 @@ def parse_stat(stat_file: str) -> dict:
                 value = float(raw)
             except ValueError:
                 continue
-            counters.append({
-                "counter": m.group(2).strip(),
-                "value":   value,
-                "note":    m.group(3).strip() if m.group(3) else None,
-            })
+            counters.append(
+                {
+                    "counter": m.group(2).strip(),
+                    "value": value,
+                    "note": m.group(3).strip() if m.group(3) else None,
+                }
+            )
             continue
 
         m2 = re.match(r"^\s+([\d.]+)\s+seconds time elapsed", line)
@@ -68,8 +72,24 @@ def parse_stat(stat_file: str) -> dict:
 
 # ── perf report (flat profile) ────────────────────────────────────────────────
 
-# Matches:  "    12.34%  d8  libv8.so  [.] v8::Foo::Bar<int>"
-_REPORT_RE = re.compile(r"^\s*([\d.]+)%\s+\S+\s+(\S+)\s+\[.\]\s+(.+)$")
+# Anchored on the stable [X] type marker; handles any number of leading % columns
+# (e.g. perf configs that show children%, self%, and possibly more) and any number
+# of intermediate columns (command, CPU, period, …).  The greedy (?:\s+\S+)*
+# consumes all tokens before [X], then backtracks to leave the final one as DSO.
+#
+#   no-children:   "    12.34%  d8  libv8.so  [.] v8::Foo::Bar<int>"
+#   with-children: "    20.00%    12.34%  d8  libv8.so  [.] v8::Foo::Bar<int>"
+#
+# Group 1: first (leading) %  — self% in no-children mode, children% otherwise
+# Group 2: DSO  (last token before [X])
+# Group 3: symbol name
+_REPORT_RE = re.compile(
+    r"^\s*([\d.]+)%"  # leading overhead %
+    r"(?:\s+[\d.]+%)*"  # zero or more additional % columns
+    r"(?:\s+\S+)*"  # command + any other intermediate columns (greedy, backtracks)
+    r"\s+(\S+)"  # DSO — last token before the type marker
+    r"\s+\[.\]\s+(.+)$"  # [type] symbol
+)
 
 
 def _parse_flat_report(text: str) -> dict[str, tuple[float, str]]:
@@ -99,15 +119,15 @@ def hotspots(
     base = ["perf", "report", "--stdio", "--no-header", "-i", perf_data]
     if dso:
         base += ["--dso", dso]
-    self_data  = _parse_flat_report(_run(base + ["--no-children"]))
+    self_data = _parse_flat_report(_run(base + ["--no-children"]))
     total_data = _parse_flat_report(_run(base))
 
     top = sorted(self_data.items(), key=lambda x: x[1][0], reverse=True)[:n]
     return [
         {
-            "symbol":    sym,
-            "dso":       sym_dso,
-            "self_pct":  self_pct,
+            "symbol": sym,
+            "dso": sym_dso,
+            "self_pct": self_pct,
             "total_pct": total_data.get(sym, (None,))[0],
         }
         for sym, (self_pct, sym_dso) in top
@@ -115,6 +135,7 @@ def hotspots(
 
 
 # ── perf callers ──────────────────────────────────────────────────────────────
+
 
 def callers(perf_data: str, symbol: str, n: int = 20) -> str:
     """Return the call-graph section above a symbol: who calls it and at what %.
@@ -124,10 +145,15 @@ def callers(perf_data: str, symbol: str, n: int = 20) -> str:
     LLM can interpret as a call tree.  Up to n lines of call-graph detail.
     """
     args = [
-        "perf", "report", "--stdio", "--no-header",
-        "-g", "caller,0.01,callee",
+        "perf",
+        "report",
+        "--stdio",
+        "--no-header",
+        "-g",
+        "caller,0.01,callee",
         "--no-children",
-        "-i", perf_data,
+        "-i",
+        perf_data,
     ]
     # --symbol-filter is available in perf >= 4.x and limits noise significantly
     args += ["--symbol-filter", symbol]
@@ -143,9 +169,9 @@ def callers(perf_data: str, symbol: str, n: int = 20) -> str:
             sym = m.group(3).strip()
             if symbol in sym:
                 in_target = True
-                result = [line]       # start fresh for each matching entry
+                result = [line]  # start fresh for each matching entry
             elif in_target:
-                break                  # new top-level entry; we're done
+                break  # new top-level entry; we're done
         elif in_target:
             result.append(line)
             if len(result) >= n + 1:
@@ -168,9 +194,7 @@ _ANNOT_INSTR_RE = re.compile(
 
 # Lines that look like instructions but didn't match — used to detect
 # unexpected format changes without silently swallowing hot samples.
-_ANNOT_LOOKALIKE_RE = re.compile(
-    r"^\s*[\d.]*\s*:\s+\S+:\s+\S"
-)
+_ANNOT_LOOKALIKE_RE = re.compile(r"^\s*[\d.]*\s*:\s+\S+:\s+\S")
 
 
 def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
@@ -199,21 +223,25 @@ def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
         if m:
             pct_str = m.group("pct") or ""
             pct = float(pct_str) if pct_str else 0.0
-            parsed.append({
-                "lineno": lineno,
-                "kind":   "instr",
-                "pct":    pct,
-                "addr":   m.group("addr"),
-                "asm":    m.group("asm").strip(),
-                "raw":    raw,
-            })
+            parsed.append(
+                {
+                    "lineno": lineno,
+                    "kind": "instr",
+                    "pct": pct,
+                    "addr": m.group("addr"),
+                    "asm": m.group("asm").strip(),
+                    "raw": raw,
+                }
+            )
         else:
-            parsed.append({
-                "lineno": lineno,
-                "kind":   "source",
-                "pct":    0.0,
-                "raw":    raw,
-            })
+            parsed.append(
+                {
+                    "lineno": lineno,
+                    "kind": "source",
+                    "pct": 0.0,
+                    "raw": raw,
+                }
+            )
             if _ANNOT_LOOKALIKE_RE.match(raw):
                 suspicious.append(raw.rstrip())
 
@@ -239,8 +267,7 @@ def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
 def _get_annotate_lines(
     perf_data: str, symbol: str, dso: str | None
 ) -> tuple[list[dict], list[str]]:
-    args = ["perf", "annotate", "--stdio",
-            "-s", symbol, "-i", perf_data]
+    args = ["perf", "annotate", "--stdio", "-s", symbol, "-i", perf_data]
     if dso:
         args += ["--dso", dso]
     text = _run(args)
@@ -300,24 +327,26 @@ def annotate(
         blk_hi = min(total - 1, c_hi + context)
         block_lines = lines[blk_lo : blk_hi + 1]
         content = "\n".join(f"{l['lineno']:5d}  {l['raw']}" for l in block_lines)
-        hot_blocks.append({
-            "line_range": f"{lines[blk_lo]['lineno']}-{lines[blk_hi]['lineno']}",
-            "peak_pct":   max(l["pct"] for l in block_lines),
-            "content":    content,
-        })
+        hot_blocks.append(
+            {
+                "line_range": f"{lines[blk_lo]['lineno']}-{lines[blk_hi]['lineno']}",
+                "peak_pct": max(l["pct"] for l in block_lines),
+                "content": content,
+            }
+        )
 
     hot_blocks.sort(key=lambda b: b["peak_pct"], reverse=True)
 
     result: dict = {
-        "symbol":            symbol,
-        "total_lines":       total,
+        "symbol": symbol,
+        "total_lines": total,
         "min_pct_threshold": min_pct,
         "top_instructions": [
             {
                 "lineno": l["lineno"],
-                "addr":   l["addr"],
-                "pct":    l["pct"],
-                "asm":    l["asm"],
+                "addr": l["addr"],
+                "pct": l["pct"],
+                "asm": l["asm"],
             }
             for l in top_instrs
         ],
@@ -363,9 +392,7 @@ def annotate_read_around(
 #   "    25.05%             libv8.so  [.] sym"   <- only in baseline
 #   "     5.00%    -1.20%  libv8.so  [.] sym"   <- changed
 #   "              +3.45%  libv8.so  [.] sym"   <- new in after
-_DIFF_RE = re.compile(
-    r"^\s*([\d.]+%|)\s+([-+][\d.]+%|)\s+(\S+)\s+\[.\]\s+(.+)$"
-)
+_DIFF_RE = re.compile(r"^\s*([\d.]+%|)\s+([-+][\d.]+%|)\s+(\S+)\s+\[.\]\s+(.+)$")
 
 
 def diff(
@@ -396,9 +423,9 @@ def diff(
         if not m:
             continue
         baseline_str = m.group(1).rstrip("%")
-        delta_str    = m.group(2).rstrip("%")
-        dso_name     = m.group(3)
-        sym          = m.group(4).strip()
+        delta_str = m.group(2).rstrip("%")
+        dso_name = m.group(3)
+        sym = m.group(4).strip()
 
         # Normalize V8 JIT symbols: strip transient source location suffix
         # "JS:*foo (script.js):123:45" -> "JS:*foo"
@@ -409,7 +436,7 @@ def diff(
             dso_name = "v8_jit"
 
         baseline = float(baseline_str) if baseline_str else None
-        delta    = float(delta_str)    if delta_str    else None
+        delta = float(delta_str) if delta_str else None
 
         if baseline is None and delta is None:
             continue
@@ -420,13 +447,15 @@ def diff(
         elif delta is not None:
             after = delta  # new symbol, baseline was 0
 
-        rows.append({
-            "symbol":       sym,
-            "dso":          dso_name,
-            "baseline_pct": baseline,
-            "after_pct":    after,
-            "delta_pct":    delta,
-        })
+        rows.append(
+            {
+                "symbol": sym,
+                "dso": dso_name,
+                "baseline_pct": baseline,
+                "after_pct": after,
+                "delta_pct": delta,
+            }
+        )
 
     rows.sort(key=lambda r: abs(r["delta_pct"] or 0), reverse=True)
     return rows[:n]
@@ -437,7 +466,7 @@ def diff(
 # Matches call-graph branch lines in `perf report -g callee --stdio` output:
 #   "           --80.00%-- NativeRegExpExec"
 #   "           |           --60.00%-- malloc"
-_CG_BRANCH_RE = re.compile(r'^([\s|]*?)--+(\d+\.\d+)%--\s+(.+?)\s*$')
+_CG_BRANCH_RE = re.compile(r"^([\s|]*?)--+(\d+\.\d+)%--\s+(.+?)\s*$")
 
 
 def _parse_cg_paths(
@@ -509,12 +538,17 @@ def flamegraph(
     depth:        maximum call-chain depth to expand (default 8)
     """
     args = [
-        "perf", "report", "--stdio", "--no-header",
+        "perf",
+        "report",
+        "--stdio",
+        "--no-header",
         # callee mode: tree extends downward (what does this symbol call?)
         # use 0.01 as perf's internal threshold; we filter by min_pct in Python
-        "-g", "callee,0.01,caller",
+        "-g",
+        "callee,0.01,caller",
         "--no-children",
-        "-i", perf_data,
+        "-i",
+        perf_data,
     ]
     if dso:
         args += ["--dso", dso]
@@ -573,9 +607,9 @@ def flamegraph(
 _TMA_CORE_EVENTS = [
     "cycles",
     "topdown-total-slots",
-    "topdown-fetch-bubbles",     # Frontend Bound numerator
-    "topdown-slots-issued",      # Bad Speculation + Retiring numerator
-    "topdown-slots-retired",     # Retiring numerator
+    "topdown-fetch-bubbles",  # Frontend Bound numerator
+    "topdown-slots-issued",  # Bad Speculation + Retiring numerator
+    "topdown-slots-retired",  # Retiring numerator
     # topdown-recovery-bubbles (INT_MISC.RECOVERY_CYCLES) not available on
     # Skylake-SP — returns EINVAL.  Probed opportunistically so it works if
     # present on other hardware; bad_spec falls back to issued - retired.
@@ -584,8 +618,7 @@ _TMA_CORE_EVENTS = [
 _TMA_MEM_EVENT = "cycle_activity.stalls_l3_miss"  # Level 2: memory-bound
 
 _TMA_RECORD_HINT = (
-    "Re-record with linux-perf-d8.py --topdown to enable "
-    "microarchitecture analysis."
+    "Re-record with linux-perf-d8.py --topdown to enable microarchitecture analysis."
 )
 
 
@@ -615,8 +648,14 @@ def _probe_event(perf_data: str, event: str) -> dict[str, float] | None:
         return None
 
     args = [
-        "perf", "report", "--stdio", "--no-header",
-        "--no-children", f"--event={matched}", "-i", perf_data,
+        "perf",
+        "report",
+        "--stdio",
+        "--no-header",
+        "--no-children",
+        f"--event={matched}",
+        "-i",
+        perf_data,
     ]
     try:
         text = _run(args)
@@ -673,13 +712,13 @@ def tma(
             "message": _TMA_RECORD_HINT,
         }
 
-    cycles   = event_data["cycles"]
-    slots    = event_data.get("topdown-total-slots", cycles)  # fallback to cycles
-    fe_bub   = event_data.get("topdown-fetch-bubbles", {})
-    issued   = event_data.get("topdown-slots-issued", {})
-    retired  = event_data.get("topdown-slots-retired", {})
+    cycles = event_data["cycles"]
+    slots = event_data.get("topdown-total-slots", cycles)  # fallback to cycles
+    fe_bub = event_data.get("topdown-fetch-bubbles", {})
+    issued = event_data.get("topdown-slots-issued", {})
+    retired = event_data.get("topdown-slots-retired", {})
     recovery = event_data.get("topdown-recovery-bubbles", {})
-    l3stall  = event_data.get(_TMA_MEM_EVENT)  # None if not recorded
+    l3stall = event_data.get(_TMA_MEM_EVENT)  # None if not recorded
 
     syms = sorted(cycles, key=lambda s: cycles[s], reverse=True)
     if symbol:
@@ -696,14 +735,18 @@ def tma(
         # All topdown events are normalised against total-slots (≈ 4×cycles);
         # since we're computing ratios, using cycles_pct as denominator is
         # equivalent and avoids a separate total-slots lookup per symbol.
-        fe_int       = round(fe_bub.get(sym, 0.0) / cyc, 2)
+        fe_int = round(fe_bub.get(sym, 0.0) / cyc, 2)
         retiring_int = round(retired.get(sym, 0.0) / cyc, 2)
         # Bad Speculation: wasted issue slots + recovery overhead.
         # Uses recovery-bubbles when available (system-wide recording),
         # falls back to issued - retired when recorded per-thread.
         bad_spec_int = round(
-            max(issued.get(sym, 0.0) - retired.get(sym, 0.0)
-                + recovery.get(sym, 0.0), 0.0) / cyc, 2
+            max(
+                issued.get(sym, 0.0) - retired.get(sym, 0.0) + recovery.get(sym, 0.0),
+                0.0,
+            )
+            / cyc,
+            2,
         )
         mem_int = round(l3stall[sym] / cyc, 2) if l3stall and sym in l3stall else None
 
@@ -722,12 +765,12 @@ def tma(
             dominant = "Mixed"
 
         entry: dict = {
-            "symbol":          sym,
-            "cycles_pct":      cyc,
-            "fe_intensity":    fe_int,
+            "symbol": sym,
+            "cycles_pct": cyc,
+            "fe_intensity": fe_int,
             "retiring_intensity": retiring_int,
             "bad_spec_intensity": bad_spec_int,
-            "dominant":        dominant,
+            "dominant": dominant,
         }
         if mem_int is not None:
             entry["mem_intensity"] = mem_int
