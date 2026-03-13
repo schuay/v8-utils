@@ -792,7 +792,7 @@ def repo_grep(
 
 
 @mcp.tool()
-def perf_stat(stat_file: str) -> dict:
+def perf_stat(stat_file: str) -> str:
     """Parse a saved `perf stat` output file into structured counter data.
 
     stat_file: path to a file containing `perf stat` text output
@@ -801,7 +801,17 @@ def perf_stat(stat_file: str) -> dict:
     Returns elapsed_seconds and a list of counters with their values and
     human-readable notes (e.g. "3.45 CPUs utilized").
     """
-    return perf_tools.parse_stat(stat_file)
+    data = perf_tools.parse_stat(stat_file)
+    lines = []
+    if data.get("elapsed_seconds") is not None:
+        lines.append(f"elapsed: {data['elapsed_seconds']:.3f}s")
+        lines.append("")
+    for c in data.get("counters", []):
+        val = f"{c['value']:>15,.0f}  {c['counter']}"
+        if c.get("note"):
+            val += f"  # {c['note']}"
+        lines.append(val)
+    return "\n".join(lines) if lines else "No counters found."
 
 
 @mcp.tool()
@@ -809,7 +819,7 @@ def perf_hotspots(
     perf_data: str,
     dso: str | None = None,
     n: int = 30,
-) -> list[dict]:
+) -> str:
     """Return the top N hot symbols from a perf.data file.
 
     Each entry includes self_pct (exclusive time) and total_pct (inclusive
@@ -820,7 +830,17 @@ def perf_hotspots(
     dso:       restrict to a specific shared object, e.g. "libv8.so" or "d8"
     n:         number of symbols to return (default 30)
     """
-    return perf_tools.hotspots(perf_data, dso=dso, n=n)
+    rows = perf_tools.hotspots(perf_data, dso=dso, n=n)
+    if not rows:
+        return "No symbols found."
+    lines = [f"{'self%':>6}  {'total%':>6}  {'dso':<20}  symbol"]
+    lines.append("-" * len(lines[0]))
+    for r in rows:
+        total = f"{r['total_pct']:.1f}" if r.get("total_pct") is not None else "—"
+        lines.append(
+            f"{r['self_pct']:5.1f}%  {total:>5}%  {r['dso']:<20}  {r['symbol']}"
+        )
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -850,17 +870,14 @@ def perf_annotate(
     dso: str | None = None,
     min_pct: float = 0.5,
     context: int = 8,
-) -> dict:
+) -> str:
     """Annotated disassembly for a symbol, with smart hot-region extraction.
 
-    Returns:
-      total_lines:      total line count — use as reference for read_around
-      top_instructions: the 20 hottest individual instructions (addr, pct, asm)
-      hot_blocks:       contiguous clusters of hot instructions (>= min_pct),
-                        each expanded by ±context lines and sorted by peak heat
+    Shows the 20 hottest instructions and contiguous hot code blocks
+    (>= min_pct), each expanded by ±context lines and sorted by peak heat.
 
-    The hot_blocks content includes line numbers so you can call
-    perf_annotate_read_around to explore the surrounding code.
+    Line numbers are included so you can call perf_annotate_read_around
+    to explore surrounding code.
 
     perf_data: path to perf.data file
     symbol:    exact symbol name (use perf_hotspots to find it)
@@ -868,9 +885,32 @@ def perf_annotate(
     min_pct:   minimum sample % to qualify as hot (default 0.5)
     context:   lines of context around each hot cluster (default 8)
     """
-    return perf_tools.annotate(
+    data = perf_tools.annotate(
         perf_data, symbol, dso=dso, min_pct=min_pct, context=context
     )
+    lines = [
+        f"{data['symbol']}  ({data['total_lines']} lines, min_pct={data['min_pct_threshold']}%)"
+    ]
+    if data.get("parse_warnings"):
+        for w in data["parse_warnings"]:
+            lines.append(f"warning: {w}")
+    # Top instructions
+    lines.append("")
+    lines.append("Top instructions:")
+    lines.append(f"{'line':>6}  {'pct':>6}  {'addr':<14}  asm")
+    lines.append("-" * 60)
+    for instr in data.get("top_instructions", []):
+        lines.append(
+            f"{instr['lineno']:6}  {instr['pct']:5.1f}%  {instr['addr']:<14}  {instr['asm']}"
+        )
+    # Hot blocks
+    for i, block in enumerate(data.get("hot_blocks", [])):
+        lines.append("")
+        lines.append(
+            f"Hot block #{i + 1} (lines {block['line_range']}, peak {block['peak_pct']:.1f}%):"
+        )
+        lines.append(block["content"])
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -934,33 +974,16 @@ def perf_tma(
     perf_data: str,
     symbol: str | None = None,
     n: int = 20,
-) -> dict:
+) -> str:
     """Microarchitecture bottleneck analysis (TMA Level 1) per symbol.
 
-    Always safe to call — returns {available: false, message: ...} when the
-    perf.data was not recorded with TMA events, so callers can handle both
-    cases without branching.
-
-    Uses real Skylake-SP kernel PMU topdown events (topdown-fetch-bubbles,
-    topdown-slots-issued/retired, topdown-recovery-bubbles, topdown-total-slots)
-    rather than the unreliable stalled-cycles-frontend/-backend aliases.
+    Always safe to call — returns a message when the perf.data was not
+    recorded with TMA events.
 
     Intensity fields = event_pct / cycles_pct for each symbol:
       ~1.0  proportional to cycle share (average)
       >1.0  disproportionately high — likely bottleneck
       <1.0  below average
-
-    When available=true, each symbol entry includes:
-      cycles_pct:          share of cycle samples (hotness)
-      fe_intensity:        Frontend Bound  (fetch bubbles / cycles)
-      retiring_intensity:  Retiring        (slots retired / cycles; high = efficient)
-      bad_spec_intensity:  Bad Speculation (issued - retired slots / cycles)
-      mem_intensity:       Backend→Memory  (L3-stall cycles / cycles)
-                           only present when recorded with --topdown
-      dominant:            "Frontend Bound" | "Backend Bound (Memory)" |
-                           "Backend Bound (Core)" | "Bad Speculation" |
-                           "Retiring (efficient)" | "Mixed"
-      has_mem_detail:      true if mem_intensity is populated
 
     To enable: re-record with linux-perf-d8.py --topdown
     (Intel Skylake-SP; requires topdown-* kernel PMU events)
@@ -974,7 +997,29 @@ def perf_tma(
     symbol:  filter to symbols containing this substring
     n:       max symbols to return, sorted by cycles_pct (default 20)
     """
-    return perf_tools.tma(perf_data, symbol=symbol, n=n)
+    data = perf_tools.tma(perf_data, symbol=symbol, n=n)
+    if not data.get("available"):
+        return data.get("message", "TMA data not available.")
+
+    has_mem = data.get("has_mem_detail", False)
+    hdr = f"{'cyc%':>6}  {'FE':>5}  {'Ret':>5}  {'Bad':>5}"
+    if has_mem:
+        hdr += f"  {'Mem':>5}"
+    hdr += f"  {'dominant':<24}  symbol"
+    lines = [hdr, "-" * len(hdr)]
+    for s in data.get("symbols", []):
+        row = (
+            f"{s['cycles_pct']:5.1f}%"
+            f"  {s['fe_intensity']:5.2f}"
+            f"  {s['retiring_intensity']:5.2f}"
+            f"  {s['bad_spec_intensity']:5.2f}"
+        )
+        if has_mem:
+            mem = s.get("mem_intensity")
+            row += f"  {mem:5.2f}" if mem is not None else "      —"
+        row += f"  {s['dominant']:<24}  {s['symbol']}"
+        lines.append(row)
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -983,20 +1028,30 @@ def perf_diff(
     perf_after: str,
     dso: str | None = None,
     n: int = 30,
-) -> list[dict]:
+) -> str:
     """Compare two perf profiles: what got hotter or cooler?
 
     Returns the top N symbols sorted by |delta_pct|, so the biggest
-    changes appear first regardless of direction.  Each entry has:
-      symbol:       function name
-      dso:          shared object
-      baseline_pct: self% in the before profile (None if new)
-      after_pct:    self% in the after profile (None if removed)
-      delta_pct:    after - baseline (positive = got hotter)
+    changes appear first regardless of direction.
 
     perf_before: path to baseline perf.data
     perf_after:  path to experiment perf.data
     dso:         restrict to a specific shared object
     n:           number of symbols to return (default 30)
     """
-    return perf_tools.diff(perf_before, perf_after, dso=dso, n=n)
+    rows = perf_tools.diff(perf_before, perf_after, dso=dso, n=n)
+    if not rows:
+        return "No symbol differences found."
+    lines = [f"{'delta':>8}  {'base%':>6}  {'after%':>7}  {'dso':<20}  symbol"]
+    lines.append("-" * len(lines[0]))
+    for r in rows:
+        base = (
+            f"{r['baseline_pct']:.1f}%" if r.get("baseline_pct") is not None else "new"
+        )
+        after = f"{r['after_pct']:.1f}%" if r.get("after_pct") is not None else "gone"
+        delta = r.get("delta_pct")
+        delta_s = f"{delta:+.1f}%" if delta is not None else "—"
+        lines.append(
+            f"{delta_s:>8}  {base:>6}  {after:>7}  {r['dso']:<20}  {r['symbol']}"
+        )
+    return "\n".join(lines)
