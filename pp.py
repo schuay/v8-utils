@@ -25,10 +25,10 @@ import pinpoint
 from tools import (
     _fetch_job_detail,
     _fetch_jobs_list,
+    _format_results_table,
     chat_notify_watching,
     create_pinpoint_jobs,
     resolve_exp_patches,
-    pinpoint_show_results,
 )
 
 # ── ANSI colors (no-ops when not a TTY) ───────────────────────────────────────
@@ -220,16 +220,33 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
-    for i, url in enumerate(args.job_urls):
+    job_urls = list(args.job_urls)
+
+    if args.recent:
+        jobs = _fetch_jobs_list(count=args.recent, filter="status=Completed")
+        if not jobs:
+            print("No completed jobs found.")
+            return
+        job_urls.extend(j["job_id"] for j in jobs)
+
+    if not job_urls:
+        print("No jobs specified. Use job URLs/IDs or --recent N.")
+        return
+
+    multi = len(job_urls) > 1
+    for i, url in enumerate(job_urls):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        result = pinpoint_show_results(
-            url, show_all=args.show_all, use_cas=args.use_cas
-        )
-        if isinstance(result, str):
-            print(_colorize_results(result))
+        job_id = pinpoint.job_id_from_url(url)
+        if multi:
+            print(
+                f"{_DIM}──{_RESET} {_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}{_RESET}"
+            )
+        table = _format_results_table(job_id, args.show_all, args.use_cas)
+        if table is None:
+            print("No results found.")
         else:
-            _out(result)
+            print(_colorize_results(table))
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
@@ -437,9 +454,16 @@ def main() -> None:
     p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
     p.add_argument(
         "job_urls",
-        nargs="+",
+        nargs="*",
         metavar="job_url",
         help="Pinpoint job URL(s) or job ID(s)",
+    )
+    p.add_argument(
+        "--recent",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show results for the N most recent completed jobs",
     )
     p.add_argument(
         "--show-all", action="store_true", help="Include non-significant results"

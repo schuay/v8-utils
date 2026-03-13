@@ -142,37 +142,20 @@ def _format_job_list(jobs: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-@mcp.tool()
-def pinpoint_show_results(
-    job_url: str,
-    show_all: bool = False,
-    use_cas: bool = False,
-) -> CallToolResult:
-    """Show a base-vs-experiment comparison table for a Pinpoint job.
-
-    One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
-    significance marker. Sorted by %change descending.
-
-    show_all: if False (default), only show statistically significant results.
-    job_url:  Pinpoint job URL or job ID
-    use_cas:  if True, fetch raw per-run values from CAS isolates instead of
-              the histogram HTML. Slower but surfaces richer sub-metrics for
-              JetStream (Score, First, Average, Worst4 per story).
-              Requires: gcloud auth application-default login
-    """
-    job_id = pinpoint.job_id_from_url(job_url)
+def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | None:
+    """Format a results table for a single job. Returns None if no results."""
     all_rows = (
         pinpoint.pivot_results_cas(job_id)
         if use_cas
         else pinpoint.pivot_results(job_id)
     )
     if not all_rows:
-        return _text_result("No results found.")
+        return None
 
     rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
     omitted = len(all_rows) - len(rows)
     if not rows:
-        return _text_result("No statistically significant results found.")
+        return "(no statistically significant results)"
 
     def pct(r: dict) -> float:
         bm = r["base_mean"] or 0
@@ -228,7 +211,48 @@ def pinpoint_show_results(
         lines.append(
             f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)"
         )
-    return _text_result("\n".join(lines))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def pinpoint_show_results(
+    job_url: str = "",
+    show_all: bool = False,
+    use_cas: bool = False,
+    recent: int | None = None,
+) -> CallToolResult:
+    """Show a base-vs-experiment comparison table for a Pinpoint job.
+
+    One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
+    significance marker. Sorted by %change descending.
+
+    show_all: if False (default), only show statistically significant results.
+    job_url:  Pinpoint job URL or job ID
+    use_cas:  if True, fetch raw per-run values from CAS isolates instead of
+              the histogram HTML. Slower but surfaces richer sub-metrics for
+              JetStream (Score, First, Average, Worst4 per story).
+              Requires: gcloud auth application-default login
+    recent:   if set, show results for the N most recent completed jobs
+              for the current user. Can be combined with job_url.
+    """
+    job_ids: list[str] = []
+    if job_url:
+        job_ids.append(pinpoint.job_id_from_url(job_url))
+    if recent:
+        jobs = _fetch_jobs_list(count=recent, filter="status=Completed")
+        job_ids.extend(j["job_id"] for j in jobs)
+    if not job_ids:
+        return _text_result("Provide a job_url or use recent=N.")
+
+    blocks = []
+    for job_id in job_ids:
+        header = f"── https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}"
+        table = _format_results_table(job_id, show_all, use_cas)
+        if table is None:
+            blocks.append(f"{header}\nNo results found.")
+        else:
+            blocks.append(f"{header}\n{table}" if len(job_ids) > 1 else table)
+    return _text_result("\n\n".join(blocks))
 
 
 def get_gerrit_issue_url() -> str | None:

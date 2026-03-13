@@ -29,13 +29,14 @@ ENTRIES: list[str] = [
     "Jobs are *auto-watched* when chat integration is configured — no need for `-w`",
     # 644b010 — latest cached CI build
     "*create-job* uses the latest cached CI build — no more waiting for compiles",
+    "`show-results --recent N` shows results for the N most recent completed jobs",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
 
-_BOLD  = "\033[1m"
-_DIM   = "\033[2m"
-_CYAN  = "\033[36m"
+_BOLD = "\033[1m"
+_DIM = "\033[2m"
+_CYAN = "\033[36m"
 _RESET = "\033[0m"
 
 
@@ -53,6 +54,7 @@ def _format_entry(text: str, color: bool = True) -> str:
 
 # ── Display ──────────────────────────────────────────────────────────────────
 
+
 def show_unseen() -> None:
     """Print unseen changelog entries to stderr, then update last-seen index."""
     if not sys.stderr.isatty():
@@ -67,7 +69,7 @@ def show_unseen() -> None:
     except (ValueError, TypeError):
         last_seen = -1
 
-    unseen = ENTRIES[last_seen + 1:]
+    unseen = ENTRIES[last_seen + 1 :]
     if not unseen:
         return
 
@@ -84,6 +86,7 @@ def show_unseen() -> None:
 def _load_raw_config() -> dict:
     """Load the raw TOML dict (without going through Config dataclass)."""
     import tomllib
+
     if not config.CONFIG_PATH.exists():
         return {}
     with config.CONFIG_PATH.open("rb") as f:
