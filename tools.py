@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent
 
 import config
 import daemon
@@ -12,6 +13,18 @@ import perf as perf_tools
 import pinpoint
 
 mcp = FastMCP("v8-utils")
+
+
+def _text_result(text: str) -> CallToolResult:
+    """Return a CallToolResult with both content and structuredContent.
+
+    Setting structuredContent.content makes Claude Code display the text
+    with proper newlines instead of a collapsed JSON blob (see
+    anthropics/claude-code#9962).
+    """
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)],
+    )
 
 
 def _fetch_job_detail(job_url: str) -> dict:
@@ -45,13 +58,13 @@ def _fetch_job_detail(job_url: str) -> dict:
 
 
 @mcp.tool()
-def pinpoint_show_job(job_url: str) -> str:
+def pinpoint_show_job(job_url: str) -> CallToolResult:
     """Fetch and display key information about a Pinpoint job.
 
     job_url: Pinpoint job URL or job ID, e.g.
              https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
     """
-    return _format_job_detail(_fetch_job_detail(job_url))
+    return _text_result(_format_job_detail(_fetch_job_detail(job_url)))
 
 
 def _fetch_jobs_list(
@@ -68,7 +81,7 @@ def pinpoint_list_jobs(
     count: int = 20,
     user: str | None = None,
     filter: str | None = None,
-) -> str:
+) -> CallToolResult:
     """List recent Pinpoint jobs for a user, newest first. CQ jobs are excluded.
 
     Requires luci-auth login when user is not specified:
@@ -84,8 +97,8 @@ def pinpoint_list_jobs(
     """
     jobs = _fetch_jobs_list(count, user, filter)
     if not jobs:
-        return "No jobs found."
-    return _format_job_list(jobs)
+        return _text_result("No jobs found.")
+    return _text_result(_format_job_list(jobs))
 
 
 def _format_job_list(jobs: list[dict]) -> str:
@@ -134,7 +147,7 @@ def pinpoint_show_results(
     job_url: str,
     show_all: bool = False,
     use_cas: bool = False,
-) -> str:
+) -> CallToolResult:
     """Show a base-vs-experiment comparison table for a Pinpoint job.
 
     One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
@@ -154,12 +167,12 @@ def pinpoint_show_results(
         else pinpoint.pivot_results(job_id)
     )
     if not all_rows:
-        return "No results found."
+        return _text_result("No results found.")
 
     rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
     omitted = len(all_rows) - len(rows)
     if not rows:
-        return "No statistically significant results found."
+        return _text_result("No statistically significant results found.")
 
     def pct(r: dict) -> float:
         bm = r["base_mean"] or 0
@@ -215,7 +228,7 @@ def pinpoint_show_results(
         lines.append(
             f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)"
         )
-    return "\n".join(lines)
+    return _text_result("\n".join(lines))
 
 
 def get_gerrit_issue_url() -> str | None:
@@ -477,7 +490,7 @@ def pinpoint_create_job(
     exp_js_flags: str | None = None,
     repeat: int = 100,
     bug_id: int | None = None,
-) -> str:
+) -> CallToolResult:
     """Create Pinpoint A/B try jobs. Requires luci-auth login.
 
     IMPORTANT — this tool auto-detects sensible defaults. In most cases you
@@ -528,7 +541,7 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
-    return "\n\n".join(_format_job_detail(j) for j in jobs)
+    return _text_result("\n\n".join(_format_job_detail(j) for j in jobs))
 
 
 # ── jsb tools ────────────────────────────────────────────────────────────────
@@ -542,7 +555,7 @@ def jsb_run_bench(
     suite: str = "js3",
     perf: bool = False,
     perf_upload: bool = False,
-) -> str:
+) -> CallToolResult:
     """Run a JetStream2/3 story with one or more d8 builds and return scores.
 
     bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
@@ -580,13 +593,15 @@ def jsb_run_bench(
             raise ValueError("perf and perf_upload are mutually exclusive")
         if len(variants) != 1:
             raise ValueError("perf/perf_upload requires exactly one build")
-        return jsb_module.run_perf(
-            variants[0],
-            suite_dir,
-            bench,
-            cfg.v8_out,
-            cfg.perf_script,
-            upload=perf_upload,
+        return _text_result(
+            jsb_module.run_perf(
+                variants[0],
+                suite_dir,
+                bench,
+                cfg.v8_out,
+                cfg.perf_script,
+                upload=perf_upload,
+            )
         )
 
     results = [
@@ -594,14 +609,16 @@ def jsb_run_bench(
         for v in variants
     ]
 
-    return jsb_module.format_table(bench, suite_label, runs, variants, results)
+    return _text_result(
+        jsb_module.format_table(bench, suite_label, runs, variants, results)
+    )
 
 
 # ── gerrit tools ─────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def gerrit_comments(change_url: str) -> str:
+def gerrit_comments(change_url: str) -> CallToolResult:
     """Fetch all published comments on a Gerrit CL, threaded by file and line.
 
     Each entry represents a comment thread and includes:
@@ -616,8 +633,8 @@ def gerrit_comments(change_url: str) -> str:
     """
     threads = gerrit_tools.comments(change_url)
     if not threads:
-        return "No comments found."
-    return _format_gerrit_comments(threads)
+        return _text_result("No comments found.")
+    return _text_result(_format_gerrit_comments(threads))
 
 
 def _format_gerrit_comments(threads: list[dict]) -> str:
@@ -714,7 +731,7 @@ def repo_read(
     path: str,
     offset: int = 0,
     limit: int = _MAX_READ_LINES,
-) -> str:
+) -> CallToolResult:
     """Read a file from a related source repo.
 
     repo:   repo alias — one of: jsc, js2, js3, spidermonkey
@@ -742,7 +759,7 @@ def repo_read(
     result = "\n".join(f"{i + offset + 1:6}\t{line}" for i, line in enumerate(selected))
     if offset + limit < total:
         result += f"\n(truncated — showing lines {offset + 1}–{offset + len(selected)} of {total}; use offset/limit to paginate)"
-    return result
+    return _text_result(result)
 
 
 @mcp.tool()
@@ -752,7 +769,7 @@ def repo_grep(
     glob: str | None = None,
     context: int = 0,
     limit: int = _MAX_GREP_MATCHES,
-) -> str:
+) -> CallToolResult:
     """Search for a pattern in a related source repo using git grep.
 
     repo:    repo alias — one of: jsc, js2, js3, spidermonkey
@@ -795,7 +812,7 @@ def repo_grep(
         proc.wait()
 
     if not collected and proc.returncode == 1:
-        return "No matches found."
+        return _text_result("No matches found.")
     if not collected and proc.returncode not in (0, 1, -9):
         stderr = proc.stderr.read() if proc.stderr else ""
         raise ValueError(f"git grep failed: {stderr.strip()[:500]}")
@@ -805,14 +822,14 @@ def repo_grep(
         result += f"\n(truncated — showing first {limit} matches)"
     else:
         result = "\n".join(collected)
-    return result
+    return _text_result(result)
 
 
 # ── perf tools ────────────────────────────────────────────────────────────────
 
 
 @mcp.tool()
-def perf_stat(stat_file: str) -> str:
+def perf_stat(stat_file: str) -> CallToolResult:
     """Parse a saved `perf stat` output file into structured counter data.
 
     stat_file: path to a file containing `perf stat` text output
@@ -831,7 +848,7 @@ def perf_stat(stat_file: str) -> str:
         if c.get("note"):
             val += f"  # {c['note']}"
         lines.append(val)
-    return "\n".join(lines) if lines else "No counters found."
+    return _text_result("\n".join(lines) if lines else "No counters found.")
 
 
 @mcp.tool()
@@ -839,7 +856,7 @@ def perf_hotspots(
     perf_data: str,
     dso: str | None = None,
     n: int = 30,
-) -> str:
+) -> CallToolResult:
     """Return the top N hot symbols from a perf.data file.
 
     Each entry includes self_pct (exclusive time) and total_pct (inclusive
@@ -852,7 +869,7 @@ def perf_hotspots(
     """
     rows = perf_tools.hotspots(perf_data, dso=dso, n=n)
     if not rows:
-        return "No symbols found."
+        return _text_result("No symbols found.")
     lines = [f"{'self%':>6}  {'total%':>6}  {'dso':<20}  symbol"]
     lines.append("-" * len(lines[0]))
     for r in rows:
@@ -860,7 +877,7 @@ def perf_hotspots(
         lines.append(
             f"{r['self_pct']:5.1f}%  {total:>5}%  {r['dso']:<20}  {r['symbol']}"
         )
-    return "\n".join(lines)
+    return _text_result("\n".join(lines))
 
 
 @mcp.tool()
@@ -868,7 +885,7 @@ def perf_callers(
     perf_data: str,
     symbol: str,
     n: int = 20,
-) -> str:
+) -> CallToolResult:
     """Show who calls a hot symbol and with what sample weight.
 
     Returns the call-graph section for the symbol from perf report in
@@ -880,7 +897,7 @@ def perf_callers(
     symbol:    symbol name or unique substring, e.g. "Heap::AllocateRaw"
     n:         max lines of call-graph detail to return (default 20)
     """
-    return perf_tools.callers(perf_data, symbol, n=n)
+    return _text_result(perf_tools.callers(perf_data, symbol, n=n))
 
 
 @mcp.tool()
@@ -890,7 +907,7 @@ def perf_annotate(
     dso: str | None = None,
     min_pct: float = 0.5,
     context: int = 8,
-) -> str:
+) -> CallToolResult:
     """Annotated disassembly for a symbol, with smart hot-region extraction.
 
     Shows the 20 hottest instructions and contiguous hot code blocks
@@ -930,7 +947,7 @@ def perf_annotate(
             f"Hot block #{i + 1} (lines {block['line_range']}, peak {block['peak_pct']:.1f}%):"
         )
         lines.append(block["content"])
-    return "\n".join(lines)
+    return _text_result("\n".join(lines))
 
 
 @mcp.tool()
@@ -940,7 +957,7 @@ def perf_annotate_read_around(
     line: int,
     context: int = 30,
     dso: str | None = None,
-) -> str:
+) -> CallToolResult:
     """Read a window of annotated disassembly around a specific line number.
 
     Use this after perf_annotate to explore regions of interest.  Line
@@ -954,8 +971,10 @@ def perf_annotate_read_around(
     context:   lines before and after to include (default 30)
     dso:       shared object filter (must match perf_annotate call if used)
     """
-    return perf_tools.annotate_read_around(
-        perf_data, symbol, line, context=context, dso=dso
+    return _text_result(
+        perf_tools.annotate_read_around(
+            perf_data, symbol, line, context=context, dso=dso
+        )
     )
 
 
@@ -966,7 +985,7 @@ def perf_flamegraph(
     dso: str | None = None,
     min_pct: float = 0.5,
     depth: int = 8,
-) -> str:
+) -> CallToolResult:
     """Aggregated text flamegraph: all hot call paths in one view.
 
     Shows root→leaf call chains sorted by absolute sample percentage, so
@@ -984,8 +1003,10 @@ def perf_flamegraph(
     min_pct:      omit paths below this % of total samples (default 0.5)
     depth:        maximum call-chain depth to expand (default 8)
     """
-    return perf_tools.flamegraph(
-        perf_data, focus_symbol=focus_symbol, dso=dso, min_pct=min_pct, depth=depth
+    return _text_result(
+        perf_tools.flamegraph(
+            perf_data, focus_symbol=focus_symbol, dso=dso, min_pct=min_pct, depth=depth
+        )
     )
 
 
@@ -994,7 +1015,7 @@ def perf_tma(
     perf_data: str,
     symbol: str | None = None,
     n: int = 20,
-) -> str:
+) -> CallToolResult:
     """Microarchitecture bottleneck analysis (TMA Level 1) per symbol.
 
     Always safe to call — returns a message when the perf.data was not
@@ -1019,7 +1040,7 @@ def perf_tma(
     """
     data = perf_tools.tma(perf_data, symbol=symbol, n=n)
     if not data.get("available"):
-        return data.get("message", "TMA data not available.")
+        return _text_result(data.get("message", "TMA data not available."))
 
     has_mem = data.get("has_mem_detail", False)
     hdr = f"{'cyc%':>6}  {'FE':>5}  {'Ret':>5}  {'Bad':>5}"
@@ -1039,7 +1060,7 @@ def perf_tma(
             row += f"  {mem:5.2f}" if mem is not None else "      —"
         row += f"  {s['dominant']:<24}  {s['symbol']}"
         lines.append(row)
-    return "\n".join(lines)
+    return _text_result("\n".join(lines))
 
 
 @mcp.tool()
@@ -1048,7 +1069,7 @@ def perf_diff(
     perf_after: str,
     dso: str | None = None,
     n: int = 30,
-) -> str:
+) -> CallToolResult:
     """Compare two perf profiles: what got hotter or cooler?
 
     Returns the top N symbols sorted by |delta_pct|, so the biggest
@@ -1061,7 +1082,7 @@ def perf_diff(
     """
     rows = perf_tools.diff(perf_before, perf_after, dso=dso, n=n)
     if not rows:
-        return "No symbol differences found."
+        return _text_result("No symbol differences found.")
     lines = [f"{'delta':>8}  {'base%':>6}  {'after%':>7}  {'dso':<20}  symbol"]
     lines.append("-" * len(lines[0]))
     for r in rows:
@@ -1074,4 +1095,4 @@ def perf_diff(
         lines.append(
             f"{delta_s:>8}  {base:>6}  {after:>7}  {r['dso']:<20}  {r['symbol']}"
         )
-    return "\n".join(lines)
+    return _text_result("\n".join(lines))
