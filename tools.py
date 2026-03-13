@@ -279,6 +279,40 @@ def _job_url(job: dict) -> str | None:
     return job.get("url") or f"https://pinpoint-dot-chromeperf.appspot.com/job/{jid}"
 
 
+def resolve_exp_patches(exp_patches: list[str]) -> list[str | None]:
+    """Resolve exp_patch sentinels: "auto" → detect from branch, "none" → None.
+
+    Raises ValueError if "auto" is used but no CL is found on the current branch.
+    """
+    resolved = []
+    for p in exp_patches:
+        if p.lower() == "none":
+            resolved.append(None)
+        elif p.lower() == "auto":
+            detected = get_gerrit_issue_url()
+            if detected is None:
+                import subprocess as _sp
+
+                branch = (
+                    _sp.run(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        capture_output=True,
+                        text=True,
+                    ).stdout.strip()
+                    or "(unknown)"
+                )
+                raise ValueError(
+                    f"No Gerrit CL found on the current branch ({branch}).\n"
+                    f"Either:\n"
+                    f"  - pass exp_patch with an explicit CL URL\n"
+                    f'  - pass exp_patch="none" for flag-only or hash-only comparisons'
+                )
+            resolved.append(detected)
+        else:
+            resolved.append(p)
+    return resolved
+
+
 def create_pinpoint_jobs(
     benchmarks: list[str],
     configurations: list[str],
@@ -288,7 +322,7 @@ def create_pinpoint_jobs(
     base_git_hash: str | None = None,
     exp_git_hash: str | None = None,
     base_patch: str | None = None,
-    exp_patches: list[str | None] | None = None,
+    exp_patches: list[str | None],
     base_js_flags: str | None = None,
     exp_js_flags_list: list[str | None] | None = None,
     repeat: int = 100,
@@ -301,6 +335,9 @@ def create_pinpoint_jobs(
     """Shared core for creating Pinpoint A/B jobs.
 
     Creates one job per combination of configuration × benchmark × exp_patch × exp_js_flags.
+
+    exp_patches: list of resolved patch URLs or None entries.  Callers should
+    use resolve_exp_patches() first to handle "auto"/"none" sentinels.
 
     Callbacks (optional, used by CLI for terminal output):
       on_auto_hash(cfg, commit, build_num):  called when a git hash is auto-detected
@@ -320,11 +357,6 @@ def create_pinpoint_jobs(
             pairs.append(pinpoint.BENCHMARK_ALIASES[b])
         else:
             pairs.append((b, story))
-
-    # Auto-detect exp-patch from current git branch when not provided
-    if exp_patches is None:
-        detected = get_gerrit_issue_url()
-        exp_patches = [detected]  # None is valid (job with no patch)
 
     if exp_js_flags_list is None:
         exp_js_flags_list = [None]
@@ -435,12 +467,12 @@ def _format_job_detail(j: dict) -> str:
 def pinpoint_create_job(
     benchmark: str = "js3 sp3",
     configuration: str = "m1",
+    exp_patch: str = "auto",
     story: str | None = None,
     story_tags: str | None = None,
     base_git_hash: str | None = None,
     exp_git_hash: str | None = None,
     base_patch: str | None = None,
-    exp_patch: str | None = None,
     base_js_flags: str | None = None,
     exp_js_flags: str | None = None,
     repeat: int = 100,
@@ -455,7 +487,6 @@ def pinpoint_create_job(
       - benchmark="js3" configuration="m4" → js3 on m4
     Do NOT manually look up git hashes, Gerrit CL URLs, or build status —
     the tool handles all of that automatically:
-      - exp_patch: auto-detected from the current git branch's Gerrit CL
       - base/exp git hash: auto-resolved to the latest cached CI build
       - benchmark/story: resolved from aliases (js3, sp3, js2)
     If chat notifications are configured, jobs are automatically watched.
@@ -468,12 +499,16 @@ def pinpoint_create_job(
                       "linux" → linux-r350-perf
                       "m1"    → mac-m1_mini_2020-perf
                       "m4"    → mac-m4-mini-perf
+    exp_patch:      REQUIRED — experiment patch. One of:
+                      "auto"  → auto-detect from the current git branch's Gerrit CL
+                                (fails if no CL is found)
+                      "none"  → no patch (for flag-only or hash-only comparisons)
+                      "<url>" → explicit Gerrit CL URL, change ID, or crrev/c/N
     story:          story within the benchmark (overrides alias default)
     story_tags:     comma-separated story tags to select stories
     base_git_hash:  git hash for the base build (default: auto-detected latest CI build)
     exp_git_hash:   git hash for the experiment build (default: auto-detected latest CI build)
     base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
-    exp_patch:      Gerrit patch for experiment — auto-detected from current git branch if omitted
     base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
     exp_js_flags:   V8 flags for experiment, same format
     repeat:         number of bot runs per variant (default: 100)
@@ -487,7 +522,7 @@ def pinpoint_create_job(
         base_git_hash=base_git_hash,
         exp_git_hash=exp_git_hash,
         base_patch=base_patch,
-        exp_patches=[exp_patch],
+        exp_patches=resolve_exp_patches([exp_patch]),
         base_js_flags=base_js_flags,
         exp_js_flags_list=[exp_js_flags],
         repeat=repeat,

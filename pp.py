@@ -27,20 +27,20 @@ from tools import (
     _fetch_jobs_list,
     chat_notify_watching,
     create_pinpoint_jobs,
-    get_gerrit_issue_url,
+    resolve_exp_patches,
     pinpoint_show_results,
 )
 
 # ── ANSI colors (no-ops when not a TTY) ───────────────────────────────────────
 
 if sys.stdout.isatty():
-    _BOLD   = "\033[1m"
-    _DIM    = "\033[2m"
-    _RED    = "\033[31m"
-    _GREEN  = "\033[32m"
+    _BOLD = "\033[1m"
+    _DIM = "\033[2m"
+    _RED = "\033[31m"
+    _GREEN = "\033[32m"
     _YELLOW = "\033[33m"
-    _CYAN   = "\033[36m"
-    _RESET  = "\033[0m"
+    _CYAN = "\033[36m"
+    _RESET = "\033[0m"
 else:
     _BOLD = _DIM = _RED = _GREEN = _YELLOW = _CYAN = _RESET = ""
 
@@ -57,10 +57,10 @@ def _status_color(status: str) -> str:
 
 
 _JSON_RE = re.compile(
-    r'("(?:[^"\\]|\\.)*")\s*:'          # key
-    r'|("(?:[^"\\]|\\.)*")'             # string value
-    r'|(true|false|null)'               # boolean / null
-    r'|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)'  # number
+    r'("(?:[^"\\]|\\.)*")\s*:'  # key
+    r'|("(?:[^"\\]|\\.)*")'  # string value
+    r"|(true|false|null)"  # boolean / null
+    r"|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)"  # number
 )
 
 
@@ -88,11 +88,17 @@ def _colorize_results(text: str) -> str:
 
     def _color_pct(m: re.Match) -> str:
         val = m.group(0)
-        return f"{_GREEN}{val}{_RESET}" if val.startswith("+") else f"{_RED}{val}{_RESET}"
+        return (
+            f"{_GREEN}{val}{_RESET}" if val.startswith("+") else f"{_RED}{val}{_RESET}"
+        )
 
     out = []
     for line in text.splitlines():
-        if line.startswith("base:") or line.startswith("exp:") or line.startswith("unit:"):
+        if (
+            line.startswith("base:")
+            or line.startswith("exp:")
+            or line.startswith("unit:")
+        ):
             key, _, rest = line.partition(":")
             out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
         elif re.fullmatch(r"-+", line):
@@ -110,6 +116,7 @@ def _colorize_results(text: str) -> str:
 
 # ── Output helpers ─────────────────────────────────────────────────────────────
 
+
 def _out(result) -> None:
     if isinstance(result, str):
         print(result)
@@ -118,6 +125,7 @@ def _out(result) -> None:
 
 
 # ── Command handlers ───────────────────────────────────────────────────────────
+
 
 def _print_job(j: dict) -> None:
     url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.get('job_id')}{_RESET}"
@@ -130,27 +138,27 @@ def _print_job(j: dict) -> None:
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
     fields = [
-        ("user",          j.get("user")),
+        ("user", j.get("user")),
         ("configuration", j.get("configuration")),
-        ("benchmark",     j.get("benchmark")),
-        ("story",         j.get("story")),
-        ("mode",          j.get("comparison_mode")),
-        ("base",          j.get("base_git_hash")),
-        ("end",           j.get("end_git_hash")),
-        ("patch",         patch_url),
-        ("base-flags",    j.get("base_extra_args")),
-        ("exp-flags",     j.get("experiment_extra_args")),
-        ("diffs",         j.get("difference_count")),
-        ("bug",           j.get("bug_id")),
-        ("results",       j.get("results_url")),
-        ("exception",     j.get("exception")),
+        ("benchmark", j.get("benchmark")),
+        ("story", j.get("story")),
+        ("mode", j.get("comparison_mode")),
+        ("base", j.get("base_git_hash")),
+        ("end", j.get("end_git_hash")),
+        ("patch", patch_url),
+        ("base-flags", j.get("base_extra_args")),
+        ("exp-flags", j.get("experiment_extra_args")),
+        ("diffs", j.get("difference_count")),
+        ("bug", j.get("bug_id")),
+        ("results", j.get("results_url")),
+        ("exception", j.get("exception")),
     ]
     w = max((len(k) for k, v in fields if v is not None), default=0)
     for key, val in fields:
         if val is None:
             continue
         if key == "patch":
-            subject_str = f"  {_BOLD}\"{patch_subject}\"{_RESET}" if patch_subject else ""
+            subject_str = f'  {_BOLD}"{patch_subject}"{_RESET}' if patch_subject else ""
             val_str = f"{_CYAN}{val}{_RESET}{subject_str}"
         elif key == "results":
             val_str = f"{_CYAN}{val}{_RESET}"
@@ -168,6 +176,7 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
     import concurrent.futures
+
     jobs = _fetch_jobs_list(count=args.count, user=args.user, filter=args.filter)
     if not jobs:
         print("No jobs found.")
@@ -175,10 +184,12 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
     patches = [j.get("experiment_patch") or "" for j in jobs]
     with concurrent.futures.ThreadPoolExecutor() as ex:
-        subjects = list(ex.map(
-            lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
-            patches,
-        ))
+        subjects = list(
+            ex.map(
+                lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
+                patches,
+            )
+        )
 
     for j, subject in zip(jobs, subjects):
         created = (j.get("created") or "")[:16].replace("T", " ")
@@ -194,10 +205,12 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
         label = f"{benchmark} / {story}".strip(" /")
         diff_str = f"  {_YELLOW}diffs={diff}{_RESET}" if diff is not None else ""
-        print(f"{_DIM}{created}{_RESET}  {_status_color(f'{status:<12}')}  {_CYAN}{url}{_RESET}")
+        print(
+            f"{_DIM}{created}{_RESET}  {_status_color(f'{status:<12}')}  {_CYAN}{url}{_RESET}"
+        )
         print(f"  {_DIM}{config_}{_RESET}  {_BOLD}{label}{_RESET}{diff_str}")
         if patch:
-            subject_str = f"  {_BOLD}\"{subject}\"{_RESET}" if subject else ""
+            subject_str = f'  {_BOLD}"{subject}"{_RESET}' if subject else ""
             print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}{subject_str}")
         if base_flags:
             print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
@@ -206,17 +219,17 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         print()
 
 
-
 def _cmd_show_results(args: argparse.Namespace) -> None:
     for i, url in enumerate(args.job_urls):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        result = pinpoint_show_results(url, show_all=args.show_all, use_cas=args.use_cas)
+        result = pinpoint_show_results(
+            url, show_all=args.show_all, use_cas=args.use_cas
+        )
         if isinstance(result, str):
             print(_colorize_results(result))
         else:
             _out(result)
-
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
@@ -230,20 +243,24 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
                 raise ValueError(f"Unknown template {t!r}. Known: {known}")
         benchmarks = list(args.template)
 
-    # Resolve exp-patch: use explicit value, or let create_pinpoint_jobs auto-detect
-    if args.exp_patch:
-        exp_patches = args.exp_patch
-    else:
-        detected = get_gerrit_issue_url()
-        if detected:
-            print(f"{_DIM}autodetected exp-patch: {detected} (from current branch){_RESET}")
-        exp_patches = [detected]  # None is valid (job with no patch)
+    # Resolve exp-patch: explicit values, or default to "auto" (detect from branch)
+    raw_patches = args.exp_patch or ["auto"]
+    exp_patches = resolve_exp_patches(raw_patches)
+    for raw, resolved in zip(raw_patches, exp_patches):
+        if raw.lower() == "auto" and resolved:
+            print(
+                f"{_DIM}autodetected exp-patch: {resolved} (from current branch){_RESET}"
+            )
 
     def on_auto_hash(cfg, commit, build_num_or_err):
         if commit:
-            print(f"{_DIM}using latest build: {commit[:12]} ({cfg}, build #{build_num_or_err}){_RESET}")
+            print(
+                f"{_DIM}using latest build: {commit[:12]} ({cfg}, build #{build_num_or_err}){_RESET}"
+            )
         else:
-            print(f"{_YELLOW}warning: could not fetch latest build for {cfg}: {build_num_or_err}{_RESET}")
+            print(
+                f"{_YELLOW}warning: could not fetch latest build for {cfg}: {build_num_or_err}{_RESET}"
+            )
 
     def on_job_created(index, total, combo, job):
         cfg_name, bench, story, exp_patch, exp_js_flags = combo
@@ -251,17 +268,22 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             print(f"{_DIM}{'─' * 60}{_RESET}")
         if total > 1:
             parts = [cfg_name, bench]
-            if story:        parts.append(story)
-            if exp_patch:    parts.append(exp_patch)
-            if exp_js_flags: parts.append(f"flags:{exp_js_flags}")
-            print(f"{_DIM}[{index+1}/{total}] {' / '.join(parts)}{_RESET}")
+            if story:
+                parts.append(story)
+            if exp_patch:
+                parts.append(exp_patch)
+            if exp_js_flags:
+                parts.append(f"flags:{exp_js_flags}")
+            print(f"{_DIM}[{index + 1}/{total}] {' / '.join(parts)}{_RESET}")
         if job.get("job_id"):
             _print_job(job)
         else:
             _out(job)
 
     def on_watching(url):
-        print(f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion.")
+        print(
+            f"{_GREEN}Watching{_RESET} {url.split('/')[-1]} — you'll be notified on completion."
+        )
 
     create_pinpoint_jobs(
         benchmarks=benchmarks,
@@ -283,8 +305,6 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
     )
 
 
-
-
 def _cmd_watch(args: argparse.Namespace) -> None:
     if not daemon.is_running():
         daemon.start_background()
@@ -297,6 +317,7 @@ def _cmd_watch(args: argparse.Namespace) -> None:
 
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     import signal
+
     if not daemon.is_running():
         print(f"{_YELLOW}Daemon is not running.{_RESET}")
         return
@@ -320,16 +341,23 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
     print(f"  {_DIM}Google user ID:{_RESET} {user_id}")
 
     print("Finding DM space with the bot...")
-    print(f"  {_DIM}(In Google Chat, search for \"v8-utils-pinpoint\" and send it a message first.){_RESET}")
+    print(
+        f'  {_DIM}(In Google Chat, search for "v8-utils-pinpoint" and send it a message first.){_RESET}'
+    )
     space = chat.find_dm_space(cfg.chat_service_account_email, user_id)
     print(f"  {_DIM}space:{_RESET} {space}")
 
     config.update_chat_app_space(space)
-    chat.notify(space, cfg.chat_service_account_email,
-                "👋 v8-utils notifications are set up. You'll be notified here when your Pinpoint jobs complete.")
+    chat.notify(
+        space,
+        cfg.chat_service_account_email,
+        "👋 v8-utils notifications are set up. You'll be notified here when your Pinpoint jobs complete.",
+    )
     print(f"{_GREEN}Done.{_RESET} Written to {config.CONFIG_PATH}")
     if daemon.is_running():
-        print(f"{_YELLOW}Note:{_RESET} restart the daemon so it picks up the new config:")
+        print(
+            f"{_YELLOW}Note:{_RESET} restart the daemon so it picks up the new config:"
+        )
         print(f"  pp daemon-stop && pp watch <job_url>")
 
 
@@ -338,9 +366,18 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:
-    os.execvp("uv", ["uv", "tool", "install",
-                     "git+https://github.com/schuay/v8-utils.git", "--reinstall",
-                     "--index-url", "https://pypi.org/simple/"])
+    os.execvp(
+        "uv",
+        [
+            "uv",
+            "tool",
+            "install",
+            "git+https://github.com/schuay/v8-utils.git",
+            "--reinstall",
+            "--index-url",
+            "https://pypi.org/simple/",
+        ],
+    )
 
 
 def _cmd_logs(args: argparse.Namespace) -> None:
@@ -356,83 +393,183 @@ def _cmd_logs(args: argparse.Namespace) -> None:
 
 def main() -> None:
     import logging
+
     parser = argparse.ArgumentParser(prog="pp", description="Pinpoint CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
     # show-job
     p = sub.add_parser("show-job", help="Show details of a Pinpoint job")
-    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
+    p.add_argument(
+        "job_urls",
+        nargs="+",
+        metavar="job_url",
+        help="Pinpoint job URL(s) or job ID(s)",
+    )
     p.set_defaults(func=_cmd_show_job)
 
     # list-jobs
     p = sub.add_parser("list-jobs", help="List recent Pinpoint jobs for a user")
-    p.add_argument("-n", "--count", type=int, default=20, metavar="N",
-                   help="Number of jobs (default: 20)")
-    p.add_argument("-u", "--user", default=None,
-                   help="User email (default: current luci-auth user)")
-    p.add_argument("-f", "--filter", default=None, metavar="KEY=VALUE",
-                   help='Client-side filter, e.g. "status=Completed", "comparison_mode=try", '
-                        '"patch=1234567" (any Gerrit URL form accepted)')
+    p.add_argument(
+        "-n",
+        "--count",
+        type=int,
+        default=20,
+        metavar="N",
+        help="Number of jobs (default: 20)",
+    )
+    p.add_argument(
+        "-u",
+        "--user",
+        default=None,
+        help="User email (default: current luci-auth user)",
+    )
+    p.add_argument(
+        "-f",
+        "--filter",
+        default=None,
+        metavar="KEY=VALUE",
+        help='Client-side filter, e.g. "status=Completed", "comparison_mode=try", '
+        '"patch=1234567" (any Gerrit URL form accepted)',
+    )
     p.set_defaults(func=_cmd_list_jobs)
 
     # show-results
     p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
-    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
-    p.add_argument("--show-all", action="store_true",
-                   help="Include non-significant results")
-    p.add_argument("--use-cas", action="store_true", dest="use_cas",
-                   help="Fetch raw per-run data from CAS isolates for richer sub-metrics "
-                        "(Score/First/Average/Worst4 per story). Slower than the default "
-                        "scraping path and requires: gcloud auth application-default login")
+    p.add_argument(
+        "job_urls",
+        nargs="+",
+        metavar="job_url",
+        help="Pinpoint job URL(s) or job ID(s)",
+    )
+    p.add_argument(
+        "--show-all", action="store_true", help="Include non-significant results"
+    )
+    p.add_argument(
+        "--use-cas",
+        action="store_true",
+        dest="use_cas",
+        help="Fetch raw per-run data from CAS isolates for richer sub-metrics "
+        "(Score/First/Average/Worst4 per story). Slower than the default "
+        "scraping path and requires: gcloud auth application-default login",
+    )
     p.set_defaults(func=_cmd_show_results)
 
     # create-job
     _template_names = ", ".join(pinpoint.BENCHMARK_ALIASES)
     p = sub.add_parser("create-job", help="Create one or more Pinpoint A/B try jobs")
-    p.add_argument("-t", "--template", nargs="+", metavar="TEMPLATE",
-                   default=["js3", "sp3"],
-                   help=f"Benchmark template(s) (default: js3 sp3): {_template_names}")
-    p.add_argument("-b", "--benchmark", default=None,
-                   help="Benchmark name or alias (alternative to -t)")
-    p.add_argument("-c", "--configuration", nargs="+", metavar="CONFIG",
-                   default=["m1"],
-                   help='Bot config(s) or alias(es) (default: m1)')
-    p.add_argument("-s", "--story", default=None,
-                   help="Story within the benchmark (only with -b)")
-    p.add_argument("--story-tags", default=None, dest="story_tags",
-                   help="Comma-separated story tags")
-    p.add_argument("--base-git-hash", default=None, dest="base_git_hash",
-                   help="Base git hash (default: latest cached CI build)")
-    p.add_argument("--exp-git-hash", default=None, dest="exp_git_hash",
-                   help="Experiment git hash (default: latest cached CI build)")
-    p.add_argument("--base-patch", default=None, dest="base_patch",
-                   help="Gerrit patch for base (change ID, crrev/c/N, or URL)")
-    p.add_argument("--exp-patch", nargs="+", default=None, dest="exp_patch", metavar="PATCH",
-                   help="Gerrit patch(es) for experiment")
-    p.add_argument("--base-js-flags", default=None, dest="base_js_flags",
-                   help='V8 flags for base, e.g. "--turbofan"')
-    p.add_argument("--exp-js-flags", nargs="+", default=None, dest="exp_js_flags", metavar="FLAGS",
-                   help="V8 flag set(s) for experiment")
-    p.add_argument("-r", "--repeat", type=int, default=100,
-                   help="Bot runs per variant (default: 100)")
-    p.add_argument("--bug-id", type=int, default=None, dest="bug_id",
-                   help="Buganizer issue ID")
-    p.add_argument("-w", "--watch", action="store_true", default=None,
-                   help="Watch created job(s) and notify on completion "
-                        "(default: on when chat integration is configured)")
+    p.add_argument(
+        "-t",
+        "--template",
+        nargs="+",
+        metavar="TEMPLATE",
+        default=["js3", "sp3"],
+        help=f"Benchmark template(s) (default: js3 sp3): {_template_names}",
+    )
+    p.add_argument(
+        "-b",
+        "--benchmark",
+        default=None,
+        help="Benchmark name or alias (alternative to -t)",
+    )
+    p.add_argument(
+        "-c",
+        "--configuration",
+        nargs="+",
+        metavar="CONFIG",
+        default=["m1"],
+        help="Bot config(s) or alias(es) (default: m1)",
+    )
+    p.add_argument(
+        "-s", "--story", default=None, help="Story within the benchmark (only with -b)"
+    )
+    p.add_argument(
+        "--story-tags",
+        default=None,
+        dest="story_tags",
+        help="Comma-separated story tags",
+    )
+    p.add_argument(
+        "--base-git-hash",
+        default=None,
+        dest="base_git_hash",
+        help="Base git hash (default: latest cached CI build)",
+    )
+    p.add_argument(
+        "--exp-git-hash",
+        default=None,
+        dest="exp_git_hash",
+        help="Experiment git hash (default: latest cached CI build)",
+    )
+    p.add_argument(
+        "--base-patch",
+        default=None,
+        dest="base_patch",
+        help="Gerrit patch for base (change ID, crrev/c/N, or URL)",
+    )
+    p.add_argument(
+        "--exp-patch",
+        nargs="+",
+        default=None,
+        dest="exp_patch",
+        metavar="PATCH",
+        help="Gerrit patch(es) for experiment. "
+        '"auto" (default) detects from current branch; '
+        '"none" for flag/hash-only comparisons',
+    )
+    p.add_argument(
+        "--base-js-flags",
+        default=None,
+        dest="base_js_flags",
+        help='V8 flags for base, e.g. "--turbofan"',
+    )
+    p.add_argument(
+        "--exp-js-flags",
+        nargs="+",
+        default=None,
+        dest="exp_js_flags",
+        metavar="FLAGS",
+        help="V8 flag set(s) for experiment",
+    )
+    p.add_argument(
+        "-r",
+        "--repeat",
+        type=int,
+        default=100,
+        help="Bot runs per variant (default: 100)",
+    )
+    p.add_argument(
+        "--bug-id", type=int, default=None, dest="bug_id", help="Buganizer issue ID"
+    )
+    p.add_argument(
+        "-w",
+        "--watch",
+        action="store_true",
+        default=None,
+        help="Watch created job(s) and notify on completion "
+        "(default: on when chat integration is configured)",
+    )
     p.set_defaults(func=_cmd_create_job)
 
     # watch
     p = sub.add_parser("watch", help="Notify via webhook when a job completes")
-    p.add_argument("job_urls", nargs="+", metavar="job_url", help="Pinpoint job URL(s) or job ID(s)")
+    p.add_argument(
+        "job_urls",
+        nargs="+",
+        metavar="job_url",
+        help="Pinpoint job URL(s) or job ID(s)",
+    )
     p.set_defaults(func=_cmd_watch)
 
     # chat-setup
-    p = sub.add_parser("chat-setup", help="Authenticate with Google Chat for direct notifications")
+    p = sub.add_parser(
+        "chat-setup", help="Authenticate with Google Chat for direct notifications"
+    )
     p.set_defaults(func=_cmd_chat_setup)
 
     # config
-    p = sub.add_parser("config", help=f"Print a config template (write to {config.CONFIG_PATH})")
+    p = sub.add_parser(
+        "config", help=f"Print a config template (write to {config.CONFIG_PATH})"
+    )
     p.set_defaults(func=_cmd_config)
 
     # upgrade
@@ -448,8 +585,12 @@ def main() -> None:
     p.add_argument("-f", "--follow", action="store_true", help="Follow log output")
     p.set_defaults(func=_cmd_logs)
 
-    parser.add_argument("-v", "--verbose", action="store_true",
-                        help="Enable verbose logging (useful for debugging --use-cas)")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (useful for debugging --use-cas)",
+    )
 
     args = parser.parse_args()
     logging.basicConfig(
@@ -460,6 +601,7 @@ def main() -> None:
         for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
     import changelog
+
     changelog.show_unseen()
 
     try:
