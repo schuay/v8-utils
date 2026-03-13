@@ -235,12 +235,12 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
     else:
         detected = get_gerrit_issue_url()
         if detected:
-            print(f"{_DIM}exp-patch: {detected} (from current branch){_RESET}")
+            print(f"{_DIM}autodetected exp-patch: {detected} (from current branch){_RESET}")
         exp_patches = [detected]  # None is valid (job with no patch)
 
     def on_auto_hash(cfg, commit, build_num_or_err):
         if commit:
-            print(f"{_DIM}git hash ({cfg}): {commit[:12]} (build #{build_num_or_err}){_RESET}")
+            print(f"{_DIM}using latest build: {commit[:12]} ({cfg}, build #{build_num_or_err}){_RESET}")
         else:
             print(f"{_YELLOW}warning: could not fetch latest build for {cfg}: {build_num_or_err}{_RESET}")
 
