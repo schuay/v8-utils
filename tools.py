@@ -706,18 +706,35 @@ def repo_grep(
     if glob:
         cmd.extend(["--", glob])
 
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=30, cwd=root)
-    if r.returncode == 1:
-        return "No matches found."
-    if r.returncode not in (0, 1):
-        raise ValueError(f"git grep failed: {r.stderr.strip()[:500]}")
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=root,
+    )
+    collected: list[str] = []
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            collected.append(line.rstrip("\n"))
+            if len(collected) >= limit + 1:
+                proc.kill()
+                break
+    finally:
+        proc.wait()
 
-    lines = r.stdout.splitlines()
-    if len(lines) > limit:
-        result = "\n".join(lines[:limit])
-        result += f"\n(truncated — showing first {limit} of {len(lines)} matches)"
+    if not collected and proc.returncode == 1:
+        return "No matches found."
+    if not collected and proc.returncode not in (0, 1, -9):
+        stderr = proc.stderr.read() if proc.stderr else ""
+        raise ValueError(f"git grep failed: {stderr.strip()[:500]}")
+
+    if len(collected) > limit:
+        result = "\n".join(collected[:limit])
+        result += f"\n(truncated — showing first {limit} matches)"
     else:
-        result = "\n".join(lines)
+        result = "\n".join(collected)
     return result
 
 
