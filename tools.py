@@ -12,13 +12,8 @@ import pinpoint
 mcp = FastMCP("v8-utils")
 
 
-@mcp.tool()
-def pinpoint_show_job(job_url: str) -> dict:
-    """Fetch and display key information about a Pinpoint job.
-
-    job_url: Pinpoint job URL or job ID, e.g.
-             https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
-    """
+def _fetch_job_detail(job_url: str) -> dict:
+    """Fetch job details as a dict (internal helper)."""
     job_id = pinpoint.job_id_from_url(job_url)
     data = pinpoint.fetch_job(job_id)
     args = data.get("arguments", {})
@@ -44,8 +39,25 @@ def pinpoint_show_job(job_url: str) -> dict:
         "bug_id":                data.get("bug_id"),
         "results_url":           data.get("results_url"),
     }
-    # Drop null fields to keep output compact
     return {k: v for k, v in result.items() if v is not None}
+
+
+@mcp.tool()
+def pinpoint_show_job(job_url: str) -> str:
+    """Fetch and display key information about a Pinpoint job.
+
+    job_url: Pinpoint job URL or job ID, e.g.
+             https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+    """
+    return _format_job_detail(_fetch_job_detail(job_url))
+
+
+def _fetch_jobs_list(count: int = 20, user: str | None = None,
+                     filter: str | None = None) -> list[dict]:
+    """Fetch job list as dicts (internal helper)."""
+    if user is None:
+        user = config.load().user or pinpoint.get_current_user_email()
+    return [pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filter)]
 
 
 @mcp.tool()
@@ -53,7 +65,7 @@ def pinpoint_list_jobs(
     count: int = 20,
     user: str | None = None,
     filter: str | None = None,
-) -> list[dict]:
+) -> str:
     """List recent Pinpoint jobs for a user, newest first. CQ jobs are excluded.
 
     Requires luci-auth login when user is not specified:
@@ -66,13 +78,50 @@ def pinpoint_list_jobs(
               "benchmark=jetstream2"
               "configuration=linux-r350-perf"
               "comparison_mode=try"
-
-    Each entry includes job_id, url, name, status, created, configuration,
-    benchmark, story, base/experiment patch and extra_args, difference_count.
     """
-    if user is None:
-        user = config.load().user or pinpoint.get_current_user_email()
-    return [pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filter)]
+    jobs = _fetch_jobs_list(count, user, filter)
+    if not jobs:
+        return "No jobs found."
+    return _format_job_list(jobs)
+
+
+def _format_job_list(jobs: list[dict]) -> str:
+    """Format job list as compact text (mirrors pp's list-jobs output)."""
+    import concurrent.futures
+
+    patches = [j.get("experiment_patch") or "" for j in jobs]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        subjects = list(ex.map(
+            lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
+            patches,
+        ))
+
+    blocks = []
+    for j, subject in zip(jobs, subjects):
+        created = (j.get("created") or "")[:16].replace("T", " ")
+        status = j.get("status") or "?"
+        url = j.get("url") or ""
+        cfg = j.get("configuration") or ""
+        benchmark = j.get("benchmark") or ""
+        story = j.get("story") or ""
+        diff = j.get("difference_count")
+        patch = j.get("experiment_patch") or ""
+        base_flags = j.get("base_extra_args") or ""
+        exp_flags = j.get("experiment_extra_args") or ""
+
+        label = f"{benchmark} / {story}".strip(" /")
+        diff_str = f"  diffs={diff}" if diff is not None else ""
+        lines = [f"{created}  {status:<12}  {url}"]
+        lines.append(f"  {cfg}  {label}{diff_str}")
+        if patch:
+            subject_str = f'  "{subject}"' if subject else ""
+            lines.append(f"  patch:      {patch}{subject_str}")
+        if base_flags:
+            lines.append(f"  base-flags: {base_flags}")
+        if exp_flags:
+            lines.append(f"  exp-flags:  {exp_flags}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
 
 
 
@@ -291,7 +340,7 @@ def create_pinpoint_jobs(
         )
         job_url = result.get("url")
         if job_url:
-            job_detail = pinpoint_show_job(job_url)
+            job_detail = _fetch_job_detail(job_url)
             jobs.append(job_detail)
         else:
             jobs.append(result)
@@ -319,28 +368,40 @@ def create_pinpoint_jobs(
     return jobs
 
 
-def _format_jobs(jobs: list[dict]) -> str:
-    """Format job dicts as a compact text summary (like pp's terminal output)."""
-    blocks = []
-    for j in jobs:
-        created = (j.get("created") or "")[:16].replace("T", " ")
-        status = j.get("status") or "?"
-        url = j.get("url") or ""
-        lines = [f"{created}  {status}  {url}"]
-        fields = [
-            ("configuration", j.get("configuration")),
-            ("benchmark",     j.get("benchmark")),
-            ("story",         j.get("story")),
-            ("patch",         j.get("experiment_patch")),
-            ("base-flags",    j.get("base_extra_args")),
-            ("exp-flags",     j.get("experiment_extra_args")),
-        ]
-        w = max((len(k) for k, v in fields if v), default=0)
-        for key, val in fields:
-            if val:
-                lines.append(f"  {key:<{w}}  {val}")
-        blocks.append("\n".join(lines))
-    return "\n\n".join(blocks)
+def _format_job_detail(j: dict) -> str:
+    """Format a job dict as compact text (mirrors pp's _print_job without ANSI)."""
+    created = (j.get("created") or "")[:16].replace("T", " ")
+    status = j.get("status") or "?"
+    url = j.get("url") or ""
+
+    patch_url = j.get("experiment_patch")
+    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+
+    lines = [f"{created}  {status}  {url}"]
+    fields = [
+        ("user",          j.get("user")),
+        ("configuration", j.get("configuration")),
+        ("benchmark",     j.get("benchmark")),
+        ("story",         j.get("story")),
+        ("mode",          j.get("comparison_mode")),
+        ("base",          j.get("base_git_hash")),
+        ("end",           j.get("end_git_hash")),
+        ("patch",         patch_url),
+        ("base-flags",    j.get("base_extra_args")),
+        ("exp-flags",     j.get("experiment_extra_args")),
+        ("diffs",         j.get("difference_count")),
+        ("bug",           j.get("bug_id")),
+        ("results",       j.get("results_url")),
+        ("exception",     j.get("exception")),
+    ]
+    w = max((len(k) for k, v in fields if v is not None), default=0)
+    for key, val in fields:
+        if val is None:
+            continue
+        if key == "patch" and patch_subject:
+            val = f'{val}  "{patch_subject}"'
+        lines.append(f"  {key:<{w}}  {val}")
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -405,7 +466,7 @@ def pinpoint_create_job(
         repeat=repeat,
         bug_id=bug_id,
     )
-    return _format_jobs(jobs)
+    return "\n\n".join(_format_job_detail(j) for j in jobs)
 
 
 # ── jsb tools ────────────────────────────────────────────────────────────────

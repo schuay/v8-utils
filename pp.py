@@ -23,11 +23,11 @@ import daemon
 import pinpoint
 
 from tools import (
+    _fetch_job_detail,
+    _fetch_jobs_list,
     chat_notify_watching,
     create_pinpoint_jobs,
     get_gerrit_issue_url,
-    pinpoint_list_jobs,
-    pinpoint_show_job,
     pinpoint_show_results,
 )
 
@@ -163,12 +163,12 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
     for i, url in enumerate(args.job_urls):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        _print_job(pinpoint_show_job(url))
+        _print_job(_fetch_job_detail(url))
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
     import concurrent.futures
-    jobs = pinpoint_list_jobs(count=args.count, user=args.user, filter=args.filter)
+    jobs = _fetch_jobs_list(count=args.count, user=args.user, filter=args.filter)
     if not jobs:
         print("No jobs found.")
         return
