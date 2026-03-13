@@ -541,6 +541,7 @@ def jsb_run_bench(
     runs: int = 5,
     suite: str = "js3",
     perf: bool = False,
+    perf_upload: bool = False,
 ) -> str:
     """Run a JetStream2/3 story with one or more d8 builds and return scores.
 
@@ -549,9 +550,10 @@ def jsb_run_bench(
               ["release-main", "release-lto:--turbolev-future"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
-    perf:   if True, record a perf trace instead of running for scores.
-            Requires exactly one build.  Returns the perf.data path for
-            use with perf_hotspots, perf_annotate, etc.
+    perf:   if True, record a local perf trace (no upload) instead of
+            running for scores.  Requires exactly one build.  Returns the
+            perf.data path for use with perf_hotspots, perf_annotate, etc.
+    perf_upload: like perf, but also uploads the trace via pprof.
 
     Returns a formatted comparison table with mean, stdev, and delta
     (with significance) when two variants are given.
@@ -573,11 +575,18 @@ def jsb_run_bench(
         if not d8.exists():
             raise ValueError(f"d8 not found: {d8}")
 
-    if perf:
+    if perf or perf_upload:
+        if perf and perf_upload:
+            raise ValueError("perf and perf_upload are mutually exclusive")
         if len(variants) != 1:
-            raise ValueError("perf=True requires exactly one build")
+            raise ValueError("perf/perf_upload requires exactly one build")
         return jsb_module.run_perf(
-            variants[0], suite_dir, bench, cfg.v8_out, cfg.perf_script
+            variants[0],
+            suite_dir,
+            bench,
+            cfg.v8_out,
+            cfg.perf_script,
+            upload=perf_upload,
         )
 
     results = [
