@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -15,6 +15,7 @@ _XSSI = ")]}'\n"
 
 
 # ── URL parsing ───────────────────────────────────────────────────────────────
+
 
 def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
     """Parse a Gerrit change URL into (api_base, project, change_id, patchset).
@@ -42,6 +43,7 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
+
 def _get(api_base: str, path: str) -> dict | list:
     """GET against the Gerrit REST API, with auth upgrade on 401."""
     r = httpx.get(f"{api_base}{path}", timeout=30)
@@ -52,11 +54,12 @@ def _get(api_base: str, path: str) -> dict | list:
     r.raise_for_status()
     text = r.text
     if text.startswith(_XSSI):
-        text = text[len(_XSSI):]
+        text = text[len(_XSSI) :]
     return json.loads(text)
 
 
 # ── Comments ──────────────────────────────────────────────────────────────────
+
 
 def comments(change_url: str) -> list[dict]:
     """Return all published comments on a CL, as a flat list of threads.
@@ -64,8 +67,9 @@ def comments(change_url: str) -> list[dict]:
     Each thread has: file, line, patch_set, author, message, replies[].
     Threads are sorted by file then line.
     """
-    api_base, _, change_id, _ = _parse_change_url(change_url)
-    data: dict = _get(api_base, f"/changes/{change_id}/comments")
+    api_base, project, change_id, _ = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    data: dict = _get(api_base, f"/changes/{cid}/comments")
 
     # Build id → comment map
     by_id: dict[str, dict] = {}
@@ -81,16 +85,16 @@ def comments(change_url: str) -> list[dict]:
             key=lambda c: c.get("updated", ""),
         )
         return {
-            "file":       root["_file"],
-            "line":       root.get("line"),
-            "patch_set":  root.get("patch_set"),
+            "file": root["_file"],
+            "line": root.get("line"),
+            "patch_set": root.get("patch_set"),
             "unresolved": root.get("unresolved", False),
-            "author":     root.get("author", {}).get("email", "unknown"),
-            "message":    root.get("message", ""),
-            "updated":    root.get("updated", ""),
+            "author": root.get("author", {}).get("email", "unknown"),
+            "message": root.get("message", ""),
+            "updated": root.get("updated", ""),
             "replies": [
                 {
-                    "author":  r.get("author", {}).get("email", "unknown"),
+                    "author": r.get("author", {}).get("email", "unknown"),
                     "message": r.get("message", ""),
                     "updated": r.get("updated", ""),
                 }
@@ -105,9 +109,11 @@ def comments(change_url: str) -> list[dict]:
 
 # ── Fetch ref ─────────────────────────────────────────────────────────────────
 
-def _latest_patchset(api_base: str, change_id: str) -> str:
+
+def _latest_patchset(api_base: str, change_id: str, project: str = "") -> str:
     """Return the latest patchset number for a change."""
-    data = _get(api_base, f"/changes/{change_id}?o=CURRENT_REVISION")
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    data = _get(api_base, f"/changes/{cid}?o=CURRENT_REVISION")
     current = data.get("current_revision", "")
     revisions = data.get("revisions", {})
     if current and current in revisions:
@@ -156,29 +162,33 @@ def fetch_ref(
     api_base, project, change_id, patchset = _parse_change_url(change_url)
 
     if not patchset:
-        patchset = _latest_patchset(api_base, change_id)
+        patchset = _latest_patchset(api_base, change_id, project)
 
     last_two = change_id[-2:].zfill(2)
     ref = f"refs/changes/{last_two}/{change_id}/{patchset}"
     remote = _git_remote_url(api_base, project)
 
     result: dict = {
-        "ref":        ref,
-        "remote":     remote,
-        "patchset":   patchset,
+        "ref": ref,
+        "remote": remote,
+        "patchset": patchset,
         "fetch_head": None,
     }
 
     if fetch:
         r = subprocess.run(
             ["git", "fetch", remote, ref],
-            capture_output=True, text=True, cwd=repo_path,
+            capture_output=True,
+            text=True,
+            cwd=repo_path,
         )
         if r.returncode != 0:
             raise RuntimeError(f"git fetch failed: {r.stderr.strip()}")
         head = subprocess.run(
             ["git", "rev-parse", "FETCH_HEAD"],
-            capture_output=True, text=True, cwd=repo_path,
+            capture_output=True,
+            text=True,
+            cwd=repo_path,
         )
         result["fetch_head"] = head.stdout.strip()
 

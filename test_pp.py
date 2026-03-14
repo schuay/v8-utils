@@ -57,11 +57,11 @@ class TestParseChangePatchset:
 class TestGerritChangeIdFromUrl:
     def test_canonical_url_with_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
-        assert _gerrit_change_id_from_url(url) == "1234567"
+        assert _gerrit_change_id_from_url(url) == "v8%2Fv8~1234567"
 
     def test_canonical_url_without_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
-        assert _gerrit_change_id_from_url(url) == "1234567"
+        assert _gerrit_change_id_from_url(url) == "v8%2Fv8~1234567"
 
     def test_short_url(self):
         url = "https://chromium-review.googlesource.com/1234567"
@@ -90,14 +90,18 @@ class TestExtractChangeId:
         assert _extract_change_id("1234567/3") == "1234567"
 
     def test_full_gerrit_url(self):
-        assert _extract_change_id(
-            "https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
-        ) == "1234567"
+        assert (
+            _extract_change_id(
+                "https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+            )
+            == "1234567"
+        )
 
     def test_short_gerrit_url(self):
-        assert _extract_change_id(
-            "https://chromium-review.googlesource.com/1234567"
-        ) == "1234567"
+        assert (
+            _extract_change_id("https://chromium-review.googlesource.com/1234567")
+            == "1234567"
+        )
 
     def test_crrev_url(self):
         assert _extract_change_id("https://crrev.com/c/1234567/3") == "1234567"
@@ -136,8 +140,13 @@ class TestJobIdFromUrl:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _make_job(status="Completed", benchmark="speedometer3", configuration="linux-r350-perf",
-              comparison_mode="try", experiment_patch=None):
+def _make_job(
+    status="Completed",
+    benchmark="speedometer3",
+    configuration="linux-r350-perf",
+    comparison_mode="try",
+    experiment_patch=None,
+):
     return {
         "status": status,
         "configuration": configuration,
@@ -163,7 +172,9 @@ class TestJobMatchesFilter:
         assert not _job_matches_filter(_make_job(status="Failed"), "status=Completed")
 
     def test_benchmark_match(self):
-        assert _job_matches_filter(_make_job(benchmark="speedometer3"), "benchmark=speedometer3")
+        assert _job_matches_filter(
+            _make_job(benchmark="speedometer3"), "benchmark=speedometer3"
+        )
 
     def test_configuration_match(self):
         assert _job_matches_filter(
@@ -171,7 +182,9 @@ class TestJobMatchesFilter:
         )
 
     def test_comparison_mode_match(self):
-        assert _job_matches_filter(_make_job(comparison_mode="try"), "comparison_mode=try")
+        assert _job_matches_filter(
+            _make_job(comparison_mode="try"), "comparison_mode=try"
+        )
 
     def test_patch_bare_id_matches_full_url(self):
         job = _make_job(
@@ -180,7 +193,9 @@ class TestJobMatchesFilter:
         assert _job_matches_filter(job, "patch=1234567")
 
     def test_patch_full_url_matches_bare_id(self):
-        job = _make_job(experiment_patch="https://chromium-review.googlesource.com/1234567")
+        job = _make_job(
+            experiment_patch="https://chromium-review.googlesource.com/1234567"
+        )
         url_filter = "patch=https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
         assert _job_matches_filter(job, url_filter)
 
@@ -216,7 +231,9 @@ class TestFormatResultsForChat:
         }
 
     def test_no_significant_results(self):
-        text = daemon._format_results_for_chat([self._row("m", 1, 2, significant=False)])
+        text = daemon._format_results_for_chat(
+            [self._row("m", 1, 2, significant=False)]
+        )
         assert "No statistically significant" in text
 
     def test_improvement_gets_green(self):
@@ -285,8 +302,11 @@ class TestMessageText:
 
     def test_results_appended(self):
         row = {
-            "name": "Score", "base_mean": 100, "exp_mean": 80,
-            "unit": "ms_smallerIsBetter", "significant": True,
+            "name": "Score",
+            "base_mean": 100,
+            "exp_mean": 80,
+            "unit": "ms_smallerIsBetter",
+            "significant": True,
         }
         text = daemon._message_text(self._job(), results=[row])
         assert "Results" in text

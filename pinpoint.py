@@ -24,6 +24,7 @@ _LOGIN_INSTRUCTIONS = (
 
 # ── LUCI auth ─────────────────────────────────────────────────────────────────
 
+
 def _luci_run(command: str) -> str:
     """Run a luci-auth subcommand and return stdout, or raise ValueError."""
     try:
@@ -65,7 +66,9 @@ def get_auth_headers(email: str | None = None) -> dict[str, str]:
         cmd = ["luci-auth", "token"]
         if email:
             cmd += ["-email", email]
-        token = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True).strip()
+        token = subprocess.check_output(
+            cmd, stderr=subprocess.STDOUT, text=True
+        ).strip()
         return {"Authorization": f"Bearer {token}"}
     except (subprocess.CalledProcessError, FileNotFoundError):
         return {}
@@ -79,6 +82,7 @@ def user_email_variants(email: str) -> list[str]:
 
 
 # ── Gerrit patch resolver ──────────────────────────────────────────────────────
+
 
 def _parse_change_patchset(path: str) -> tuple[str, str | None] | None:
     """Extract (change_id, patchset) from a path segment like /CHANGE[/PATCHSET].
@@ -108,7 +112,7 @@ def resolve_patch(patch: str) -> str:
     def _resolve_change_id(change_id: str, patchset: str | None) -> str:
         r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
-        text = r.text[r.text.find("{"):]  # strip Gerrit's XSSI prefix ")]}'"
+        text = r.text[r.text.find("{") :]  # strip Gerrit's XSSI prefix ")]}'"
         project = json.loads(text)["project"]
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
         return f"{url}/{patchset}" if patchset else url
@@ -154,7 +158,11 @@ def resolve_patch(patch: str) -> str:
 
 
 def _gerrit_change_id_from_url(url: str) -> str | None:
-    """Extract a Gerrit change ID from any supported URL format, or return None."""
+    """Extract a Gerrit change ID from any supported URL format, or return None.
+
+    Returns "project~change_id" when the project is present in the URL
+    (e.g. /c/v8/v8/+/123), or bare "change_id" otherwise.
+    """
     parsed = urlparse(url)
     if parsed.hostname != "chromium-review.googlesource.com":
         return None
@@ -162,8 +170,15 @@ def _gerrit_change_id_from_url(url: str) -> str | None:
     path = parsed.path
     plus_idx = path.find("/+/")
     if plus_idx != -1:
-        result = _parse_change_patchset(path[plus_idx + 3:])
-        return result[0] if result else None
+        result = _parse_change_patchset(path[plus_idx + 3 :])
+        if not result:
+            return None
+        # Extract project from /c/PROJECT/+/...
+        project_seg = path[:plus_idx].lstrip("/")
+        if project_seg.startswith("c/"):
+            project_seg = project_seg[2:]
+        project = project_seg.strip("/").replace("/", "%2F") if project_seg else None
+        return f"{project}~{result[0]}" if project else result[0]
     # Short: /CHANGE[/PATCHSET]
     result = _parse_change_patchset(path)
     return result[0] if result else None
@@ -182,7 +197,7 @@ def _extract_change_id(patch: str) -> str | None:
         path = parsed.path
         if "chromium-review.googlesource.com" in host:
             plus_idx = path.find("/+/")
-            seg = path[plus_idx + 3:] if plus_idx != -1 else path
+            seg = path[plus_idx + 3 :] if plus_idx != -1 else path
             result = _parse_change_patchset(seg)
             return result[0] if result else None
         if "crrev.com" in host:
@@ -207,13 +222,14 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
     try:
         r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
-        text = r.text[r.text.find("{"):]
+        text = r.text[r.text.find("{") :]
         return json.loads(text).get("subject")
     except Exception:
         return None
 
 
 # ── Job listing ───────────────────────────────────────────────────────────────
+
 
 def job_id_from_url(job_url: str) -> str:
     """Extract the job ID from a Pinpoint job URL, or return the input unchanged."""
@@ -223,7 +239,9 @@ def job_id_from_url(job_url: str) -> str:
 
 def fetch_job(job_id: str) -> dict[str, Any]:
     """Fetch raw job JSON from the Pinpoint API."""
-    r = httpx.get(f"{_PINPOINT_BASE}/api/job/{job_id}", follow_redirects=True, timeout=30)
+    r = httpx.get(
+        f"{_PINPOINT_BASE}/api/job/{job_id}", follow_redirects=True, timeout=30
+    )
     r.raise_for_status()
     return r.json()
 
@@ -257,15 +275,17 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
         return needle == change_id if change_id else needle in stored.lower()
 
     field = {
-        "status":          job.get("status", ""),
-        "benchmark":       args.get("benchmark", ""),
-        "configuration":   job.get("configuration", ""),
+        "status": job.get("status", ""),
+        "benchmark": args.get("benchmark", ""),
+        "configuration": job.get("configuration", ""),
         "comparison_mode": job.get("comparison_mode", ""),
     }.get(key, "")
     return value.lower() in field.lower()
 
 
-def _fetch_jobs_for_email(email: str, count: int, extra_filter: str | None) -> list[dict]:
+def _fetch_jobs_for_email(
+    email: str, count: int, extra_filter: str | None
+) -> list[dict]:
     """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API."""
     matched: list[dict] = []
     seen_ids: set[str] = set()
@@ -273,8 +293,10 @@ def _fetch_jobs_for_email(email: str, count: int, extra_filter: str | None) -> l
 
     while len(matched) < count:
         r = httpx.get(
-            f"{_PINPOINT_BASE}/api/jobs", params=params,
-            follow_redirects=True, timeout=30,
+            f"{_PINPOINT_BASE}/api/jobs",
+            params=params,
+            follow_redirects=True,
+            timeout=30,
         )
         r.raise_for_status()
         data = r.json()
@@ -286,7 +308,11 @@ def _fetch_jobs_for_email(email: str, count: int, extra_filter: str | None) -> l
                 seen_ids.add(j["job_id"])
                 matched.append(j)
         next_cursor = data.get("next_cursor")
-        if not data.get("next") or not next_cursor or next_cursor == params.get("next_cursor"):
+        if (
+            not data.get("next")
+            or not next_cursor
+            or next_cursor == params.get("next_cursor")
+        ):
             break
         params["next_cursor"] = next_cursor
 
@@ -301,7 +327,9 @@ def fetch_jobs(user: str, count: int, filter_str: str | None = None) -> list[dic
     """
     seen_ids: set[str] = set()
     all_jobs: list[dict] = []
-    for jobs in [_fetch_jobs_for_email(e, count, filter_str) for e in user_email_variants(user)]:
+    for jobs in [
+        _fetch_jobs_for_email(e, count, filter_str) for e in user_email_variants(user)
+    ]:
         for j in jobs:
             if j["job_id"] not in seen_ids:
                 seen_ids.add(j["job_id"])
@@ -314,24 +342,25 @@ def summarise_job(j: dict) -> dict:
     """Extract the key fields from a raw job dict."""
     args = j.get("arguments", {})
     return {
-        "job_id":                j.get("job_id"),
-        "url":                   f"{_PINPOINT_BASE}/job/{j.get('job_id')}",
-        "name":                  j.get("name"),
-        "status":                j.get("status"),
-        "created":               j.get("created"),
-        "configuration":         j.get("configuration"),
-        "benchmark":             args.get("benchmark"),
-        "story":                 args.get("story"),
-        "base_git_hash":         args.get("base_git_hash"),
-        "experiment_patch":      args.get("experiment_patch"),
-        "base_extra_args":       args.get("base_extra_args"),
+        "job_id": j.get("job_id"),
+        "url": f"{_PINPOINT_BASE}/job/{j.get('job_id')}",
+        "name": j.get("name"),
+        "status": j.get("status"),
+        "created": j.get("created"),
+        "configuration": j.get("configuration"),
+        "benchmark": args.get("benchmark"),
+        "story": args.get("story"),
+        "base_git_hash": args.get("base_git_hash"),
+        "experiment_patch": args.get("experiment_patch"),
+        "base_extra_args": args.get("base_extra_args"),
         "experiment_extra_args": args.get("experiment_extra_args"),
-        "difference_count":      j.get("difference_count"),
-        "exception":             j.get("exception"),
+        "difference_count": j.get("difference_count"),
+        "exception": j.get("exception"),
     }
 
 
 # ── Histogram parsing ─────────────────────────────────────────────────────────
+
 
 def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
     """Fetch and parse histogram entries for a completed Pinpoint job.
@@ -355,14 +384,17 @@ def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
     # If this ever starts failing, switch to CAS: each bot run stores a CAS
     # isolate with the raw crossbench output (requires gcloud ADC + cas CLI).
     comments = re.findall(r"<!--(.*?)-->", r.text, re.DOTALL)
-    data_block = next((c for c in reversed(comments) if c.lstrip().startswith("{")), None)
+    data_block = next(
+        (c for c in reversed(comments) if c.lstrip().startswith("{")), None
+    )
     if not data_block:
         raise ValueError("Could not find histogram data block in results page")
 
     entries = [json.loads(line) for line in data_block.splitlines() if line.strip()]
     guids = {
         e["guid"]: e["values"][0] if len(e["values"]) == 1 else e["values"]
-        for e in entries if e.get("type") == "GenericSet"
+        for e in entries
+        if e.get("type") == "GenericSet"
     }
     histograms = [e for e in entries if "name" in e and "unit" in e]
     return histograms, guids
@@ -370,7 +402,9 @@ def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
 
 def _collect_groups(histograms: list[dict], guids: dict) -> dict[tuple[str, str], dict]:
     """Group histogram sample values by (metric_name, label)."""
-    groups: dict[tuple[str, str], dict] = defaultdict(lambda: {"unit": None, "values": []})
+    groups: dict[tuple[str, str], dict] = defaultdict(
+        lambda: {"unit": None, "values": []}
+    )
     for h in histograms:
         diag = h.get("diagnostics", {})
         label = guids.get(diag.get("labels"), diag.get("labels", "unknown"))
@@ -382,9 +416,9 @@ def _collect_groups(histograms: list[dict], guids: dict) -> dict[tuple[str, str]
 
 def _value_stats(vals: list[float]) -> dict:
     return {
-        "mean":  statistics.mean(vals) if vals else None,
+        "mean": statistics.mean(vals) if vals else None,
         "stdev": statistics.stdev(vals) if len(vals) > 1 else None,
-        "n":     len(vals),
+        "n": len(vals),
     }
 
 
@@ -398,6 +432,7 @@ def _apply_fdr(rows: list[dict], alpha: float = 0.05) -> list[dict]:
     not significant and excluded from the correction.
     """
     import math
+
     if not rows:
         return rows
 
@@ -449,18 +484,20 @@ def pivot_results(job_id: str) -> list[dict]:
             base_label, exp_label = label_b, label_a
 
         base_vals = by_label[base_label]["values"]
-        exp_vals  = by_label[exp_label]["values"]
+        exp_vals = by_label[exp_label]["values"]
         p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
 
-        rows.append({
-            "name":        name,
-            "unit":        by_label[base_label]["unit"],
-            "base_label":  base_label,
-            **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
-            "exp_label":   exp_label,
-            **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
-            "p_value":     p,
-        })
+        rows.append(
+            {
+                "name": name,
+                "unit": by_label[base_label]["unit"],
+                "base_label": base_label,
+                **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
+                "exp_label": exp_label,
+                **{f"exp_{k}": v for k, v in _value_stats(exp_vals).items()},
+                "p_value": p,
+            }
+        )
     return _apply_fdr(rows)
 
 
@@ -477,23 +514,27 @@ def fetch_raw_values(job_id: str) -> list[dict]:
         label_guid = diag.get("labels", "unknown")
         label = guids.get(label_guid, label_guid)
         for value in h.get("sampleValues", []):
-            rows.append({
-                "metric": h["name"],
-                "label":  label,
-                "run_id": label_guid,
-                "unit":   h["unit"],
-                "value":  value,
-            })
+            rows.append(
+                {
+                    "metric": h["name"],
+                    "label": label,
+                    "run_id": label_guid,
+                    "unit": h["unit"],
+                    "value": value,
+                }
+            )
     return rows
 
 
 # ── CAS data access ───────────────────────────────────────────────────────────
 
+
 def fetch_job_state(job_id: str) -> list[dict]:
     """Return the job's 'state' list (base/experiment variants with attempts)."""
     r = httpx.get(
         f"{_PINPOINT_BASE}/api/job/{job_id}?o=STATE",
-        follow_redirects=True, timeout=120,
+        follow_redirects=True,
+        timeout=120,
     )
     r.raise_for_status()
     return r.json().get("state", [])
@@ -505,6 +546,7 @@ def _extract_cas_digests(state: list[dict]) -> tuple[list[str], list[str]]:
     state[0] = base variant, state[1] = experiment.
     Each attempt's CAS digest lives at executions[1].details[key="isolate"].
     """
+
     def _digests(variant: dict) -> list[str]:
         out = []
         for attempt in variant.get("attempts", []):
@@ -518,13 +560,13 @@ def _extract_cas_digests(state: list[dict]) -> tuple[list[str], list[str]]:
         return out
 
     base = _digests(state[0]) if len(state) > 0 else []
-    exp  = _digests(state[1]) if len(state) > 1 else []
+    exp = _digests(state[1]) if len(state) > 1 else []
     return base, exp
 
 
 _BENCHMARK_TO_PROBE: dict[str, str] = {
     "jetstream-main.crossbench": "jetstream_main.json",
-    "jetstream2.crossbench":     "jetstream2.json",
+    "jetstream2.crossbench": "jetstream2.json",
 }
 
 
@@ -542,7 +584,8 @@ def _parse_perf_results(raw: bytes) -> tuple[list[dict], dict] | None:
         return None
     guids = {
         e["guid"]: e["values"][0] if len(e["values"]) == 1 else e["values"]
-        for e in entries if e.get("type") == "GenericSet"
+        for e in entries
+        if e.get("type") == "GenericSet"
     }
     histograms = [e for e in entries if "name" in e and "unit" in e]
     return (histograms, guids) if histograms else None
@@ -563,7 +606,9 @@ def _parse_crossbench_probe(raw: bytes) -> dict[str, list[float]] | None:
         if not isinstance(browser_data, dict):
             continue
         for key, entry in browser_data.get("data", {}).items():
-            vals = [float(v) for v in entry.get("values", []) if isinstance(v, (int, float))]
+            vals = [
+                float(v) for v in entry.get("values", []) if isinstance(v, (int, float))
+            ]
             if vals:
                 result[key] = vals
     return result or None
@@ -584,7 +629,9 @@ def pivot_results_cas(job_id: str) -> list[dict]:
 
     job = fetch_job(job_id)
     if job.get("status") != "Completed":
-        raise ValueError(f"Job is not completed (status: {job.get('status', 'Unknown')})")
+        raise ValueError(
+            f"Job is not completed (status: {job.get('status', 'Unknown')})"
+        )
 
     benchmark = job.get("arguments", {}).get("benchmark", "")
     probe_filename = _BENCHMARK_TO_PROBE.get(benchmark)
@@ -603,8 +650,10 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     n_base = len(base_digests)
 
     try:
-        blobs = cas_api.fetch_probe_files(all_digests, ["perf_results.json", probe_filename])
-        perf_blobs  = blobs["perf_results.json"]
+        blobs = cas_api.fetch_probe_files(
+            all_digests, ["perf_results.json", probe_filename]
+        )
+        perf_blobs = blobs["perf_results.json"]
         probe_blobs = blobs[probe_filename]
     except PermissionError as e:
         raise PermissionError(
@@ -615,7 +664,7 @@ def pivot_results_cas(job_id: str) -> list[dict]:
 
     # Extract labels and units from perf_results.json
     base_label: str | None = None
-    exp_label:  str | None = None
+    exp_label: str | None = None
     units: dict[str, str] = {}
 
     for i, raw in enumerate(perf_blobs):
@@ -639,7 +688,9 @@ def pivot_results_cas(job_id: str) -> list[dict]:
                     exp_label = label
 
     # Collect values: prefer sub-metrics from probe file, fall back to perf_results
-    sub_values: dict[str, dict[bool, list[float]]] = defaultdict(lambda: {True: [], False: []})
+    sub_values: dict[str, dict[bool, list[float]]] = defaultdict(
+        lambda: {True: [], False: []}
+    )
     has_probe_data = False
 
     n_found = sum(1 for raw in probe_blobs if raw is not None)
@@ -671,26 +722,29 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     rows = []
     for name, by_side in sorted(sub_values.items()):
         base_vals = by_side[True]
-        exp_vals  = by_side[False]
+        exp_vals = by_side[False]
         if not base_vals or not exp_vals:
             continue
         # For sub-metrics like "story/SubMetric", look up "story" in units dict
         story = name.rsplit("/", 1)[0] if "/" in name else name
         unit = units.get(name) or units.get(story)
         p = float(mannwhitneyu(base_vals, exp_vals, alternative="two-sided").pvalue)
-        rows.append({
-            "name":        name,
-            "unit":        unit,
-            "base_label":  base_label or "base",
-            **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
-            "exp_label":   exp_label or "exp",
-            **{f"exp_{k}":  v for k, v in _value_stats(exp_vals).items()},
-            "p_value":     p,
-        })
+        rows.append(
+            {
+                "name": name,
+                "unit": unit,
+                "base_label": base_label or "base",
+                **{f"base_{k}": v for k, v in _value_stats(base_vals).items()},
+                "exp_label": exp_label or "exp",
+                **{f"exp_{k}": v for k, v in _value_stats(exp_vals).items()},
+                "p_value": p,
+            }
+        )
     return _apply_fdr(rows)
 
 
 # ── Build lookup ──────────────────────────────────────────────────────────────
+
 
 def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
     """Return (commit_hash, build_number) for the most recent successful CI build.
@@ -706,7 +760,9 @@ def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
         raise ValueError(_LOGIN_INSTRUCTIONS)
     r = httpx.get(
         f"{_PINPOINT_BASE}/api/builds/{configuration}",
-        headers=headers, follow_redirects=True, timeout=15,
+        headers=headers,
+        follow_redirects=True,
+        timeout=15,
     )
     r.raise_for_status()
     builds = r.json().get("builds", [])
@@ -714,7 +770,7 @@ def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
         raise ValueError(f"No recent builds found for configuration {configuration!r}")
     b = builds[0]
     commit = b.get("input", {}).get("gitilesCommit", {}).get("id", "")
-    number  = b.get("number", 0)
+    number = b.get("number", 0)
     if not commit:
         raise ValueError(f"Build {b.get('id')} has no gitilesCommit")
     return commit, number
@@ -725,16 +781,16 @@ def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
 BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
     # alias: (full benchmark name, default story)
     "js3": ("jetstream-main.crossbench", "JetStream"),
-    "js2": ("jetstream2.crossbench",     "JetStream2"),
-    "sp3": ("speedometer3.crossbench",   "Speedometer3"),
+    "js2": ("jetstream2.crossbench", "JetStream2"),
+    "sp3": ("speedometer3.crossbench", "Speedometer3"),
 }
 
 CONFIGURATION_ALIASES: dict[str, str] = {
     "linux": "linux-r350-perf",
-    "m1":    "mac-m1_mini_2020-perf",
-    "m3":    "mac-m3-pro-perf",
-    "m4":    "mac-m4-mini-perf",
-    "macm4": "mac-m4-mini-perf",   # kept for backwards compatibility
+    "m1": "mac-m1_mini_2020-perf",
+    "m3": "mac-m3-pro-perf",
+    "m4": "mac-m4-mini-perf",
+    "macm4": "mac-m4-mini-perf",  # kept for backwards compatibility
 }
 
 
@@ -761,20 +817,22 @@ def create_job(
     configuration = CONFIGURATION_ALIASES.get(configuration, configuration)
 
     payload = {
-        "comparison_mode":       "try",
-        "benchmark":             benchmark,
-        "configuration":         configuration,
-        "story":                 story,
-        "story_tags":            story_tags,
+        "comparison_mode": "try",
+        "benchmark": benchmark,
+        "configuration": configuration,
+        "story": story,
+        "story_tags": story_tags,
         "initial_attempt_count": str(repeat),
-        "bug_id":                bug_id,
-        "base_git_hash":         base_git_hash,
-        "end_git_hash":          exp_git_hash,
-        "base_patch":            resolve_patch(base_patch) if base_patch else None,
-        "experiment_patch":      resolve_patch(exp_patch) if exp_patch else None,
-        "base_extra_args":       f'--js-flags="{base_js_flags}"' if base_js_flags else None,
-        "experiment_extra_args": f'--js-flags="{exp_js_flags}"' if exp_js_flags else None,
-        "tags":                  '{"origin": "v8-utils"}',
+        "bug_id": bug_id,
+        "base_git_hash": base_git_hash,
+        "end_git_hash": exp_git_hash,
+        "base_patch": resolve_patch(base_patch) if base_patch else None,
+        "experiment_patch": resolve_patch(exp_patch) if exp_patch else None,
+        "base_extra_args": f'--js-flags="{base_js_flags}"' if base_js_flags else None,
+        "experiment_extra_args": f'--js-flags="{exp_js_flags}"'
+        if exp_js_flags
+        else None,
+        "tags": '{"origin": "v8-utils"}',
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 
@@ -792,8 +850,11 @@ def create_job(
         pass
 
     r = httpx.post(
-        f"{_PINPOINT_BASE}/api/new", data=payload,
-        headers=headers, follow_redirects=True, timeout=30,
+        f"{_PINPOINT_BASE}/api/new",
+        data=payload,
+        headers=headers,
+        follow_redirects=True,
+        timeout=30,
     )
     r.raise_for_status()
     result = r.json()
