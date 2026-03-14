@@ -31,6 +31,7 @@ ENTRIES: list[str] = [
     "*create-job* uses the latest cached CI build — no more waiting for compiles",
     "`show-results --recent N` shows results for the N most recent completed jobs",
     "`pp cancel-job` cancels one or more Pinpoint jobs",
+    "Multi-job operations _(`show-results`, `show-job`, `cancel-job`)_ now run concurrently",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

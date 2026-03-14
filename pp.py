@@ -26,6 +26,7 @@ from tools import (
     _fetch_job_detail,
     _fetch_jobs_list,
     _format_results_table,
+    _run_concurrent,
     chat_notify_watching,
     create_pinpoint_jobs,
     resolve_exp_patches,
@@ -127,6 +128,19 @@ def _out(result) -> None:
         print(_colorize_json(json.dumps(result, indent=2)))
 
 
+def _progress(label: str):
+    """Return an on_progress callback that prints a status line to stderr."""
+    if not sys.stderr.isatty():
+        return None
+
+    def _on_progress(done: int, total: int) -> None:
+        print(f"\r{_DIM}{label}... {done}/{total}{_RESET}", end="", file=sys.stderr)
+        if done == total:
+            print(f"\r{' ' * (len(label) + 12)}\r", end="", file=sys.stderr)
+
+    return _on_progress
+
+
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 
@@ -171,17 +185,19 @@ def _print_job(j: dict) -> None:
 
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
-    for i, url in enumerate(args.job_urls):
+    fns = [lambda u=u: _fetch_job_detail(u) for u in args.job_urls]
+    details = _run_concurrent(fns, _progress("Fetching jobs"))
+    for i, detail in enumerate(details):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        _print_job(_fetch_job_detail(url))
+        _print_job(detail)
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
-    for i, url in enumerate(args.job_urls):
-        if i:
-            print()
-        result = pinpoint.cancel_job(url, reason=args.reason)
+    reason = args.reason
+    fns = [lambda u=u: pinpoint.cancel_job(u, reason=reason) for u in args.job_urls]
+    results = _run_concurrent(fns, _progress("Cancelling jobs"))
+    for url, result in zip(args.job_urls, results):
         job_id = result.get("job_id", pinpoint.job_id_from_url(url))
         state = result.get("state", "unknown")
         print(f"Job {job_id}: {state}")
@@ -246,16 +262,21 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         print("No jobs specified. Use job URLs/IDs or --recent N.")
         return
 
-    multi = len(job_urls) > 1
-    for i, url in enumerate(job_urls):
+    job_ids = [pinpoint.job_id_from_url(u) for u in job_urls]
+    fns = [
+        lambda jid=jid: _format_results_table(jid, args.show_all, args.use_cas)
+        for jid in job_ids
+    ]
+    tables = _run_concurrent(fns, _progress("Fetching results"))
+
+    multi = len(job_ids) > 1
+    for i, (job_id, table) in enumerate(zip(job_ids, tables)):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        job_id = pinpoint.job_id_from_url(url)
         if multi:
             print(
                 f"{_DIM}──{_RESET} {_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}{_RESET}"
             )
-        table = _format_results_table(job_id, args.show_all, args.use_cas)
         if table is None:
             print("No results found.")
         else:

@@ -1,5 +1,7 @@
 """MCP tool definitions for v8-utils."""
 
+import concurrent.futures
+from collections.abc import Callable
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -13,6 +15,34 @@ import perf as perf_tools
 import pinpoint
 
 mcp = FastMCP("v8-utils")
+
+
+def _run_concurrent(
+    fns: list[Callable[[], object]],
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list:
+    """Run callables concurrently, returning results in input order.
+
+    on_progress(done, total) is called after each completion.
+    Ctrl-C cancels pending futures and re-raises KeyboardInterrupt.
+    """
+    if len(fns) <= 1:
+        return [fn() for fn in fns]
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        future_to_idx = {ex.submit(fn): i for i, fn in enumerate(fns)}
+        results = [None] * len(fns)
+        try:
+            done = 0
+            for future in concurrent.futures.as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+                done += 1
+                if on_progress:
+                    on_progress(done, len(fns))
+        except KeyboardInterrupt:
+            ex.shutdown(wait=False, cancel_futures=True)
+            raise
+    return results
 
 
 def _text_result(text: str) -> CallToolResult:
@@ -281,14 +311,19 @@ def pinpoint_show_results(
     if not job_ids:
         return _text_result("Provide a job_url or use recent=N.")
 
+    fns = [
+        lambda jid=jid: _format_results_table(jid, show_all, use_cas) for jid in job_ids
+    ]
+    tables = _run_concurrent(fns)
+
+    multi = len(job_ids) > 1
     blocks = []
-    for job_id in job_ids:
+    for job_id, table in zip(job_ids, tables):
         header = f"── https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}"
-        table = _format_results_table(job_id, show_all, use_cas)
         if table is None:
             blocks.append(f"{header}\nNo results found.")
         else:
-            blocks.append(f"{header}\n{table}" if len(job_ids) > 1 else table)
+            blocks.append(f"{header}\n{table}" if multi else table)
     return _text_result("\n\n".join(blocks))
 
 
