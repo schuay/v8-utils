@@ -744,7 +744,8 @@ def run_d8(
     if len(out) > _MAX_D8_OUTPUT:
         out = (
             out[:_MAX_D8_OUTPUT]
-            + f"\n[truncated — {len(out) - _MAX_D8_OUTPUT:,} more chars]"
+            + f"\n\n[truncated — {len(out) - _MAX_D8_OUTPUT:,} more chars. "
+            "Use stdout_file/stderr_file to redirect large output to a file.]"
         )
     return _text_result(out)
 
