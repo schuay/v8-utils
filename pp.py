@@ -174,6 +174,16 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
         _print_job(_fetch_job_detail(url))
 
 
+def _cmd_cancel_job(args: argparse.Namespace) -> None:
+    for i, url in enumerate(args.job_urls):
+        if i:
+            print()
+        result = pinpoint.cancel_job(url, reason=args.reason)
+        job_id = result.get("job_id", pinpoint.job_id_from_url(url))
+        state = result.get("state", "unknown")
+        print(f"Job {job_id}: {state}")
+
+
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
     import concurrent.futures
 
@@ -423,6 +433,21 @@ def main() -> None:
         help="Pinpoint job URL(s) or job ID(s)",
     )
     p.set_defaults(func=_cmd_show_job)
+
+    # cancel-job
+    p = sub.add_parser("cancel-job", help="Cancel one or more Pinpoint jobs")
+    p.add_argument(
+        "job_urls",
+        nargs="+",
+        metavar="job_url",
+        help="Pinpoint job URL(s) or job ID(s)",
+    )
+    p.add_argument(
+        "--reason",
+        default="Cancelled",
+        help='Cancellation reason (default: "Cancelled")',
+    )
+    p.set_defaults(func=_cmd_cancel_job)
 
     # list-jobs
     p = sub.add_parser("list-jobs", help="List recent Pinpoint jobs for a user")

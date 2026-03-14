@@ -67,6 +67,22 @@ def pinpoint_show_job(job_url: str) -> CallToolResult:
     return _text_result(_format_job_detail(_fetch_job_detail(job_url)))
 
 
+@mcp.tool()
+def pinpoint_cancel_job(
+    job_url: str,
+    reason: str = "Cancelled",
+) -> CallToolResult:
+    """Cancel a Pinpoint job. Requires luci-auth login.
+
+    job_url: Pinpoint job URL or job ID
+    reason:  cancellation reason (default: "Cancelled")
+    """
+    result = pinpoint.cancel_job(job_url, reason)
+    job_id = result.get("job_id", pinpoint.job_id_from_url(job_url))
+    state = result.get("state", "unknown")
+    return _text_result(f"Job {job_id}: {state}")
+
+
 def _fetch_jobs_list(
     count: int = 20, user: str | None = None, filter: str | None = None
 ) -> list[dict]:

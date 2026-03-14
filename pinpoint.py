@@ -794,6 +794,23 @@ CONFIGURATION_ALIASES: dict[str, str] = {
 }
 
 
+def cancel_job(job_url: str, reason: str = "Cancelled") -> dict:
+    """Cancel a Pinpoint job. Requires luci-auth login."""
+    job_id = job_id_from_url(job_url)
+    headers = get_auth_headers()
+    if not headers:
+        raise ValueError(_LOGIN_INSTRUCTIONS)
+    r = httpx.post(
+        f"{_PINPOINT_BASE}/api/job/cancel",
+        data={"job_id": job_id, "reason": reason},
+        headers=headers,
+        follow_redirects=True,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()
+
+
 def create_job(
     benchmark: str,
     configuration: str,
