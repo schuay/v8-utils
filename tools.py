@@ -89,28 +89,42 @@ def _fetch_job_detail(job_url: str) -> dict:
 
 @mcp.tool()
 def pinpoint_show_job(job_url: str) -> CallToolResult:
-    """Fetch and display key information about a Pinpoint job.
+    """Fetch and display key information about one or more Pinpoint jobs.
 
-    job_url: Pinpoint job URL or job ID, e.g.
+    job_url: space-separated Pinpoint job URL(s) or job ID(s), e.g.
              https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
     """
-    return _text_result(_format_job_detail(_fetch_job_detail(job_url)))
+    urls = job_url.split()
+    if not urls:
+        return _text_result("No job URLs provided.")
+    fns = [lambda u=u: _format_job_detail(_fetch_job_detail(u)) for u in urls]
+    details = _run_concurrent(fns)
+    return _text_result("\n\n".join(details))
 
 
 @mcp.tool()
 def pinpoint_cancel_job(
-    job_url: str,
+    job_urls: str,
     reason: str = "Cancelled",
 ) -> CallToolResult:
-    """Cancel a Pinpoint job. Requires luci-auth login.
+    """Cancel one or more Pinpoint jobs. Requires luci-auth login.
 
-    job_url: Pinpoint job URL or job ID
-    reason:  cancellation reason (default: "Cancelled")
+    job_urls: space-separated Pinpoint job URL(s) or job ID(s)
+    reason:   cancellation reason (default: "Cancelled")
     """
-    result = pinpoint.cancel_job(job_url, reason)
-    job_id = result.get("job_id", pinpoint.job_id_from_url(job_url))
-    state = result.get("state", "unknown")
-    return _text_result(f"Job {job_id}: {state}")
+    urls = job_urls.split()
+    if not urls:
+        return _text_result("No job URLs provided.")
+
+    def cancel(url: str) -> str:
+        result = pinpoint.cancel_job(url, reason)
+        job_id = result.get("job_id", pinpoint.job_id_from_url(url))
+        state = result.get("state", "unknown")
+        return f"Job {job_id}: {state}"
+
+    fns = [lambda u=u: cancel(u) for u in urls]
+    results = _run_concurrent(fns)
+    return _text_result("\n".join(results))
 
 
 def _fetch_jobs_list(
@@ -294,7 +308,7 @@ def pinpoint_show_results(
     significance marker. Sorted by %change descending.
 
     show_all: if False (default), only show statistically significant results.
-    job_url:  Pinpoint job URL or job ID
+    job_url:  space-separated Pinpoint job URL(s) or job ID(s)
     use_cas:  if True, fetch raw per-run values from CAS isolates instead of
               the histogram HTML. Slower but surfaces richer sub-metrics for
               JetStream (Score, First, Average, Worst4 per story).
@@ -304,7 +318,7 @@ def pinpoint_show_results(
     """
     job_ids: list[str] = []
     if job_url:
-        job_ids.append(pinpoint.job_id_from_url(job_url))
+        job_ids.extend(pinpoint.job_id_from_url(u) for u in job_url.split())
     if recent:
         jobs = _fetch_jobs_list(count=recent, filter="status=Completed")
         job_ids.extend(j["job_id"] for j in jobs)
