@@ -30,6 +30,7 @@ ENTRIES: list[str] = [
     # 644b010 — latest cached CI build
     "*create-job* uses the latest cached CI build — no more waiting for compiles",
     "`show-results --recent N` shows results for the N most recent completed jobs",
+    "`pp cancel-job` cancels one or more Pinpoint jobs",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
