@@ -185,22 +185,40 @@ def _print_job(j: dict) -> None:
 
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
-    fns = [lambda u=u: _fetch_job_detail(u) for u in args.job_urls]
+    def fetch(u: str):
+        try:
+            return _fetch_job_detail(u)
+        except Exception as e:
+            return f"Error fetching {u}: {e}"
+
+    fns = [lambda u=u: fetch(u) for u in args.job_urls]
     details = _run_concurrent(fns, _progress("Fetching jobs"))
     for i, detail in enumerate(details):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        _print_job(detail)
+        if isinstance(detail, str):
+            print(detail)
+        else:
+            _print_job(detail)
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
     reason = args.reason
-    fns = [lambda u=u: pinpoint.cancel_job(u, reason=reason) for u in args.job_urls]
+
+    def cancel(url: str) -> str:
+        try:
+            result = pinpoint.cancel_job(url, reason=reason)
+            job_id = result.get("job_id", pinpoint.job_id_from_url(url))
+            state = result.get("state", "unknown")
+            return f"Job {job_id}: {state}"
+        except Exception as e:
+            job_id = pinpoint.job_id_from_url(url)
+            return f"Job {job_id}: Error: {e}"
+
+    fns = [lambda u=u: cancel(u) for u in args.job_urls]
     results = _run_concurrent(fns, _progress("Cancelling jobs"))
-    for url, result in zip(args.job_urls, results):
-        job_id = result.get("job_id", pinpoint.job_id_from_url(url))
-        state = result.get("state", "unknown")
-        print(f"Job {job_id}: {state}")
+    for line in results:
+        print(line)
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:

@@ -97,7 +97,14 @@ def pinpoint_show_job(job_url: str) -> CallToolResult:
     urls = job_url.split()
     if not urls:
         return _text_result("No job URLs provided.")
-    fns = [lambda u=u: _format_job_detail(_fetch_job_detail(u)) for u in urls]
+
+    def fetch(u: str) -> str:
+        try:
+            return _format_job_detail(_fetch_job_detail(u))
+        except Exception as e:
+            return f"Error fetching {u}: {e}"
+
+    fns = [lambda u=u: fetch(u) for u in urls]
     details = _run_concurrent(fns)
     return _text_result("\n\n".join(details))
 
@@ -117,10 +124,14 @@ def pinpoint_cancel_job(
         return _text_result("No job URLs provided.")
 
     def cancel(url: str) -> str:
-        result = pinpoint.cancel_job(url, reason)
-        job_id = result.get("job_id", pinpoint.job_id_from_url(url))
-        state = result.get("state", "unknown")
-        return f"Job {job_id}: {state}"
+        try:
+            result = pinpoint.cancel_job(url, reason)
+            job_id = result.get("job_id", pinpoint.job_id_from_url(url))
+            state = result.get("state", "unknown")
+            return f"Job {job_id}: {state}"
+        except Exception as e:
+            job_id = pinpoint.job_id_from_url(url)
+            return f"Job {job_id}: Error: {e}"
 
     fns = [lambda u=u: cancel(u) for u in urls]
     results = _run_concurrent(fns)
@@ -203,12 +214,19 @@ def _format_job_list(jobs: list[dict]) -> str:
 
 
 def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | None:
-    """Format a results table for a single job. Returns None if no results."""
-    all_rows = (
-        pinpoint.pivot_results_cas(job_id)
-        if use_cas
-        else pinpoint.pivot_results(job_id)
-    )
+    """Format a results table for a single job. Returns None if no results.
+
+    Returns an error string (not raises) on failure so multi-job batches
+    can continue.
+    """
+    try:
+        all_rows = (
+            pinpoint.pivot_results_cas(job_id)
+            if use_cas
+            else pinpoint.pivot_results(job_id)
+        )
+    except Exception as e:
+        return f"Error: {e}"
     if not all_rows:
         return None
 

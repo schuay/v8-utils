@@ -388,7 +388,11 @@ def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
         (c for c in reversed(comments) if c.lstrip().startswith("{")), None
     )
     if not data_block:
-        raise ValueError("Could not find histogram data block in results page")
+        raise ValueError(
+            "Results page has no histogram data yet. "
+            "This usually means Pinpoint is still generating results — "
+            "try again in a few minutes, or use use_cas=True to fetch raw data from CAS."
+        )
 
     entries = [json.loads(line) for line in data_block.splitlines() if line.strip()]
     guids = {
