@@ -672,6 +672,83 @@ def pinpoint_create_job(
     return _text_result("\n\n".join(_format_job_detail(j) for j in jobs))
 
 
+# ── d8 ───────────────────────────────────────────────────────────────────────
+
+_MAX_D8_OUTPUT = 50_000
+
+
+@mcp.tool()
+def run_d8(
+    args: list[str],
+    build: str | None = None,
+    cwd: str | None = None,
+    timeout: int = 60,
+    stdout_file: str | None = None,
+    stderr_file: str | None = None,
+) -> CallToolResult:
+    """Run the d8 JavaScript shell with the given arguments.
+
+    args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
+    build:       build directory name under v8_out (default: config default_build)
+    cwd:         working directory for d8 (default: v8_out parent)
+    timeout:     max seconds before killing the process (default: 60)
+    stdout_file: redirect stdout to this file path instead of capturing
+    stderr_file: redirect stderr to this file path instead of capturing
+    """
+    import subprocess
+
+    cfg = config.load()
+    build = build or cfg.default_build
+    d8 = cfg.v8_out / build / "d8"
+    if not d8.exists():
+        raise ValueError(f"d8 not found: {d8}")
+
+    cmd = [str(d8), *args]
+    stdout = open(stdout_file, "w") if stdout_file else subprocess.PIPE
+    stderr = open(stderr_file, "w") if stderr_file else subprocess.PIPE
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=stdout,
+            stderr=stderr,
+            text=True,
+            timeout=timeout,
+            errors="replace",
+            cwd=cwd,
+        )
+    except subprocess.TimeoutExpired:
+        return _text_result(f"Error: d8 timed out after {timeout}s")
+    except Exception as e:
+        return _text_result(f"Error: {e}")
+    finally:
+        if stdout_file:
+            stdout.close()
+        if stderr_file:
+            stderr.close()
+
+    parts: list[str] = []
+    if stdout_file:
+        parts.append(f"[stdout → {stdout_file}]")
+    elif result.stdout:
+        parts.append(result.stdout)
+    if stderr_file:
+        parts.append(f"[stderr → {stderr_file}]")
+    elif result.stderr:
+        parts.append("[stderr]\n" + result.stderr)
+    if result.returncode not in (0, 1):
+        parts.append(f"[exit {result.returncode}]")
+
+    out = "\n".join(parts).strip()
+    if not out:
+        out = "(no output)"
+    if len(out) > _MAX_D8_OUTPUT:
+        out = (
+            out[:_MAX_D8_OUTPUT]
+            + f"\n[truncated — {len(out) - _MAX_D8_OUTPUT:,} more chars]"
+        )
+    return _text_result(out)
+
+
 # ── jsb tools ────────────────────────────────────────────────────────────────
 
 
