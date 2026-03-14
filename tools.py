@@ -859,6 +859,7 @@ def repo_read(
     path: str,
     offset: int = 0,
     limit: int = _MAX_READ_LINES,
+    ref: str | None = None,
 ) -> CallToolResult:
     """Read a file from a related source repo.
 
@@ -866,6 +867,8 @@ def repo_read(
     path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
     offset: 0-based line offset to start reading from (default: 0)
     limit:  max lines to return (default: 2000)
+    ref:    git ref to read from (e.g. commit hash, branch, tag).
+            If omitted, reads from the working tree.
 
     Configure repo paths in ~/.config/v8-utils/config.toml:
       jsc_dir          = "~/WebKit/Source/JavaScriptCore"
@@ -873,15 +876,30 @@ def repo_read(
       js3_dir          = "~/JetStream3"
       spidermonkey_dir = "~/gecko-dev/js/src"
     """
-    root = _resolve_repo(repo)
-    target = (root / path).resolve()
-    # Prevent path traversal outside repo root
-    if not str(target).startswith(str(root)):
-        raise ValueError(f"Path escapes repo root: {path}")
-    if not target.is_file():
-        raise ValueError(f"File not found: {path} (in {root})")
+    import subprocess
 
-    lines = target.read_text(errors="replace").splitlines()
+    root = _resolve_repo(repo)
+
+    if ref:
+        proc = subprocess.run(
+            ["git", "show", f"{ref}:{path}"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+        if proc.returncode != 0:
+            raise ValueError(
+                f"git show {ref}:{path} failed: {proc.stderr.strip()[:500]}"
+            )
+        lines = proc.stdout.splitlines()
+    else:
+        target = (root / path).resolve()
+        # Prevent path traversal outside repo root
+        if not str(target).startswith(str(root)):
+            raise ValueError(f"Path escapes repo root: {path}")
+        if not target.is_file():
+            raise ValueError(f"File not found: {path} (in {root})")
+        lines = target.read_text(errors="replace").splitlines()
     total = len(lines)
     selected = lines[offset : offset + limit]
     result = "\n".join(f"{i + offset + 1:6}\t{line}" for i, line in enumerate(selected))
@@ -897,6 +915,7 @@ def repo_grep(
     glob: str | None = None,
     context: int = 0,
     limit: int = _MAX_GREP_MATCHES,
+    ref: str | None = None,
 ) -> CallToolResult:
     """Search for a pattern in a related source repo using git grep.
 
@@ -905,6 +924,8 @@ def repo_grep(
     glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"
     context: lines of context around each match (default: 0)
     limit:   max matches to return (default: 100)
+    ref:     git ref to search in (e.g. commit hash, branch, tag).
+             If omitted, searches the working tree.
 
     Configure repo paths in ~/.config/v8-utils/config.toml:
       jsc_dir          = "~/WebKit/Source/JavaScriptCore"
@@ -918,6 +939,8 @@ def repo_grep(
     cmd = ["git", "grep", "-n", "--no-color", "-E", pattern]
     if context > 0:
         cmd.extend([f"-C{context}"])
+    if ref:
+        cmd.append(ref)
     if glob:
         cmd.extend(["--", glob])
 
