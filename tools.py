@@ -213,10 +213,31 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     units = sorted({r["unit"] for r in rows if r.get("unit")})
     unit_line = "unit: " + ",  ".join(fmt_unit(u) for u in units)
 
+    # Fetch job details for richer header
+    try:
+        job = _fetch_job_detail(job_id)
+    except Exception:
+        job = {}
+    patch_url = job.get("experiment_patch")
+    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+    base_flags = job.get("base_extra_args")
+    exp_flags = job.get("experiment_extra_args")
+
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
     lines = [
         f"base: {rows[0]['base_label']}",
         f"exp:  {rows[0]['exp_label']}",
+    ]
+    if patch_url:
+        patch_line = f"patch: {patch_url}"
+        if patch_subject:
+            patch_line += f'  "{patch_subject}"'
+        lines.append(patch_line)
+    if base_flags:
+        lines.append(f"base-flags: {base_flags}")
+    if exp_flags:
+        lines.append(f"exp-flags:  {exp_flags}")
+    lines += [
         unit_line,
         "",
         fmt_row(hdrs),

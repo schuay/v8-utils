@@ -98,6 +98,9 @@ def _colorize_results(text: str) -> str:
             line.startswith("base:")
             or line.startswith("exp:")
             or line.startswith("unit:")
+            or line.startswith("patch:")
+            or line.startswith("base-flags:")
+            or line.startswith("exp-flags:")
         ):
             key, _, rest = line.partition(":")
             out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
