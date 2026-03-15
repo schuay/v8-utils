@@ -14,7 +14,7 @@ import jsb as jsb_module
 import perf as perf_tools
 import pinpoint
 
-mcp = FastMCP("v8-utils")
+mcp = FastMCP("v8-utils", log_level="WARNING")
 
 
 def _run_concurrent(
