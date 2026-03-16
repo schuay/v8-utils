@@ -640,6 +640,8 @@ def pinpoint_create_job(
     configuration:  space-separated bot config(s) or alias(es) (default: "m1"):
                       "linux" → linux-r350-perf
                       "m1"    → mac-m1_mini_2020-perf
+                      "m2"    → mac-m2-pro-perf
+                      "m3"    → mac-m3-pro-perf
                       "m4"    → mac-m4-mini-perf
     exp_patch:      REQUIRED — experiment patch. One of:
                       "auto"  → auto-detect from the current git branch's Gerrit CL
