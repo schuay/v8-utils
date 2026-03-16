@@ -91,6 +91,7 @@ def _colorize_results(text: str) -> str:
     for line in text.splitlines():
         if (
             line.startswith("bot:")
+            or line.startswith("benchmark:")
             or line.startswith("patch:")
             or line.startswith("base-flags:")
             or line.startswith("exp-flags:")

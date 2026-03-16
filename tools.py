@@ -330,6 +330,13 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     configuration = job.get("configuration")
     if configuration:
         lines.append(f"bot: {configuration}")
+    benchmark = job.get("benchmark")
+    story = job.get("story")
+    if benchmark:
+        bench_line = f"benchmark: {benchmark}"
+        if story:
+            bench_line += f" / {story}"
+        lines.append(bench_line)
     if patch_url:
         patch_line = f"patch: {patch_url}"
         if patch_subject:
