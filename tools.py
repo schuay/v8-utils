@@ -298,7 +298,15 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
             )
         )
 
-    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p", "sig", "good")
+    hdrs = (
+        "metric",
+        "base mean±stdev",
+        "exp mean±stdev",
+        "chg%",
+        "p",
+        "sig",
+        "direction",
+    )
     widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
 
     def fmt_row(cols: tuple) -> str:
