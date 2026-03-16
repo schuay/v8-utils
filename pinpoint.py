@@ -880,6 +880,20 @@ CONFIGURATION_ALIASES: dict[str, str] = {
 }
 
 
+def short_configuration(name: str) -> str:
+    """Return the shortest alias for a configuration name, or the name itself."""
+    matches = [k for k, v in CONFIGURATION_ALIASES.items() if v == name]
+    return min(matches, key=len) if matches else name
+
+
+def short_benchmark(name: str) -> str:
+    """Return the alias for a benchmark name, or the name itself."""
+    for alias, (full, _) in BENCHMARK_ALIASES.items():
+        if full == name:
+            return alias
+    return name
+
+
 def cancel_job(job_url: str, reason: str = "Cancelled") -> dict:
     """Cancel a Pinpoint job. Requires luci-auth login."""
     job_id = job_id_from_url(job_url)

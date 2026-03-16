@@ -223,8 +223,8 @@ def _format_job_list(jobs: list[dict]) -> str:
         created = (j.get("created") or "")[:16].replace("T", " ")
         status = j.get("status") or "?"
         url = j.get("url") or ""
-        cfg = j.get("configuration") or ""
-        benchmark = j.get("benchmark") or ""
+        cfg = pinpoint.short_configuration(j.get("configuration") or "")
+        benchmark = pinpoint.short_benchmark(j.get("benchmark") or "")
         story = j.get("story") or ""
         diff = j.get("difference_count")
         patch = j.get("experiment_patch") or ""
@@ -327,16 +327,19 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
 
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
     lines: list[str] = []
+    header_parts = []
     configuration = job.get("configuration")
     if configuration:
-        lines.append(f"bot: {configuration}")
+        header_parts.append(f"bot: {pinpoint.short_configuration(configuration)}")
     benchmark = job.get("benchmark")
     story = job.get("story")
     if benchmark:
-        bench_line = f"benchmark: {benchmark}"
+        bench_str = f"benchmark: {pinpoint.short_benchmark(benchmark)}"
         if story:
-            bench_line += f" / {story}"
-        lines.append(bench_line)
+            bench_str += f" / {story}"
+        header_parts.append(bench_str)
+    if header_parts:
+        lines.append("  ".join(header_parts))
     if patch_url:
         patch_line = f"patch: {patch_url}"
         if patch_subject:
@@ -654,11 +657,22 @@ def _format_job_detail(j: dict) -> str:
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
     lines = [f"{created}  {status}  {url}"]
+    # Merged bot + benchmark line
+    header_parts = []
+    cfg = j.get("configuration")
+    bench = j.get("benchmark")
+    story = j.get("story")
+    if cfg:
+        header_parts.append(f"bot: {pinpoint.short_configuration(cfg)}")
+    if bench:
+        bench_str = f"benchmark: {pinpoint.short_benchmark(bench)}"
+        if story:
+            bench_str += f" / {story}"
+        header_parts.append(bench_str)
+    if header_parts:
+        lines.append("  ".join(header_parts))
     fields = [
         ("user", j.get("user")),
-        ("configuration", j.get("configuration")),
-        ("benchmark", j.get("benchmark")),
-        ("story", j.get("story")),
         ("mode", j.get("comparison_mode")),
         ("base", j.get("base_git_hash")),
         ("end", j.get("end_git_hash")),

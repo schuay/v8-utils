@@ -89,10 +89,16 @@ def _colorize_results(text: str) -> str:
 
     out = []
     for line in text.splitlines():
-        if (
-            line.startswith("bot:")
-            or line.startswith("benchmark:")
-            or line.startswith("patch:")
+        if line.startswith("bot:"):
+            # Combined "bot: m1  benchmark: sp3 / Story" line
+            parts = re.split(r"\s{2,}", line)
+            colored = []
+            for part in parts:
+                key, _, val = part.partition(": ")
+                colored.append(f"{_DIM}{key}:{_RESET} {_BOLD}{val}{_RESET}")
+            out.append(f" {_DIM}│{_RESET} ".join(colored))
+        elif (
+            line.startswith("patch:")
             or line.startswith("base-flags:")
             or line.startswith("exp-flags:")
         ):
@@ -155,11 +161,28 @@ def _print_job(j: dict) -> None:
     patch_url = j.get("experiment_patch")
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
 
+    # Merged bot + benchmark line
+    header_parts = []
+    cfg = j.get("configuration")
+    bench = j.get("benchmark")
+    story = j.get("story")
+    if cfg:
+        header_parts.append(f"bot: {pinpoint.short_configuration(cfg)}")
+    if bench:
+        bench_str = f"benchmark: {pinpoint.short_benchmark(bench)}"
+        if story:
+            bench_str += f" / {story}"
+        header_parts.append(bench_str)
+    if header_parts:
+        colored = []
+        for part in header_parts:
+            key, _, val = part.partition(": ")
+            colored.append(f"{_DIM}{key}:{_RESET} {_BOLD}{val}{_RESET}")
+        print(f" {_DIM}│{_RESET} ".join(colored))
+        print()
+
     fields = [
         ("user", j.get("user")),
-        ("configuration", j.get("configuration")),
-        ("benchmark", j.get("benchmark")),
-        ("story", j.get("story")),
         ("mode", j.get("comparison_mode")),
         ("base", j.get("base_git_hash")),
         ("end", j.get("end_git_hash")),
@@ -255,8 +278,8 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         created = (j.get("created") or "")[:16].replace("T", " ")
         status = j.get("status") or "?"
         url = j.get("url") or ""
-        config_ = j.get("configuration") or ""
-        benchmark = j.get("benchmark") or ""
+        config_ = pinpoint.short_configuration(j.get("configuration") or "")
+        benchmark = pinpoint.short_benchmark(j.get("benchmark") or "")
         story = j.get("story") or ""
         diff = j.get("difference_count")
         patch = j.get("experiment_patch") or ""
