@@ -87,19 +87,10 @@ def _colorize_results(text: str) -> str:
     if not _CYAN:
         return text
 
-    def _color_pct(m: re.Match) -> str:
-        val = m.group(0)
-        return (
-            f"{_GREEN}{val}{_RESET}" if val.startswith("+") else f"{_RED}{val}{_RESET}"
-        )
-
     out = []
     for line in text.splitlines():
         if (
-            line.startswith("base:")
-            or line.startswith("exp:")
-            or line.startswith("unit:")
-            or line.startswith("patch:")
+            line.startswith("patch:")
             or line.startswith("base-flags:")
             or line.startswith("exp-flags:")
         ):
@@ -112,6 +103,14 @@ def _colorize_results(text: str) -> str:
         elif "chg%" in line:
             out.append(f"{_BOLD}{line}{_RESET}")
         else:
+            # For smaller-better metrics, invert: - is good (green), + is bad (red)
+            inverted = "smaller-better" in line
+
+            def _color_pct(m: re.Match) -> str:
+                val = m.group(0)
+                good = val.startswith("-") if inverted else val.startswith("+")
+                return f"{_GREEN}{val}{_RESET}" if good else f"{_RED}{val}{_RESET}"
+
             line = re.sub(r"[+-]\d+\.\d+%", _color_pct, line)
             line = re.sub(r"\*\s*$", f"{_BOLD}{_GREEN}*{_RESET}", line)
             out.append(line)

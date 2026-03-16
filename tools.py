@@ -274,6 +274,14 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
 
     rows.sort(key=pct, reverse=True)
 
+    def _direction(unit: str | None) -> str:
+        """Return a direction indicator for the unit."""
+        if unit and "biggerIsBetter" in unit:
+            return "bigger-better"
+        if unit and "smallerIsBetter" in unit:
+            return "smaller-better"
+        return ""
+
     cells = []
     for r in rows:
         bm, bs = r["base_mean"] or 0, r["base_stdev"] or 0
@@ -286,10 +294,11 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
                 f"{pct(r):+.2f}%",
                 f"{r['p_value']:.4f}",
                 "*" if r["significant"] else "",
+                _direction(r.get("unit")),
             )
         )
 
-    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p", "sig")
+    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p", "sig", "good")
     widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
 
     def fmt_row(cols: tuple) -> str:
@@ -297,16 +306,6 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
             c.ljust(widths[i]) if i == 0 else c.rjust(widths[i])
             for i, c in enumerate(cols)
         )
-
-    def fmt_unit(raw: str) -> str:
-        if raw.endswith("_biggerIsBetter"):
-            return raw[: -len("_biggerIsBetter")] + " (bigger is better)"
-        if raw.endswith("_smallerIsBetter"):
-            return raw[: -len("_smallerIsBetter")] + " (smaller is better)"
-        return raw
-
-    units = sorted({r["unit"] for r in rows if r.get("unit")})
-    unit_line = "unit: " + ",  ".join(fmt_unit(u) for u in units)
 
     # Fetch job details for richer header
     try:
@@ -319,10 +318,7 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     exp_flags = job.get("experiment_extra_args")
 
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
-    lines = [
-        f"base: {rows[0]['base_label']}",
-        f"exp:  {rows[0]['exp_label']}",
-    ]
+    lines: list[str] = []
     if patch_url:
         patch_line = f"patch: {patch_url}"
         if patch_subject:
@@ -333,7 +329,6 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     if exp_flags:
         lines.append(f"exp-flags:  {exp_flags}")
     lines += [
-        unit_line,
         "",
         fmt_row(hdrs),
         sep,
