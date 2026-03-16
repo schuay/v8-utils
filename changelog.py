@@ -32,6 +32,7 @@ ENTRIES: list[str] = [
     "`show-results --recent N` shows results for the N most recent completed jobs",
     "`pp cancel-job` cancels one or more Pinpoint jobs",
     "Multi-job operations _(`show-results`, `show-job`, `cancel-job`)_ now run concurrently",
+    "`list-jobs` and `show-results` accept filter flags: `--patch`, `--benchmark`, `--bot`, `--status`, `--since`",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
