@@ -246,6 +246,43 @@ def _format_job_list(jobs: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
+def _results_header(job_id: str) -> str:
+    """Build the header lines (bot/benchmark/patch/flags) for a results table."""
+    try:
+        job = _fetch_job_detail(job_id)
+    except Exception:
+        job = {}
+    patch_url = job.get("experiment_patch")
+    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+    base_flags = job.get("base_extra_args")
+    exp_flags = job.get("experiment_extra_args")
+
+    lines: list[str] = []
+    header_parts = []
+    configuration = job.get("configuration")
+    if configuration:
+        header_parts.append(f"bot: {pinpoint.short_configuration(configuration)}")
+    benchmark = job.get("benchmark")
+    story = job.get("story")
+    if benchmark:
+        bench_str = f"benchmark: {pinpoint.short_benchmark(benchmark)}"
+        if story:
+            bench_str += f" / {story}"
+        header_parts.append(bench_str)
+    if header_parts:
+        lines.append("  ".join(header_parts))
+    if patch_url:
+        patch_line = f"patch: {patch_url}"
+        if patch_subject:
+            patch_line += f'  "{patch_subject}"'
+        lines.append(patch_line)
+    if base_flags:
+        lines.append(f"base-flags: {base_flags}")
+    if exp_flags:
+        lines.append(f"exp-flags:  {exp_flags}")
+    return "\n".join(lines)
+
+
 def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | None:
     """Format a results table for a single job. Returns None if no results.
 
@@ -266,6 +303,9 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
     omitted = len(all_rows) - len(rows)
     if not rows:
+        header = _results_header(job_id)
+        if header:
+            return f"{header}\n(no statistically significant results)"
         return "(no statistically significant results)"
 
     def pct(r: dict) -> float:
@@ -315,40 +355,9 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
             for i, c in enumerate(cols)
         )
 
-    # Fetch job details for richer header
-    try:
-        job = _fetch_job_detail(job_id)
-    except Exception:
-        job = {}
-    patch_url = job.get("experiment_patch")
-    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
-    base_flags = job.get("base_extra_args")
-    exp_flags = job.get("experiment_extra_args")
-
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
-    lines: list[str] = []
-    header_parts = []
-    configuration = job.get("configuration")
-    if configuration:
-        header_parts.append(f"bot: {pinpoint.short_configuration(configuration)}")
-    benchmark = job.get("benchmark")
-    story = job.get("story")
-    if benchmark:
-        bench_str = f"benchmark: {pinpoint.short_benchmark(benchmark)}"
-        if story:
-            bench_str += f" / {story}"
-        header_parts.append(bench_str)
-    if header_parts:
-        lines.append("  ".join(header_parts))
-    if patch_url:
-        patch_line = f"patch: {patch_url}"
-        if patch_subject:
-            patch_line += f'  "{patch_subject}"'
-        lines.append(patch_line)
-    if base_flags:
-        lines.append(f"base-flags: {base_flags}")
-    if exp_flags:
-        lines.append(f"exp-flags:  {exp_flags}")
+    header = _results_header(job_id)
+    lines: list[str] = [header] if header else []
     lines += [
         "",
         fmt_row(hdrs),
