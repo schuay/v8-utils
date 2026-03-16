@@ -161,6 +161,7 @@ def pinpoint_list_jobs(
     count:  number of jobs to return (default: 20)
     user:   user email (default: current luci-auth user)
     filter: optional client-side "key=value" filter, e.g.:
+              "patch=https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
               "status=Completed"
               "benchmark=jetstream2"
               "configuration=linux-r350-perf"
