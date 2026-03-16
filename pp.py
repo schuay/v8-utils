@@ -281,15 +281,29 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
 
-    if args.recent:
-        jobs = _fetch_jobs_list(count=args.recent, filters=["status=Completed"])
+    filters = ["status=Completed"]
+    if args.patch:
+        filters.append(f"patch={args.patch}")
+    if args.status:
+        filters.append(f"status={args.status}")
+    if args.benchmark:
+        filters.append(f"benchmark={args.benchmark}")
+    if args.bot:
+        filters.append(f"bot={args.bot}")
+    has_filters = len(filters) > 1 or args.recent
+
+    if args.recent or has_filters:
+        since_str = args.since or ("one month ago" if has_filters else None)
+        since = pinpoint.parse_since(since_str) if since_str else None
+        count = args.recent or 20
+        jobs = _fetch_jobs_list(count=count, filters=filters, since=since)
         if not jobs:
-            print("No completed jobs found.")
+            print("No completed jobs found matching filters.")
             return
         job_urls.extend(j["job_id"] for j in jobs)
 
     if not job_urls:
-        print("No jobs specified. Use job URLs/IDs or --recent N.")
+        print("No jobs specified. Use job URLs/IDs, --recent N, or filter flags.")
         return
 
     job_ids = [pinpoint.job_id_from_url(u) for u in job_urls]
@@ -564,6 +578,35 @@ def main() -> None:
         default=None,
         metavar="N",
         help="Show results for the N most recent completed jobs",
+    )
+    p.add_argument(
+        "-p",
+        "--patch",
+        default=None,
+        help="Filter by Gerrit CL (any URL form, change ID, or crrev)",
+    )
+    p.add_argument(
+        "-s",
+        "--status",
+        default=None,
+        help="Filter by status: Completed, Running, Failed, Cancelled, Queued",
+    )
+    p.add_argument(
+        "-b",
+        "--benchmark",
+        default=None,
+        help="Filter by benchmark name or alias (js3, js2, sp3)",
+    )
+    p.add_argument(
+        "--bot",
+        default=None,
+        help="Filter by bot config or alias (m1, m2, m3, m4, linux)",
+    )
+    p.add_argument(
+        "--since",
+        default=None,
+        help='Only include jobs after this date (default: "one month ago" when filters are used). '
+        'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
     )
     p.add_argument(
         "--show-all", action="store_true", help="Include non-significant results"

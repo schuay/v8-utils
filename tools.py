@@ -352,29 +352,59 @@ def pinpoint_show_results(
     show_all: bool = False,
     use_cas: bool = False,
     recent: int | None = None,
+    patch: str | None = None,
+    status: str | None = None,
+    benchmark: str | None = None,
+    bot: str | None = None,
+    since: str | None = None,
 ) -> CallToolResult:
     """Show a base-vs-experiment comparison table for a Pinpoint job.
 
     One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
     significance marker. Sorted by %change descending.
 
-    show_all: if False (default), only show statistically significant results.
-    job_url:  space-separated Pinpoint job URL(s) or job ID(s)
-    use_cas:  if True, fetch raw per-run values from CAS isolates instead of
-              the histogram HTML. Slower but surfaces richer sub-metrics for
-              JetStream (Score, First, Average, Worst4 per story).
-              Requires: gcloud auth application-default login
-    recent:   if set, show results for the N most recent completed jobs
-              for the current user. Can be combined with job_url.
+    job_url:   space-separated Pinpoint job URL(s) or job ID(s)
+    show_all:  if False (default), only show statistically significant results.
+    use_cas:   if True, fetch raw per-run values from CAS isolates instead of
+               the histogram HTML. Slower but surfaces richer sub-metrics for
+               JetStream (Score, First, Average, Worst4 per story).
+               Requires: gcloud auth application-default login
+    recent:    if set, show results for the N most recent completed jobs
+               for the current user. Can be combined with job_url.
+    patch:     filter by Gerrit CL — any URL form, change ID, or crrev
+    status:    filter by status (in addition to the default Completed filter)
+    benchmark: filter by benchmark name or alias (js3, js2, sp3)
+    bot:       filter by bot configuration name or alias (m1, m2, m3, m4, linux)
+    since:     only include jobs after this date (default: "one month ago" when
+               filters are used). Accepts natural language or ISO dates.
+               Use "all" for no limit.
     """
     job_ids: list[str] = []
     if job_url:
         job_ids.extend(pinpoint.job_id_from_url(u) for u in job_url.split())
-    if recent:
-        jobs = _fetch_jobs_list(count=recent, filters=["status=Completed"])
+
+    filters = ["status=Completed"]
+    if patch:
+        filters.append(f"patch={patch}")
+    if status:
+        filters.append(f"status={status}")
+    if benchmark:
+        filters.append(f"benchmark={benchmark}")
+    if bot:
+        filters.append(f"bot={bot}")
+    has_filters = len(filters) > 1 or recent
+
+    if recent or has_filters:
+        since_str = since or ("one month ago" if has_filters else None)
+        since_dt = pinpoint.parse_since(since_str) if since_str else None
+        count = recent or 20
+        jobs = _fetch_jobs_list(count=count, filters=filters, since=since_dt)
         job_ids.extend(j["job_id"] for j in jobs)
+
     if not job_ids:
-        return _text_result("Provide a job_url or use recent=N.")
+        return _text_result(
+            "Provide a job_url, use recent=N, or pass filter flags (patch, benchmark, bot)."
+        )
 
     fns = [
         lambda jid=jid: _format_results_table(jid, show_all, use_cas) for jid in job_ids
