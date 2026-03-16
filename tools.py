@@ -327,6 +327,9 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
 
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
     lines: list[str] = []
+    configuration = job.get("configuration")
+    if configuration:
+        lines.append(f"bot: {configuration}")
     if patch_url:
         patch_line = f"patch: {patch_url}"
         if patch_subject:

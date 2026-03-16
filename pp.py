@@ -90,7 +90,8 @@ def _colorize_results(text: str) -> str:
     out = []
     for line in text.splitlines():
         if (
-            line.startswith("patch:")
+            line.startswith("bot:")
+            or line.startswith("patch:")
             or line.startswith("base-flags:")
             or line.startswith("exp-flags:")
         ):
