@@ -345,17 +345,32 @@ def _fetch_jobs_for_email(
             follow_redirects=True,
             timeout=30,
         )
+        if r.status_code >= 500:
+            import sys
+
+            print(
+                f"warning: Pinpoint API returned {r.status_code} during pagination, "
+                f"returning {len(matched)} jobs fetched so far",
+                file=sys.stderr,
+            )
+            break
         r.raise_for_status()
         data = r.json()
         page = [j for j in data.get("jobs", []) if not _is_cq_job(j)]
+        # Check the since cutoff on all jobs *before* filtering so we stop
+        # paging even when no jobs on this page match the filter.
+        if since and page:
+            last_created = page[-1].get("created", "")
+            if last_created and _parse_created(last_created) < since:
+                hit_cutoff = True
+                page = [
+                    j
+                    for j in page
+                    if not ((c := j.get("created", "")) and _parse_created(c) < since)
+                ]
         if filters:
             page = [j for j in page if all(_job_matches_filter(j, f) for f in filters)]
         for j in page:
-            if since:
-                created = j.get("created", "")
-                if created and _parse_created(created) < since:
-                    hit_cutoff = True
-                    break
             if j["job_id"] not in seen_ids:
                 seen_ids.add(j["job_id"])
                 matched.append(j)
