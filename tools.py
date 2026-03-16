@@ -171,7 +171,8 @@ def pinpoint_list_jobs(
 
     count:     number of jobs to return (default: 20)
     user:      user email (default: current luci-auth user)
-    patch:     filter by Gerrit CL — any URL form, change ID, or crrev
+    patch:     filter by Gerrit CL — any URL form, change ID, or crrev.
+               "auto" detects from current branch; "none" clears the filter.
     status:    filter by status: Completed, Running, Failed, Cancelled, Queued
     benchmark: filter by benchmark name or alias:
                  "js3" → jetstream-main.crossbench
@@ -189,6 +190,7 @@ def pinpoint_list_jobs(
 
     All filters are ANDed together.
     """
+    patch = resolve_patch_filter(patch)
     filters = []
     if patch:
         filters.append(f"patch={patch}")
@@ -396,7 +398,8 @@ def pinpoint_show_results(
                Requires: gcloud auth application-default login
     recent:    if set, show results for the N most recent completed jobs
                for the current user. Can be combined with job_url.
-    patch:     filter by Gerrit CL — any URL form, change ID, or crrev
+    patch:     filter by Gerrit CL — any URL form, change ID, or crrev.
+               "auto" detects from current branch; "none" clears the filter.
     status:    filter by status (in addition to the default Completed filter)
     benchmark: filter by benchmark name or alias (js3, js2, sp3)
     bot:       filter by bot configuration name or alias (m1, m2, m3, m4, linux)
@@ -404,6 +407,7 @@ def pinpoint_show_results(
                filters are used). Accepts natural language or ISO dates.
                Use "all" for no limit.
     """
+    patch = resolve_patch_filter(patch)
     job_ids: list[str] = []
     if job_url:
         job_ids.extend(pinpoint.job_id_from_url(u) for u in job_url.split())
@@ -508,38 +512,53 @@ def _job_url(job: dict) -> str | None:
     return job.get("url") or f"https://pinpoint-dot-chromeperf.appspot.com/job/{jid}"
 
 
+def _resolve_patch_sentinel(value: str) -> str | None:
+    """Resolve a single patch sentinel: "auto" → detect from branch, "none" → None.
+
+    Returns the resolved URL string, None (for "none"), or the original value.
+    Raises ValueError if "auto" is used but no CL is found on the current branch.
+    """
+    if value.lower() == "none":
+        return None
+    if value.lower() == "auto":
+        detected = get_gerrit_issue_url()
+        if detected is None:
+            import subprocess as _sp
+
+            branch = (
+                _sp.run(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+                or "(unknown)"
+            )
+            raise ValueError(
+                f"No Gerrit CL found on the current branch ({branch}).\n"
+                f"Either:\n"
+                f"  - pass --patch with an explicit CL URL\n"
+                f"  - pass --patch=none to clear the filter"
+            )
+        return detected
+    return value
+
+
+def resolve_patch_filter(value: str | None) -> str | None:
+    """Resolve a --patch filter value, supporting "auto" and "none" sentinels.
+
+    Returns the resolved URL string, or None (for "none" or None input).
+    """
+    if value is None:
+        return None
+    return _resolve_patch_sentinel(value)
+
+
 def resolve_exp_patches(exp_patches: list[str]) -> list[str | None]:
     """Resolve exp_patch sentinels: "auto" → detect from branch, "none" → None.
 
     Raises ValueError if "auto" is used but no CL is found on the current branch.
     """
-    resolved = []
-    for p in exp_patches:
-        if p.lower() == "none":
-            resolved.append(None)
-        elif p.lower() == "auto":
-            detected = get_gerrit_issue_url()
-            if detected is None:
-                import subprocess as _sp
-
-                branch = (
-                    _sp.run(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        capture_output=True,
-                        text=True,
-                    ).stdout.strip()
-                    or "(unknown)"
-                )
-                raise ValueError(
-                    f"No Gerrit CL found on the current branch ({branch}).\n"
-                    f"Either:\n"
-                    f"  - pass exp_patch with an explicit CL URL\n"
-                    f'  - pass exp_patch="none" for flag-only or hash-only comparisons'
-                )
-            resolved.append(detected)
-        else:
-            resolved.append(p)
-    return resolved
+    return [_resolve_patch_sentinel(p) for p in exp_patches]
 
 
 def create_pinpoint_jobs(

@@ -30,6 +30,7 @@ from tools import (
     chat_notify_watching,
     create_pinpoint_jobs,
     resolve_exp_patches,
+    resolve_patch_filter,
 )
 
 # ── ANSI colors (no-ops when not a TTY) ───────────────────────────────────────
@@ -248,9 +249,13 @@ def _cmd_cancel_job(args: argparse.Namespace) -> None:
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
     import concurrent.futures
 
+    patch = resolve_patch_filter(args.patch)
+    if args.patch and args.patch.lower() == "auto" and patch:
+        print(f"{_DIM}autodetected --patch: {patch} (from current branch){_RESET}")
+
     filters = []
-    if args.patch:
-        filters.append(f"patch={args.patch}")
+    if patch:
+        filters.append(f"patch={patch}")
     if args.status:
         filters.append(f"status={args.status}")
     if args.benchmark:
@@ -305,9 +310,13 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
 
+    patch = resolve_patch_filter(args.patch)
+    if args.patch and args.patch.lower() == "auto" and patch:
+        print(f"{_DIM}autodetected --patch: {patch} (from current branch){_RESET}")
+
     filters = ["status=Completed"]
-    if args.patch:
-        filters.append(f"patch={args.patch}")
+    if patch:
+        filters.append(f"patch={patch}")
     if args.status:
         filters.append(f"status={args.status}")
     if args.benchmark:
@@ -561,7 +570,8 @@ def main() -> None:
         "-p",
         "--patch",
         default=None,
-        help="Filter by Gerrit CL (any URL form, change ID, or crrev)",
+        help="Filter by Gerrit CL (any URL form, change ID, or crrev). "
+        '"auto" detects from current branch; "none" clears the filter',
     )
     p.add_argument(
         "-s",
@@ -607,7 +617,8 @@ def main() -> None:
         "-p",
         "--patch",
         default=None,
-        help="Filter by Gerrit CL (any URL form, change ID, or crrev)",
+        help="Filter by Gerrit CL (any URL form, change ID, or crrev). "
+        '"auto" detects from current branch; "none" clears the filter',
     )
     p.add_argument(
         "-s",
