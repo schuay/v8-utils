@@ -214,6 +214,22 @@ class TestJobMatchesFilter:
     def test_unknown_key_no_match(self):
         assert not _job_matches_filter(_make_job(), "unknownkey=value")
 
+    def test_benchmark_alias(self):
+        job = _make_job(benchmark="jetstream-main.crossbench")
+        assert _job_matches_filter(job, "benchmark=js3")
+
+    def test_benchmark_alias_no_match(self):
+        job = _make_job(benchmark="speedometer3.crossbench")
+        assert not _job_matches_filter(job, "benchmark=js3")
+
+    def test_bot_alias(self):
+        job = _make_job(configuration="mac-m1_mini_2020-perf")
+        assert _job_matches_filter(job, "bot=m1")
+
+    def test_bot_alias_no_match(self):
+        job = _make_job(configuration="linux-r350-perf")
+        assert not _job_matches_filter(job, "bot=m1")
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # daemon._format_results_for_chat

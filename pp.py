@@ -2,7 +2,7 @@
 
 Usage:
   pp show-job <job_url> [<job_url> ...]
-  pp list-jobs [--count N] [--user EMAIL] [--filter KEY=VALUE]
+  pp list-jobs [--patch CL] [--status S] [--benchmark B] [--bot BOT] [--filter KEY=VALUE]
   pp show-results <job_url> [<job_url> ...] [--show-all]
   pp create-job -t TEMPLATE [TEMPLATE ...] -c CONFIG [CONFIG ...] [options]
   pp watch <job_url> [<job_url> ...]
@@ -224,7 +224,16 @@ def _cmd_cancel_job(args: argparse.Namespace) -> None:
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
     import concurrent.futures
 
-    jobs = _fetch_jobs_list(count=args.count, user=args.user, filter=args.filter)
+    filters = []
+    if args.patch:
+        filters.append(f"patch={args.patch}")
+    if args.status:
+        filters.append(f"status={args.status}")
+    if args.benchmark:
+        filters.append(f"benchmark={args.benchmark}")
+    if args.bot:
+        filters.append(f"bot={args.bot}")
+    jobs = _fetch_jobs_list(count=args.count, user=args.user, filters=filters or None)
     if not jobs:
         print("No jobs found.")
         return
@@ -270,7 +279,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
 
     if args.recent:
-        jobs = _fetch_jobs_list(count=args.recent, filter="status=Completed")
+        jobs = _fetch_jobs_list(count=args.recent, filters=["status=Completed"])
         if not jobs:
             print("No completed jobs found.")
             return
@@ -508,12 +517,27 @@ def main() -> None:
         help="User email (default: current luci-auth user)",
     )
     p.add_argument(
-        "-f",
-        "--filter",
+        "-p",
+        "--patch",
         default=None,
-        metavar="KEY=VALUE",
-        help='Client-side filter, e.g. "status=Completed", "comparison_mode=try", '
-        '"patch=1234567" (any Gerrit URL form accepted)',
+        help="Filter by Gerrit CL (any URL form, change ID, or crrev)",
+    )
+    p.add_argument(
+        "-s",
+        "--status",
+        default=None,
+        help="Filter by status: Completed, Running, Failed, Cancelled, Queued",
+    )
+    p.add_argument(
+        "-b",
+        "--benchmark",
+        default=None,
+        help="Filter by benchmark name or alias (js3, js2, sp3)",
+    )
+    p.add_argument(
+        "--bot",
+        default=None,
+        help="Filter by bot config or alias (m1, m2, m3, m4, linux)",
     )
     p.set_defaults(func=_cmd_list_jobs)
 

@@ -139,35 +139,57 @@ def pinpoint_cancel_job(
 
 
 def _fetch_jobs_list(
-    count: int = 20, user: str | None = None, filter: str | None = None
+    count: int = 20, user: str | None = None, filters: list[str] | None = None
 ) -> list[dict]:
     """Fetch job list as dicts (internal helper)."""
     if user is None:
         user = config.load().user or pinpoint.get_current_user_email()
-    return [pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filter)]
+    return [
+        pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filters)
+    ]
 
 
 @mcp.tool()
 def pinpoint_list_jobs(
     count: int = 20,
     user: str | None = None,
-    filter: str | None = None,
+    patch: str | None = None,
+    status: str | None = None,
+    benchmark: str | None = None,
+    bot: str | None = None,
 ) -> CallToolResult:
     """List recent Pinpoint jobs for a user, newest first. CQ jobs are excluded.
 
     Requires luci-auth login when user is not specified:
       luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email
 
-    count:  number of jobs to return (default: 20)
-    user:   user email (default: current luci-auth user)
-    filter: optional client-side "key=value" filter, e.g.:
-              "patch=https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
-              "status=Completed"
-              "benchmark=jetstream2"
-              "configuration=linux-r350-perf"
-              "comparison_mode=try"
+    count:     number of jobs to return (default: 20)
+    user:      user email (default: current luci-auth user)
+    patch:     filter by Gerrit CL — any URL form, change ID, or crrev
+    status:    filter by status: Completed, Running, Failed, Cancelled, Queued
+    benchmark: filter by benchmark name or alias:
+                 "js3" → jetstream-main.crossbench
+                 "js2" → jetstream2.crossbench
+                 "sp3" → speedometer3.crossbench
+    bot:       filter by bot configuration name or alias:
+                 "linux" → linux-r350-perf
+                 "m1"    → mac-m1_mini_2020-perf
+                 "m2"    → mac-m2-pro-perf
+                 "m3"    → mac-m3-pro-perf
+                 "m4"    → mac-m4-mini-perf
+
+    All filters are ANDed together.
     """
-    jobs = _fetch_jobs_list(count, user, filter)
+    filters = []
+    if patch:
+        filters.append(f"patch={patch}")
+    if status:
+        filters.append(f"status={status}")
+    if benchmark:
+        filters.append(f"benchmark={benchmark}")
+    if bot:
+        filters.append(f"bot={bot}")
+    jobs = _fetch_jobs_list(count, user, filters or None)
     if not jobs:
         return _text_result("No jobs found.")
     return _text_result(_format_job_list(jobs))
@@ -339,7 +361,7 @@ def pinpoint_show_results(
     if job_url:
         job_ids.extend(pinpoint.job_id_from_url(u) for u in job_url.split())
     if recent:
-        jobs = _fetch_jobs_list(count=recent, filter="status=Completed")
+        jobs = _fetch_jobs_list(count=recent, filters=["status=Completed"])
         job_ids.extend(j["job_id"] for j in jobs)
     if not job_ids:
         return _text_result("Provide a job_url or use recent=N.")

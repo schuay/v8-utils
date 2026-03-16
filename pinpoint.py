@@ -258,9 +258,11 @@ def _is_cq_job(job: dict) -> bool:
 def _job_matches_filter(job: dict, filter_str: str) -> bool:
     """Test a job against a "key=value" filter string (case-insensitive substring).
 
-    Supported keys: status, benchmark, configuration, comparison_mode, patch.
-    For "patch", the value is normalised to a numeric change ID so any Gerrit
-    URL form (full URL, crrev, bare number) matches correctly.
+    Supported keys: status, benchmark, bot/configuration, comparison_mode, patch.
+
+    - "patch" normalises to a numeric change ID so any Gerrit URL form matches.
+    - "benchmark" resolves aliases (js3, js2, sp3) before matching.
+    - "bot" is an alias for "configuration" and resolves bot aliases (m1, linux, …).
     """
     if "=" not in filter_str:
         return True
@@ -274,6 +276,17 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
         change_id = _extract_change_id(stored)
         return needle == change_id if change_id else needle in stored.lower()
 
+    if key == "benchmark":
+        alias = BENCHMARK_ALIASES.get(value)
+        if alias:
+            value = alias[0]  # full benchmark name
+
+    if key in ("bot", "configuration"):
+        key = "configuration"
+        resolved = CONFIGURATION_ALIASES.get(value)
+        if resolved:
+            value = resolved
+
     field = {
         "status": job.get("status", ""),
         "benchmark": args.get("benchmark", ""),
@@ -284,7 +297,7 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
 
 
 def _fetch_jobs_for_email(
-    email: str, count: int, extra_filter: str | None
+    email: str, count: int, filters: list[str] | None
 ) -> list[dict]:
     """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API."""
     matched: list[dict] = []
@@ -301,8 +314,8 @@ def _fetch_jobs_for_email(
         r.raise_for_status()
         data = r.json()
         page = [j for j in data.get("jobs", []) if not _is_cq_job(j)]
-        if extra_filter:
-            page = [j for j in page if _job_matches_filter(j, extra_filter)]
+        if filters:
+            page = [j for j in page if all(_job_matches_filter(j, f) for f in filters)]
         for j in page:
             if j["job_id"] not in seen_ids:
                 seen_ids.add(j["job_id"])
@@ -319,16 +332,18 @@ def _fetch_jobs_for_email(
     return matched
 
 
-def fetch_jobs(user: str, count: int, filter_str: str | None = None) -> list[dict]:
+def fetch_jobs(user: str, count: int, filters: list[str] | None = None) -> list[dict]:
     """Fetch the `count` most recent non-CQ jobs for a user.
 
     Queries all email variants (@google.com, @chromium.org) and merges.
     The /api/jobs endpoint is public; no auth required.
+
+    filters: list of "key=value" strings, ANDed together.
     """
     seen_ids: set[str] = set()
     all_jobs: list[dict] = []
     for jobs in [
-        _fetch_jobs_for_email(e, count, filter_str) for e in user_email_variants(user)
+        _fetch_jobs_for_email(e, count, filters) for e in user_email_variants(user)
     ]:
         for j in jobs:
             if j["job_id"] not in seen_ids:
