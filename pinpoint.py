@@ -185,8 +185,8 @@ def _gerrit_change_id_from_url(url: str) -> str | None:
     return result[0] if result else None
 
 
-def _extract_change_id(patch: str) -> str | None:
-    """Extract a numeric Gerrit change ID from any supported patch form.
+def _extract_change_and_patchset(patch: str) -> tuple[str, str | None] | None:
+    """Extract (change_id, patchset) from any supported patch form.
 
     Handles: bare change ID, CHANGE/PATCHSET, crrev.com URLs, full Gerrit URLs.
     Returns None if no numeric change ID can be found.
@@ -199,16 +199,23 @@ def _extract_change_id(patch: str) -> str | None:
         if "chromium-review.googlesource.com" in host:
             plus_idx = path.find("/+/")
             seg = path[plus_idx + 3 :] if plus_idx != -1 else path
-            result = _parse_change_patchset(seg)
-            return result[0] if result else None
+            return _parse_change_patchset(seg)
         if "crrev.com" in host:
             # crrev.com/c/CHANGE[/PATCHSET]
             seg = re.sub(r"^/c/", "/", path)
-            result = _parse_change_patchset(seg)
-            return result[0] if result else None
+            return _parse_change_patchset(seg)
         return None
     # No scheme: bare change ID or CHANGE/PATCHSET
-    result = _parse_change_patchset(patch.lstrip("/"))
+    return _parse_change_patchset(patch.lstrip("/"))
+
+
+def _extract_change_id(patch: str) -> str | None:
+    """Extract a numeric Gerrit change ID from any supported patch form.
+
+    Convenience wrapper around _extract_change_and_patchset that discards
+    the patchset component.
+    """
+    result = _extract_change_and_patchset(patch)
     return result[0] if result else None
 
 
@@ -272,10 +279,19 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
     args = job.get("arguments", {})
 
     if key == "patch":
-        needle = _extract_change_id(value) or value.lower()
+        needle = _extract_change_and_patchset(value)
         stored = args.get("experiment_patch") or args.get("base_patch") or ""
-        change_id = _extract_change_id(stored)
-        return needle == change_id if change_id else needle in stored.lower()
+        stored_parsed = _extract_change_and_patchset(stored)
+        if needle and stored_parsed:
+            if needle[0] != stored_parsed[0]:
+                return False
+            # If the filter specifies a patchset, require it to match
+            if needle[1] is not None and needle[1] != stored_parsed[1]:
+                return False
+            return True
+        # Fallback: substring match
+        needle_str = needle[0] if needle else value.lower()
+        return needle_str in stored.lower()
 
     if key == "benchmark":
         alias = BENCHMARK_ALIASES.get(value)

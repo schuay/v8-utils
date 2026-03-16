@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import daemon
 import pinpoint
 from pinpoint import (
+    _extract_change_and_patchset,
     _extract_change_id,
     _gerrit_change_id_from_url,
     _job_matches_filter,
@@ -114,6 +115,42 @@ class TestExtractChangeId:
 
     def test_whitespace_stripped(self):
         assert _extract_change_id("  1234567  ") == "1234567"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _extract_change_and_patchset
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestExtractChangeAndPatchset:
+    def test_bare_number(self):
+        assert _extract_change_and_patchset("1234567") == ("1234567", None)
+
+    def test_number_slash_patchset(self):
+        assert _extract_change_and_patchset("1234567/3") == ("1234567", "3")
+
+    def test_full_gerrit_url_with_patchset(self):
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+        assert _extract_change_and_patchset(url) == ("1234567", "3")
+
+    def test_full_gerrit_url_no_patchset(self):
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
+        assert _extract_change_and_patchset(url) == ("1234567", None)
+
+    def test_crrev_url_with_patchset(self):
+        assert _extract_change_and_patchset("https://crrev.com/c/1234567/3") == (
+            "1234567",
+            "3",
+        )
+
+    def test_crrev_url_no_patchset(self):
+        assert _extract_change_and_patchset("https://crrev.com/c/1234567") == (
+            "1234567",
+            None,
+        )
+
+    def test_unrecognised_url(self):
+        assert _extract_change_and_patchset("https://example.com/foo") is None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -229,6 +266,31 @@ class TestJobMatchesFilter:
     def test_bot_alias_no_match(self):
         job = _make_job(configuration="linux-r350-perf")
         assert not _job_matches_filter(job, "bot=m1")
+
+    def test_patch_with_patchset_matches_same_patchset(self):
+        job = _make_job(
+            experiment_patch="https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+        )
+        assert _job_matches_filter(job, "patch=1234567/3")
+
+    def test_patch_with_patchset_no_match_different_patchset(self):
+        job = _make_job(
+            experiment_patch="https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+        )
+        assert not _job_matches_filter(job, "patch=1234567/1")
+
+    def test_patch_without_patchset_matches_any_patchset(self):
+        job = _make_job(
+            experiment_patch="https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+        )
+        assert _job_matches_filter(job, "patch=1234567")
+
+    def test_patch_patchset_url_form(self):
+        job = _make_job(
+            experiment_patch="https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
+        )
+        assert _job_matches_filter(job, "patch=https://crrev.com/c/1234567/3")
+        assert not _job_matches_filter(job, "patch=https://crrev.com/c/1234567/1")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
