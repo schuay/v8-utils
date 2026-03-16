@@ -2,6 +2,7 @@
 
 import concurrent.futures
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
@@ -139,13 +140,17 @@ def pinpoint_cancel_job(
 
 
 def _fetch_jobs_list(
-    count: int = 20, user: str | None = None, filters: list[str] | None = None
+    count: int = 20,
+    user: str | None = None,
+    filters: list[str] | None = None,
+    since: datetime | None = None,
 ) -> list[dict]:
     """Fetch job list as dicts (internal helper)."""
     if user is None:
         user = config.load().user or pinpoint.get_current_user_email()
     return [
-        pinpoint.summarise_job(j) for j in pinpoint.fetch_jobs(user, count, filters)
+        pinpoint.summarise_job(j)
+        for j in pinpoint.fetch_jobs(user, count, filters, since=since)
     ]
 
 
@@ -157,6 +162,7 @@ def pinpoint_list_jobs(
     status: str | None = None,
     benchmark: str | None = None,
     bot: str | None = None,
+    since: str = "one month ago",
 ) -> CallToolResult:
     """List recent Pinpoint jobs for a user, newest first. CQ jobs are excluded.
 
@@ -177,6 +183,9 @@ def pinpoint_list_jobs(
                  "m2"    → mac-m2-pro-perf
                  "m3"    → mac-m3-pro-perf
                  "m4"    → mac-m4-mini-perf
+    since:     only show jobs created after this date (default: "one month ago").
+               Accepts natural language ("2 weeks ago", "yesterday") or ISO dates.
+               Use "all" to disable the cutoff.
 
     All filters are ANDed together.
     """
@@ -189,7 +198,8 @@ def pinpoint_list_jobs(
         filters.append(f"benchmark={benchmark}")
     if bot:
         filters.append(f"bot={bot}")
-    jobs = _fetch_jobs_list(count, user, filters or None)
+    since_dt = pinpoint.parse_since(since)
+    jobs = _fetch_jobs_list(count, user, filters or None, since=since_dt)
     if not jobs:
         return _text_result("No jobs found.")
     return _text_result(_format_job_list(jobs))

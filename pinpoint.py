@@ -7,6 +7,7 @@ import re
 import statistics
 import subprocess
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
@@ -296,15 +297,48 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
     return value.lower() in field.lower()
 
 
+def _parse_created(created: str) -> datetime:
+    """Parse a Pinpoint job's 'created' timestamp to a UTC datetime."""
+    # Strip trailing 'Z' or timezone info and parse as UTC.
+    s = created.rstrip("Z").split("+")[0]
+    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+
+
+_DEFAULT_SINCE = timedelta(days=30)
+
+
+def parse_since(value: str) -> datetime:
+    """Parse a --since value into a UTC datetime.
+
+    Uses dateparser for natural language support. Accepts anything dateparser
+    understands, e.g. "one month ago", "2 weeks ago", "2026-03-01", "yesterday".
+
+    The special value "all" disables the cutoff (returns datetime.min).
+    """
+    import dateparser
+
+    value = value.strip()
+    if value.lower() == "all":
+        return datetime.min
+    dt = dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": True})
+    if dt is None:
+        raise ValueError(
+            f"Could not parse --since value: {value!r}. "
+            'Try "2 weeks ago", "2026-03-01", or "all".'
+        )
+    return dt
+
+
 def _fetch_jobs_for_email(
-    email: str, count: int, filters: list[str] | None
+    email: str, count: int, filters: list[str] | None, since: datetime | None
 ) -> list[dict]:
     """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API."""
     matched: list[dict] = []
     seen_ids: set[str] = set()
     params: dict = {"filter": f"user={email}"}
+    hit_cutoff = False
 
-    while len(matched) < count:
+    while len(matched) < count and not hit_cutoff:
         r = httpx.get(
             f"{_PINPOINT_BASE}/api/jobs",
             params=params,
@@ -317,6 +351,11 @@ def _fetch_jobs_for_email(
         if filters:
             page = [j for j in page if all(_job_matches_filter(j, f) for f in filters)]
         for j in page:
+            if since:
+                created = j.get("created", "")
+                if created and _parse_created(created) < since:
+                    hit_cutoff = True
+                    break
             if j["job_id"] not in seen_ids:
                 seen_ids.add(j["job_id"])
                 matched.append(j)
@@ -332,18 +371,30 @@ def _fetch_jobs_for_email(
     return matched
 
 
-def fetch_jobs(user: str, count: int, filters: list[str] | None = None) -> list[dict]:
+def fetch_jobs(
+    user: str,
+    count: int,
+    filters: list[str] | None = None,
+    since: datetime | None = None,
+) -> list[dict]:
     """Fetch the `count` most recent non-CQ jobs for a user.
 
     Queries all email variants (@google.com, @chromium.org) and merges.
     The /api/jobs endpoint is public; no auth required.
 
     filters: list of "key=value" strings, ANDed together.
+    since:   only return jobs created on or after this datetime (default: 30 days ago).
+             Pass since=datetime.min to disable the cutoff.
     """
+    if since is None:
+        since = datetime.now(timezone.utc) - _DEFAULT_SINCE
+    if since == datetime.min:
+        since = None
     seen_ids: set[str] = set()
     all_jobs: list[dict] = []
     for jobs in [
-        _fetch_jobs_for_email(e, count, filters) for e in user_email_variants(user)
+        _fetch_jobs_for_email(e, count, filters, since)
+        for e in user_email_variants(user)
     ]:
         for j in jobs:
             if j["job_id"] not in seen_ids:

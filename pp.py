@@ -233,7 +233,10 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         filters.append(f"benchmark={args.benchmark}")
     if args.bot:
         filters.append(f"bot={args.bot}")
-    jobs = _fetch_jobs_list(count=args.count, user=args.user, filters=filters or None)
+    since = pinpoint.parse_since(args.since)
+    jobs = _fetch_jobs_list(
+        count=args.count, user=args.user, filters=filters or None, since=since
+    )
     if not jobs:
         print("No jobs found.")
         return
@@ -538,6 +541,12 @@ def main() -> None:
         "--bot",
         default=None,
         help="Filter by bot config or alias (m1, m2, m3, m4, linux)",
+    )
+    p.add_argument(
+        "--since",
+        default="one month ago",
+        help='Only show jobs after this date (default: "one month ago"). '
+        'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
     )
     p.set_defaults(func=_cmd_list_jobs)
 
