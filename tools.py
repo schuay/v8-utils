@@ -885,8 +885,10 @@ def jsb_run_bench(
     """Run a JetStream2/3 story with one or more d8 builds and return scores.
 
     bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
-    builds: list of "build[:flags]" specs under v8_out, e.g.:
-              ["release-main", "release-lto:--turbolev-future"]
+    builds: list of "build[:flags]" specs under v8_out, or full paths
+            to d8 binaries, e.g.:
+              ["release-main", "release-lto:--turbolev-future",
+               "/home/user/v8-alt/out/release/d8"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
     perf:   if True, record a local perf trace (no upload) instead of

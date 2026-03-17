@@ -9,6 +9,8 @@ Usage:
 Build spec syntax:
   release-main            # no extra flags
   release-lto:--turbolev  # with extra d8/JS flags after the colon
+  /path/to/d8             # full path to d8 binary
+  /path/to/d8:--turbolev  # full path with extra flags
 """
 
 from __future__ import annotations
@@ -33,20 +35,35 @@ import config as cfg_module
 class Variant:
     build: str
     flags: str = ""
+    _d8_path: Path | None = None
 
     @classmethod
     def parse(cls, spec: str) -> Variant:
-        """Parse 'build[:flags]' spec."""
+        """Parse 'build[:flags]' or '/path/to/d8[:flags]' spec.
+
+        When the build part contains a '/' it is treated as a direct path
+        to a d8 binary, bypassing v8_out resolution.
+        """
         if ":" in spec:
             build, flags = spec.split(":", 1)
-            return cls(build=build.strip(), flags=flags.strip())
-        return cls(build=spec.strip())
+            build, flags = build.strip(), flags.strip()
+        else:
+            build, flags = spec.strip(), ""
+
+        if "/" in build:
+            d8_path = Path(build).expanduser()
+            # Use parent dir as label (e.g. ".../release/d8" → "release")
+            label = d8_path.parent.name if d8_path.name == "d8" else d8_path.name
+            return cls(build=label, flags=flags, _d8_path=d8_path)
+        return cls(build=build, flags=flags)
 
     @property
     def label(self) -> str:
         return f"{self.build} [{self.flags}]" if self.flags else self.build
 
     def d8(self, v8_out: Path) -> Path:
+        if self._d8_path is not None:
+            return self._d8_path
         return v8_out / self.build / "d8"
 
     def cmd(self, d8: Path, suite_dir: Path, bench: str) -> list[str]:
@@ -300,6 +317,7 @@ examples:
   jsb crypto-md5-SP -b release --gdb                  # run under gdb
   jsb crypto-md5-SP -b release --rr                   # record with rr
   jsb crypto-md5-SP -b release --perf                 # linux-perf-d8.py
+  jsb regexp-octane -b ~/v8-alt/out/release/d8        # full d8 path
 """,
     )
     p.add_argument("bench", help="Benchmark story name, e.g. regexp-octane")
@@ -309,9 +327,9 @@ examples:
         dest="builds",
         action="append",
         default=[],
-        metavar="BUILD[:FLAGS]",
-        help="Build name under v8_out, optionally with d8 flags after ':'. "
-        "Repeatable — each -b creates one variant.",
+        metavar="BUILD_OR_PATH[:FLAGS]",
+        help="Build name under v8_out (or full path to d8), optionally "
+        "with d8 flags after ':'. Repeatable — each -b creates one variant.",
     )
     p.add_argument(
         "-n",
