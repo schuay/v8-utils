@@ -898,12 +898,6 @@ def jsb_run_bench(
 
     Returns a formatted comparison table with mean, stdev, and delta
     (with significance) when two variants are given.
-
-    Configure paths in ~/.config/v8-utils/config.toml:
-      v8_out        = "~/v8/out"
-      js2_dir       = "~/JetStream2"
-      js3_dir       = "~/JetStream3"
-      default_build = "release"
     """
     cfg = config.load()
     js3 = suite.lower() != "js2"
@@ -1069,12 +1063,6 @@ def repo_read(
     limit:  max lines to return (default: 2000)
     ref:    git ref to read from (e.g. commit hash, branch, tag).
             If omitted, reads from the working tree.
-
-    Configure repo paths in ~/.config/v8-utils/config.toml:
-      jsc_dir          = "~/WebKit/Source/JavaScriptCore"
-      js2_dir          = "~/JetStream2"
-      js3_dir          = "~/JetStream3"
-      spidermonkey_dir = "~/gecko-dev/js/src"
     """
     import subprocess
 
@@ -1126,12 +1114,6 @@ def repo_grep(
     limit:   max matches to return (default: 100)
     ref:     git ref to search in (e.g. commit hash, branch, tag).
              If omitted, searches the working tree.
-
-    Configure repo paths in ~/.config/v8-utils/config.toml:
-      jsc_dir          = "~/WebKit/Source/JavaScriptCore"
-      js2_dir          = "~/JetStream2"
-      js3_dir          = "~/JetStream3"
-      spidermonkey_dir = "~/gecko-dev/js/src"
     """
     import subprocess
 
