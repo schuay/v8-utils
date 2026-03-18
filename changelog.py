@@ -34,6 +34,7 @@ ENTRIES: list[str] = [
     "Multi-job operations _(`show-results`, `show-job`, `cancel-job`)_ now run concurrently",
     "`list-jobs` and `show-results` accept filter flags: `--patch`, `--benchmark`, `--bot`, `--status`, `--since`",
     "`list-jobs` and `show-results` now support `--patch=auto` to detect the CL from the current branch",
+    "Subcommand shortcuts: `pp s` (show-results), `pp l` (list-jobs), `pp c` (create-job)",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

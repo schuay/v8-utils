@@ -559,7 +559,9 @@ def main() -> None:
     p.set_defaults(func=_cmd_cancel_job)
 
     # list-jobs
-    p = sub.add_parser("list-jobs", help="List recent Pinpoint jobs for a user")
+    p = sub.add_parser(
+        "list-jobs", aliases=["l"], help="List recent Pinpoint jobs for a user"
+    )
     p.add_argument(
         "-n",
         "--count",
@@ -607,7 +609,9 @@ def main() -> None:
     p.set_defaults(func=_cmd_list_jobs)
 
     # show-results
-    p = sub.add_parser("show-results", help="Show base-vs-experiment comparison table")
+    p = sub.add_parser(
+        "show-results", aliases=["s"], help="Show base-vs-experiment comparison table"
+    )
     p.add_argument(
         "job_urls",
         nargs="*",
@@ -666,7 +670,9 @@ def main() -> None:
 
     # create-job
     _template_names = ", ".join(pinpoint.BENCHMARK_ALIASES)
-    p = sub.add_parser("create-job", help="Create one or more Pinpoint A/B try jobs")
+    p = sub.add_parser(
+        "create-job", aliases=["c"], help="Create one or more Pinpoint A/B try jobs"
+    )
     p.add_argument(
         "-t",
         "--template",
