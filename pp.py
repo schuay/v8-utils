@@ -390,6 +390,8 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
                 f"{_YELLOW}warning: could not fetch latest build for {cfg}: {build_num_or_err}{_RESET}"
             )
 
+    created_job_ids: list[str] = []
+
     def on_job_created(index, total, combo, job):
         cfg_name, bench, story, exp_patch, exp_js_flags = combo
         if total > 1 and index:
@@ -404,6 +406,7 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
                 parts.append(f"flags:{exp_js_flags}")
             print(f"{_DIM}[{index + 1}/{total}] {' / '.join(parts)}{_RESET}")
         if job.get("job_id"):
+            created_job_ids.append(job["job_id"])
             _print_job(job)
         else:
             _out(job)
@@ -431,6 +434,11 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         on_watching=on_watching,
         watch=args.watch,
     )
+
+    if created_job_ids:
+        ids_str = " ".join(created_job_ids)
+        print(f"\n{_DIM}Once jobs are done, show results using:{_RESET}")
+        print(f"{_DIM}pp show-results {ids_str}{_RESET}")
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:

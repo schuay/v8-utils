@@ -808,6 +808,8 @@ def run_d8(
 ) -> CallToolResult:
     """Run the d8 JavaScript shell with the given arguments.
 
+    For benchmarking, use the jsb_run_bench tool instead.
+
     args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
     build:       build directory name under v8_out (default: config default_build)
     cwd:         working directory for d8 (default: v8_out parent)
@@ -882,13 +884,14 @@ def jsb_run_bench(
     perf: bool = False,
     perf_upload: bool = False,
 ) -> CallToolResult:
-    """Run a JetStream2/3 story with one or more d8 builds and return scores.
+    """Run a JetStream2/3 story with one or more JS shell builds and return scores.
 
     bench:  benchmark story name, e.g. "regexp-octane", "chai-wtb"
     builds: list of "build[:flags]" specs under v8_out, or full paths
-            to d8 binaries, e.g.:
+            to any JS shell binary (d8, jsc, etc.), e.g.:
               ["release-main", "release-lto:--turbolev-future",
-               "/home/user/v8-alt/out/release/d8"]
+               "/home/user/v8-alt/out/release/d8",
+               "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
     perf:   if True, record a local perf trace (no upload) instead of
