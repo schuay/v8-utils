@@ -387,8 +387,9 @@ def pinpoint_show_results(
 ) -> CallToolResult:
     """Show a base-vs-experiment comparison table for a Pinpoint job.
 
-    One row per metric: base mean±stdev, exp mean±stdev, %change, p-value,
-    significance marker. Sorted by %change descending.
+    One row per metric: base mean±stdev, exp mean±stdev, %change, p-value
+    (Mann-Whitney U, α=0.01), direction (↑improved/↓regressed).
+    Sorted by %change descending.
 
     job_url:   space-separated Pinpoint job URL(s) or job ID(s)
     show_all:  if False (default), only show statistically significant results.
@@ -892,8 +893,8 @@ def jsb_run_bench(
             perf.data path for use with perf_hotspots, perf_annotate, etc.
     perf_upload: like perf, but also uploads the trace via pprof.
 
-    Returns a formatted comparison table with mean, stdev, and delta
-    (with significance) when two variants are given.
+    Returns a comparison table with mean, stdev, delta, p-value
+    (Welch's t-test), and confidence (high/medium/low) per metric.
     """
     cfg = config.load()
     js3 = suite.lower() != "js2"
@@ -1190,7 +1191,9 @@ def perf_hotspots(
 
     Each entry includes self_pct (exclusive time) and total_pct (inclusive
     time including callees), plus the symbol name and shared object.
-    Sorted by self_pct descending — start here to find what to annotate.
+    Sorted by self_pct descending.
+
+    Typical workflow: perf_hotspots → perf_flamegraph → perf_annotate.
 
     perf_data: path to perf.data file
     dso:       restrict to a specific shared object, e.g. "libv8.so" or "d8"
