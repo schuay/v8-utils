@@ -750,8 +750,8 @@ def main() -> None:
         "-r",
         "--repeat",
         type=int,
-        default=100,
-        help="Bot runs per variant (default: 100)",
+        default=150,
+        help="Bot runs per variant (default: 150)",
     )
     p.add_argument(
         "--bug-id", type=int, default=None, dest="bug_id", help="Buganizer issue ID"
