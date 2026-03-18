@@ -11,15 +11,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+import changelog
 import daemon
 import pinpoint
 from pinpoint import (
+    _apply_significance,
     _extract_change_and_patchset,
     _extract_change_id,
     _gerrit_change_id_from_url,
+    _is_cq_job,
     _job_matches_filter,
     _parse_change_patchset,
+    _value_stats,
     job_id_from_url,
+    user_email_variants,
 )
 
 
@@ -389,3 +394,168 @@ class TestMessageText:
         text = daemon._message_text(self._job(), results=[row])
         assert "Results" in text
         assert "Score" in text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# user_email_variants
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestUserEmailVariants:
+    def test_chromium_email(self):
+        result = user_email_variants("alice@chromium.org")
+        assert "alice@chromium.org" in result
+        assert "alice@google.com" in result
+
+    def test_google_email(self):
+        result = user_email_variants("alice@google.com")
+        assert "alice@google.com" in result
+        assert "alice@chromium.org" in result
+
+    def test_no_duplicates(self):
+        result = user_email_variants("alice@google.com")
+        assert len(result) == len(set(result))
+
+    def test_preserves_original_first(self):
+        result = user_email_variants("alice@example.com")
+        assert result[0] == "alice@example.com"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _is_cq_job
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestIsCqJob:
+    def test_cq_job(self):
+        job = {"arguments": {"tags": '{"origin": "CQ"}'}}
+        assert _is_cq_job(job) is True
+
+    def test_non_cq_job(self):
+        job = {"arguments": {"tags": '{"origin": "user"}'}}
+        assert _is_cq_job(job) is False
+
+    def test_no_tags(self):
+        job = {"arguments": {}}
+        assert _is_cq_job(job) is False
+
+    def test_empty_tags(self):
+        job = {"arguments": {"tags": ""}}
+        assert _is_cq_job(job) is False
+
+    def test_malformed_json(self):
+        job = {"arguments": {"tags": "not json"}}
+        assert _is_cq_job(job) is False
+
+    def test_no_arguments(self):
+        job = {}
+        assert _is_cq_job(job) is False
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _value_stats
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestValueStats:
+    def test_multiple_values(self):
+        s = _value_stats([10.0, 20.0, 30.0])
+        assert s["mean"] == 20.0
+        assert s["n"] == 3
+        assert s["stdev"] is not None
+
+    def test_single_value(self):
+        s = _value_stats([42.0])
+        assert s["mean"] == 42.0
+        assert s["stdev"] is None
+        assert s["n"] == 1
+
+    def test_empty(self):
+        s = _value_stats([])
+        assert s["mean"] is None
+        assert s["stdev"] is None
+        assert s["n"] == 0
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _apply_significance
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestApplySignificance:
+    def _row(self, p):
+        return {"p_value": p}
+
+    def test_pinpoint_significant(self):
+        rows = _apply_significance([self._row(0.005)], method="pinpoint")
+        assert rows[0]["significant"] is True
+
+    def test_pinpoint_not_significant(self):
+        rows = _apply_significance([self._row(0.05)], method="pinpoint")
+        assert rows[0]["significant"] is False
+
+    def test_pinpoint_default_alpha_is_001(self):
+        rows = _apply_significance([self._row(0.009)])
+        assert rows[0]["significant"] is True
+        rows = _apply_significance([self._row(0.011)])
+        assert rows[0]["significant"] is False
+
+    def test_pinpoint_custom_alpha(self):
+        rows = _apply_significance([self._row(0.04)], method="pinpoint", alpha=0.05)
+        assert rows[0]["significant"] is True
+
+    def test_nan_p_value_pinpoint(self):
+        rows = _apply_significance([self._row(float("nan"))], method="pinpoint")
+        assert rows[0]["significant"] is False
+        assert rows[0]["p_value"] == 1.0
+
+    def test_fdr_method(self):
+        # One clearly significant, one not
+        rows = _apply_significance([self._row(0.001), self._row(0.9)], method="fdr")
+        assert rows[0]["significant"] is True
+        assert rows[1]["significant"] is False
+
+    def test_fdr_nan_handling(self):
+        rows = _apply_significance(
+            [self._row(float("nan")), self._row(0.001)], method="fdr"
+        )
+        assert rows[0]["significant"] is False
+        assert rows[0]["p_value"] == 1.0
+        assert rows[1]["significant"] is True
+
+    def test_empty_rows(self):
+        assert _apply_significance([]) == []
+
+    def test_all_nan_fdr(self):
+        rows = _apply_significance(
+            [self._row(float("nan")), self._row(float("nan"))], method="fdr"
+        )
+        assert all(not r["significant"] for r in rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# changelog._format_entry
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestFormatEntry:
+    def test_no_color_strips_formatting(self):
+        text = changelog._format_entry("*bold* _dim_ `code`", color=False)
+        assert text == "bold dim code"
+
+    def test_color_bold(self):
+        text = changelog._format_entry("*bold*", color=True)
+        assert "\033[1m" in text
+        assert "bold" in text
+
+    def test_color_dim(self):
+        text = changelog._format_entry("_dim_", color=True)
+        assert "\033[2m" in text
+
+    def test_color_code(self):
+        text = changelog._format_entry("`code`", color=True)
+        assert "\033[36m" in text
+
+    def test_plain_text_unchanged(self):
+        assert changelog._format_entry("hello", color=False) == "hello"
+        assert changelog._format_entry("hello", color=True) == "hello"
