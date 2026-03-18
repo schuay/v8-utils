@@ -739,16 +739,9 @@ def pinpoint_create_job(
 ) -> CallToolResult:
     """Create Pinpoint A/B try jobs. Requires luci-auth login.
 
-    IMPORTANT — this tool auto-detects sensible defaults. In most cases you
-    only need to specify what differs from the defaults. Just call it:
-      - No args at all → runs js3+sp3 on m1 with the current branch's CL
-      - configuration="m4" → same but on m4
-      - benchmark="js3" configuration="m4" → js3 on m4
-    Do NOT manually look up git hashes, Gerrit CL URLs, or build status —
-    the tool handles all of that automatically:
-      - base/exp git hash: auto-resolved to the latest cached CI build
-      - benchmark/story: resolved from aliases (js3, sp3, js2)
-    If chat notifications are configured, jobs are automatically watched.
+    Creates one job per combination of benchmark × configuration.
+    Pass multiple space-separated values to create jobs in bulk, e.g.:
+      benchmark="js3 sp3" configuration="m1 m4"  →  4 jobs
 
     benchmark:      space-separated benchmark names or aliases (default: "js3 sp3"):
                       "js3"  → jetstream-main.crossbench (story: JetStream)
