@@ -156,54 +156,6 @@ pp daemon-stop
 The daemon persists across terminal sessions and logs to
 `~/.local/share/v8-utils/daemon.log`.
 
-#### Setting up Chat notifications (Chat app, primary)
-
-Notifications are delivered via a shared Google Chat app using service account
-impersonation — no key files required. There is a one-time admin setup and a
-per-user setup.
-
-**Admin setup (once):**
-
-1. Create a GCP project and enable the **Google Chat API**.
-2. Create a service account (e.g. `v8-utils-pinpoint@your-project.iam.gserviceaccount.com`).
-3. Publish a Chat app backed by that service account (GCP Console → Google Chat API → Configuration). Set the app display name to something recognisable, e.g. `v8-utils-pinpoint`.
-4. Grant each user the **Service Account Token Creator** role on the service account:
-   ```bash
-   gcloud iam service-accounts add-iam-policy-binding \
-     v8-utils-pinpoint@your-project.iam.gserviceaccount.com \
-     --member='user:you@google.com' \
-     --role='roles/iam.serviceAccountTokenCreator'
-   ```
-5. Set `chat_service_account_email` in a shared `config.toml` that users copy, or document it for users to add manually.
-
-**Per-user setup:**
-
-1. Log in with Application Default Credentials:
-   ```bash
-   gcloud auth application-default login
-   ```
-2. In Google Chat, search for the app by its display name (e.g. `v8-utils-pinpoint`), open a DM, and send it any message.
-3. Run the setup command:
-   ```bash
-   pp chat-setup
-   ```
-   This identifies your Google account, finds the DM space with the bot, writes
-   `chat_app_space` to your config, and sends a confirmation message to Chat.
-4. If the notification daemon was already running, restart it:
-   ```bash
-   pp daemon-stop && pp watch <job_url>
-   ```
-
-#### Setting up Chat notifications (webhook, fallback)
-
-As a simpler alternative (no GCP setup), configure an incoming webhook:
-
-```toml
-chat_webhook = "https://chat.googleapis.com/v1/spaces/.../messages?key=..."
-```
-
-Create the webhook via: Space settings → Apps & integrations → Add webhooks.
-
 ## MCP server (`v8-mcp`)
 
 The MCP server exposes the same Pinpoint tools to AI assistants. Add it to
