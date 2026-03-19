@@ -48,13 +48,39 @@ class SlipstreamAdaptor:
                 },
             )
 
-    def fetch_series(self, key: SeriesKey) -> list[SeriesPoint]:
+    def fetch_series(
+        self,
+        key: SeriesKey,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[SeriesPoint]:
         d = key.dimensions
+
+        # Join with commits to filter by date
+        where = (
+            "s.engine=? AND s.suite=? AND s.flags=? AND s.benchmark=? AND s.metric=?"
+        )
+        params: list = [
+            self._engine,
+            d["suite"],
+            d["flags"],
+            d["benchmark"],
+            key.metric,
+        ]
+
+        if since:
+            where += " AND c.date >= ?"
+            params.append(since)
+        if until:
+            where += " AND c.date <= ?"
+            params.append(until)
+
         score_rows = self._conn.execute(
-            "SELECT commit_id, score FROM scores"
-            " WHERE engine=? AND suite=? AND flags=? AND benchmark=? AND metric=?"
-            " ORDER BY commit_id",
-            (self._engine, d["suite"], d["flags"], d["benchmark"], key.metric),
+            "SELECT s.commit_id, s.score FROM scores s"
+            " JOIN commits c ON s.engine = c.engine AND s.commit_id = c.commit_id"
+            f" WHERE {where}"
+            " ORDER BY s.commit_id",
+            params,
         ).fetchall()
 
         # Group raw scores by commit, compute aggregates
@@ -62,12 +88,20 @@ class SlipstreamAdaptor:
         for r in score_rows:
             by_commit[r["commit_id"]].append(r["score"])
 
-        # Fetch commit metadata
+        # Fetch commit metadata for the same date range
+        meta_where = "engine=? AND commit_id IS NOT NULL"
+        meta_params: list = [self._engine]
+        if since:
+            meta_where += " AND date >= ?"
+            meta_params.append(since)
+        if until:
+            meta_where += " AND date <= ?"
+            meta_params.append(until)
+
         commit_info = {}
         for r in self._conn.execute(
-            "SELECT commit_id, hash, date, title FROM commits"
-            " WHERE engine=? AND commit_id IS NOT NULL",
-            (self._engine,),
+            f"SELECT commit_id, hash, date, title FROM commits WHERE {meta_where}",
+            meta_params,
         ).fetchall():
             commit_info[r["commit_id"]] = r
 

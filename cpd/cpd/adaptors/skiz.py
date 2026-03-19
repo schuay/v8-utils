@@ -80,18 +80,47 @@ class SkizAdaptor:
                 },
             )
 
-    def fetch_series(self, key: SeriesKey) -> list[SeriesPoint]:
+    def fetch_series(
+        self,
+        key: SeriesKey,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[SeriesPoint]:
         d = key.dimensions
+        conditions = [
+            "bot = ?",
+            "benchmark = ?",
+            "test = ?",
+            "variant = ?",
+            "submetric = ''",
+        ]
+        params: list = [d["bot"], d["benchmark"], d["test"], d["variant"]]
+
+        if since:
+            conditions.append("commit_time >= ?")
+            params.append(since)
+        if until:
+            conditions.append("commit_time < ?")
+            # +1 day for inclusive upper bound
+            from datetime import date, timedelta
+
+            try:
+                dt = date.fromisoformat(until) + timedelta(days=1)
+                params.append(dt.isoformat())
+            except ValueError:
+                conditions[-1] = "commit_time <= ?"
+                params.append(until)
+
+        where = " AND ".join(conditions)
         df = _query(
             self._con,
             self._dialect,
             f"SELECT commit_number, git_hash, commit_time,"
             f"       mean, stdev, count"
             f" FROM {_AGG_TABLE}"
-            f" WHERE bot = ? AND benchmark = ? AND test = ?"
-            f"   AND variant = ? AND submetric = ''"
+            f" WHERE {where}"
             f" ORDER BY commit_number",
-            [d["bot"], d["benchmark"], d["test"], d["variant"]],
+            params,
         )
 
         return [

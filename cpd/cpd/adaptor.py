@@ -24,8 +24,18 @@ class Adaptor(Protocol):
         """Enumerate available time series, optionally filtered."""
         ...
 
-    def fetch_series(self, key: SeriesKey) -> list[SeriesPoint]:
-        """Fetch the time series for a given key, ordered by commit_id."""
+    def fetch_series(
+        self,
+        key: SeriesKey,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> list[SeriesPoint]:
+        """Fetch the time series for a given key, ordered by commit_id.
+
+        Args:
+            since: Optional YYYY-MM-DD lower bound (inclusive).
+            until: Optional YYYY-MM-DD upper bound (inclusive).
+        """
         ...
 
 

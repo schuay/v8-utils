@@ -9,7 +9,9 @@ from typing import Annotated, Optional
 import typer
 
 from .adaptor import CONFIG_DIR, discover
+from .commits import CommitStore
 from .detect import detect
+from .engines import ENGINES, get_id_regex, get_src_dir
 from .models import AnalysisConfig
 from .report import print_report
 
@@ -23,10 +25,20 @@ def _load_config() -> dict:
     return {}
 
 
+def _parse_date(value: str) -> str:
+    """Parse a date string like '2026-01-15' or '2 weeks ago' into YYYY-MM-DD."""
+    import dateparser
+
+    dt = dateparser.parse(value)
+    if dt is None:
+        raise typer.BadParameter(f"Cannot parse date: {value!r}")
+    return dt.strftime("%Y-%m-%d")
+
+
 def _make_adaptor(name: str, cfg: dict):
     """Instantiate an adaptor by name, using config for kwargs."""
     sources = cfg.get("sources", {})
-    source_cfg = sources.get(name, {})
+    source_cfg = dict(sources.get(name, {}))
     adaptor_name = source_cfg.pop("adaptor", name)
 
     adaptors = discover()
@@ -38,6 +50,12 @@ def _make_adaptor(name: str, cfg: dict):
     return adaptors[adaptor_name](**source_cfg)
 
 
+def _engine_for_source(name: str, cfg: dict) -> str | None:
+    """Get the engine name associated with a source (from config or adaptor defaults)."""
+    sources = cfg.get("sources", {})
+    return sources.get(name, {}).get("engine")
+
+
 @app.command("detect")
 def detect_cmd(
     source: Annotated[str, typer.Argument(help="Data source name")],
@@ -46,6 +64,18 @@ def detect_cmd(
     ] = None,
     metric: Annotated[
         Optional[str], typer.Option("--metric", "-m", help="Metric glob filter")
+    ] = None,
+    since: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Only include commits on or after this date (YYYY-MM-DD or '2 weeks ago')"
+        ),
+    ] = None,
+    until: Annotated[
+        Optional[str],
+        typer.Option(
+            help="Only include commits on or before this date (YYYY-MM-DD or 'yesterday')"
+        ),
     ] = None,
     penalty: Annotated[
         Optional[float], typer.Option("--penalty", help="PELT penalty")
@@ -67,7 +97,11 @@ def detect_cmd(
     """Detect change points in benchmark time series."""
     cfg = _load_config()
 
-    # Build analysis config from defaults + config file + CLI overrides
+    # Parse dates
+    since_date = _parse_date(since) if since else None
+    until_date = _parse_date(until) if until else None
+
+    # Build analysis config
     analysis_cfg = cfg.get("analysis", {})
     config = AnalysisConfig(
         penalty=penalty or analysis_cfg.get("penalty", 3.0),
@@ -86,6 +120,10 @@ def detect_cmd(
 
     adaptor = _make_adaptor(source, cfg)
 
+    # Open commit store for report
+    engine = _engine_for_source(source, cfg)
+    commit_store = CommitStore()
+
     all_results = []
     series_data = {}
 
@@ -95,7 +133,7 @@ def detect_cmd(
         if metric and not fnmatch(key.metric, metric):
             continue
 
-        series = adaptor.fetch_series(key)
+        series = adaptor.fetch_series(key, since=since_date, until=until_date)
         if not series:
             continue
 
@@ -104,7 +142,14 @@ def detect_cmd(
             all_results.extend(results)
             series_data[key] = series
 
-    print_report(all_results, group_by_commit=group_by_commit, series_data=series_data)
+    print_report(
+        all_results,
+        group_by_commit=group_by_commit,
+        series_data=series_data,
+        commit_store=commit_store,
+        engine=engine,
+    )
+    commit_store.close()
 
 
 @app.command()
@@ -148,6 +193,39 @@ def series(
 
 
 @app.command()
+def sync(
+    engine: Annotated[str, typer.Argument(help="Engine to sync (v8, jsc)")],
+    since: Annotated[
+        Optional[str],
+        typer.Option(help="Sync commits since this date (default: 6 months ago)"),
+    ] = None,
+):
+    """Populate commit metadata from an engine's git repo."""
+    id_regex = get_id_regex(engine)
+    if not id_regex:
+        typer.echo(f"Error: unknown engine '{engine}'", err=True)
+        typer.echo(f"Available: {', '.join(sorted(ENGINES))}", err=True)
+        raise typer.Exit(1)
+
+    src_dir = get_src_dir(engine)
+    if not src_dir or not src_dir.is_dir():
+        typer.echo(
+            f"Error: source directory for '{engine}' not found."
+            f" Check v8-utils config (~/.config/v8-utils/config.toml).",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    since_date = since or "6 months ago"
+
+    store = CommitStore()
+    typer.echo(f"Syncing {engine} commits from {src_dir} (since {since_date})...")
+    count = store.populate(engine, src_dir, id_regex, since=since_date)
+    typer.echo(f"  {count} commits processed.")
+    store.close()
+
+
+@app.command()
 def init():
     """Create config directory and template config file."""
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -171,6 +249,7 @@ def init():
 # [sources.skiz]
 # adaptor = "skiz"
 # db_url = "postgres://user:pass@host/skiz"
+# engine = "v8"
 
 [analysis]
 penalty = 3.0

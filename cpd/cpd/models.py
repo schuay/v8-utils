@@ -48,6 +48,17 @@ class ChangePoint:
 
 
 @dataclass
+class CommitInfo:
+    """Commit metadata from git log."""
+
+    id: int
+    hash: str
+    date: str
+    timestamp: int
+    title: str
+
+
+@dataclass
 class AnalysisConfig:
     """Tuning parameters for PELT."""
 
