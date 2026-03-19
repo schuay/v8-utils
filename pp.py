@@ -502,18 +502,20 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:
-    os.execvp(
+    cmd = [
         "uv",
-        [
-            "uv",
-            "tool",
-            "install",
-            "git+https://github.com/schuay/v8-utils.git",
-            "--reinstall",
-            "--index-url",
-            "https://pypi.org/simple/",
-        ],
-    )
+        "tool",
+        "install",
+        "git+https://github.com/schuay/v8-utils.git",
+        "--reinstall",
+        "--index-url",
+        "https://pypi.org/simple/",
+    ]
+    cmd_str = " ".join(cmd)
+    print(f"Running `{cmd_str}`.")
+    print("If this fails due to permissions, run the command manually.")
+    print()
+    os.execvp("uv", cmd)
 
 
 def _cmd_logs(args: argparse.Namespace) -> None:
