@@ -14,10 +14,12 @@ State files:
   ~/.local/share/v8-utils/daemon.pid
   ~/.local/share/v8-utils/daemon.sock
   ~/.local/share/v8-utils/daemon.log
+  ~/.local/share/v8-utils/daemon.watched
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -34,10 +36,12 @@ import pinpoint
 
 _STATE_DIR = Path("~/.local/share/v8-utils").expanduser()
 SOCK_PATH = _STATE_DIR / "daemon.sock"
-PID_PATH  = _STATE_DIR / "daemon.pid"
-LOG_PATH  = _STATE_DIR / "daemon.log"
+PID_PATH = _STATE_DIR / "daemon.pid"
+LOG_PATH = _STATE_DIR / "daemon.log"
+WATCHED_PATH = _STATE_DIR / "daemon.watched"
 
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
+_STARTUP_MTIME = os.path.getmtime(__file__)
 
 log = logging.getLogger("v8-utils")
 
@@ -45,13 +49,35 @@ log = logging.getLogger("v8-utils")
 def _setup_logging() -> None:
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
     handler = logging.FileHandler(LOG_PATH)
-    handler.setFormatter(logging.Formatter("%(asctime)s  %(levelname)-8s  %(message)s",
-                                           datefmt="%Y-%m-%d %H:%M:%S"))
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s  %(levelname)-8s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
+    )
     log.addHandler(handler)
     log.setLevel(logging.WARNING)
 
 
+# ── Watched-jobs persistence ──────────────────────────────────────────────────
+
+
+def _save_watched(watched: dict[str, str], lock: threading.Lock) -> None:
+    with lock:
+        ids = list(watched)
+    WATCHED_PATH.write_text(json.dumps(ids))
+
+
+def _load_watched() -> dict[str, str]:
+    try:
+        ids = json.loads(WATCHED_PATH.read_text())
+        WATCHED_PATH.unlink(missing_ok=True)
+        return {jid: jid for jid in ids}
+    except (FileNotFoundError, json.JSONDecodeError, ValueError):
+        return {}
+
+
 # ── Notifications ─────────────────────────────────────────────────────────────
+
 
 def _format_job_details_for_chat(job: dict) -> str:
     """Format key job fields as a compact Chat-friendly block."""
@@ -59,16 +85,16 @@ def _format_job_details_for_chat(job: dict) -> str:
     patch = args.get("experiment_patch")
     if patch:
         subject = pinpoint.fetch_gerrit_subject(patch)
-        patch_str = f"{patch}  \"{subject}\"" if subject else patch
+        patch_str = f'{patch}  "{subject}"' if subject else patch
     else:
         patch_str = None
     fields = [
-        ("config",     job.get("configuration")),
-        ("benchmark",  args.get("benchmark")),
-        ("story",      args.get("story")),
-        ("patch",      patch_str),
+        ("config", job.get("configuration")),
+        ("benchmark", args.get("benchmark")),
+        ("story", args.get("story")),
+        ("patch", patch_str),
         ("base-flags", args.get("base_extra_args")),
-        ("exp-flags",  args.get("experiment_extra_args")),
+        ("exp-flags", args.get("experiment_extra_args")),
     ]
     return "\n".join(f"  {k}: {v}" for k, v in fields if v)
 
@@ -89,7 +115,7 @@ def _format_results_for_chat(rows: list[dict]) -> str:
     for r in sig:
         unit = r.get("unit", "")
         base_mean = r.get("base_mean") or 0.0
-        exp_mean  = r.get("exp_mean")  or 0.0
+        exp_mean = r.get("exp_mean") or 0.0
         if base_mean:
             pct = (exp_mean - base_mean) / base_mean * 100
             pct_str = f"{pct:+.1f}%"
@@ -104,15 +130,15 @@ def _format_results_for_chat(rows: list[dict]) -> str:
 
 
 def _message_text(job: dict, results: list[dict] | None = None) -> str:
-    status  = job.get("status", "Unknown")
-    name    = job.get("name", job.get("job_id", "unknown"))
-    job_id  = job.get("job_id", "")
-    url     = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
-    icon    = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
-    details   = _format_job_details_for_chat(job)
+    status = job.get("status", "Unknown")
+    name = job.get("name", job.get("job_id", "unknown"))
+    job_id = job.get("job_id", "")
+    url = f"{pinpoint._PINPOINT_BASE}/job/{job_id}"
+    icon = {"Completed": "✅", "Failed": "❌", "Cancelled": "⏹️"}.get(status, "🔔")
+    details = _format_job_details_for_chat(job)
     exception = job.get("exception")
-    show_cmd  = f"`pp show-results {job_id}`"
-    text      = f"{icon} *{status}*: {name}\n{url}\n{show_cmd}"
+    show_cmd = f"`pp show-results {job_id}`"
+    text = f"{icon} *{status}*: {name}\n{url}\n{show_cmd}"
     if details:
         text += f"\n{details}"
     if exception:
@@ -130,9 +156,11 @@ def _notify_webhook(webhook: str, job: dict, results: list[dict] | None = None) 
         log.error("webhook error for %s: %s", job.get("job_id"), e)
 
 
-def _notify_chat_app(space: str, service_account_email: str, job: dict,
-                     results: list[dict] | None = None) -> None:
+def _notify_chat_app(
+    space: str, service_account_email: str, job: dict, results: list[dict] | None = None
+) -> None:
     import chat
+
     chat.notify(space, service_account_email, _message_text(job, results))
     log.info("Chat app notification sent for %s", job.get("job_id"))
 
@@ -141,7 +169,9 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
     """Send a notification via Chat app (preferred) or webhook (fallback)."""
     if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
-            _notify_chat_app(cfg.chat_app_space, cfg.chat_service_account_email, job, results)
+            _notify_chat_app(
+                cfg.chat_app_space, cfg.chat_service_account_email, job, results
+            )
             return
         except Exception as e:
             log.error("Chat app notification failed: %s", e)
@@ -183,6 +213,7 @@ def _notify_with_results(cfg: config.Config, job: dict) -> None:
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
 
+
 def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
     """Periodically poll all watched jobs and notify on terminal status."""
     while True:
@@ -197,6 +228,10 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
     cfg = config.load()
     while True:
         time.sleep(cfg.poll_interval)
+        if os.path.getmtime(__file__) != _STARTUP_MTIME:
+            log.warning("daemon code changed on disk — exiting for upgrade")
+            _save_watched(watched, lock)
+            os._exit(0)
         with lock:
             job_ids = list(watched)
         if not job_ids:
@@ -214,10 +249,13 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
                 log.info("%s  %s: %s", job_id, status, job.get("name", ""))
                 with lock:
                     watched.pop(job_id, None)
+                _save_watched(watched, lock)
                 if cfg.chat_app_space or cfg.chat_webhook:
                     if status == "Completed":
                         threading.Thread(
-                            target=_notify_with_results, args=(cfg, job), daemon=True,
+                            target=_notify_with_results,
+                            args=(cfg, job),
+                            daemon=True,
                         ).start()
                     else:
                         _notify(cfg, job, None)
@@ -225,8 +263,10 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
 
 # ── Socket listener ───────────────────────────────────────────────────────────
 
-def _socket_loop(watched: dict[str, str], lock: threading.Lock,
-                 ready_fd: int | None = None) -> None:
+
+def _socket_loop(
+    watched: dict[str, str], lock: threading.Lock, ready_fd: int | None = None
+) -> None:
     """Accept job IDs on the Unix socket and add them to the watch set."""
     SOCK_PATH.unlink(missing_ok=True)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as srv:
@@ -247,15 +287,18 @@ def _socket_loop(watched: dict[str, str], lock: threading.Lock,
                         if job_id not in watched:
                             watched[job_id] = job_id
                             log.info("watching %s", job_id)
+                    _save_watched(watched, lock)
             except Exception:
                 log.error("socket loop error", exc_info=True)
 
 
 # ── Daemon entry point ────────────────────────────────────────────────────────
 
+
 def _cleanup() -> None:
     SOCK_PATH.unlink(missing_ok=True)
     PID_PATH.unlink(missing_ok=True)
+    WATCHED_PATH.unlink(missing_ok=True)
 
 
 def run(ready_fd: int | None = None) -> None:
@@ -264,17 +307,20 @@ def run(ready_fd: int | None = None) -> None:
     _setup_logging()
 
     signal.signal(signal.SIGTERM, lambda *_: (_cleanup(), sys.exit(0)))
-    signal.signal(signal.SIGINT,  lambda *_: (_cleanup(), sys.exit(0)))
+    signal.signal(signal.SIGINT, lambda *_: (_cleanup(), sys.exit(0)))
 
-    watched: dict[str, str] = {}
+    watched: dict[str, str] = _load_watched()
     lock = threading.Lock()
 
+    if watched:
+        log.info("restored %d watched job(s): %s", len(watched), ", ".join(watched))
     log.info("started (pid %d)", os.getpid())
     threading.Thread(target=_poll_loop, args=(watched, lock), daemon=True).start()
     _socket_loop(watched, lock, ready_fd=ready_fd)  # blocks
 
 
 # ── Client helpers (used by pp) ───────────────────────────────────────────────
+
 
 def is_running() -> bool:
     if not PID_PATH.exists():
