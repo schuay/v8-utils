@@ -1,6 +1,7 @@
 """MCP tool definitions for v8-utils."""
 
 import concurrent.futures
+import os
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,20 @@ import perf as perf_tools
 import pinpoint
 
 mcp = FastMCP("v8-utils", log_level="WARNING")
+
+_STARTUP_MTIME = os.path.getmtime(__file__)
+
+
+def _check_stale() -> str:
+    try:
+        if os.path.getmtime(__file__) != _STARTUP_MTIME:
+            return (
+                "[WARNING: v8-utils was upgraded — "
+                "restart the MCP server to use the new version]\n\n"
+            )
+    except OSError:
+        pass
+    return ""
 
 
 def _run_concurrent(
@@ -54,7 +69,7 @@ def _text_result(text: str) -> CallToolResult:
     anthropics/claude-code#9962).
     """
     return CallToolResult(
-        content=[TextContent(type="text", text=text)],
+        content=[TextContent(type="text", text=_check_stale() + text)],
     )
 
 
