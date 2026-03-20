@@ -83,13 +83,9 @@ def _print_commit_range(
                     console.print(
                         f"{indent}  [dim cyan]V8 {_fmt_range_header(0, len(v8_commits), len(v8_commits))}:[/dim cyan]"
                     )
-                    for vc in v8_commits[:5]:
+                    for vc in v8_commits:
                         console.print(f"{indent}  [dim]  {_fmt_commit(vc)}[/dim]")
                         shown += 1
-                    if len(v8_commits) > 5:
-                        console.print(
-                            f"{indent}  [dim]  ... and {len(v8_commits) - 5} more V8 commits[/dim]"
-                        )
 
 
 def _resolve_v8_roll(
