@@ -24,6 +24,7 @@ def detect_series(
     metric: str = "",
     bot: str = "",
     variant: str = "",
+    submetric: str = "",
 ) -> list[ChangePoint]:
     """Run PELT on a single aggregated time series and return change points."""
     import ruptures
@@ -109,6 +110,7 @@ def detect_series(
                 metric=metric,
                 bot=bot,
                 variant=variant,
+                submetric=submetric,
                 commit_id=commit_ids[bk],
                 prev_commit_id=commit_ids[bk - 1],
                 direction=direction,
@@ -137,10 +139,15 @@ def detect_from_df(
     """
     df = ensure_aggregated(df)
 
+    has_submetric = "submetric" in df.columns
+    if not has_submetric:
+        df = df.copy()
+        df["submetric"] = ""
+
     results = []
-    group_cols = ["bot", "benchmark", "test", "variant"]
+    group_cols = ["bot", "benchmark", "test", "variant", "submetric"]
     for group_key, group_df in df.groupby(group_cols, sort=False):
-        bot, benchmark, test, variant = group_key
+        bot, benchmark, test, variant, submetric = group_key
         group_df = group_df.sort_values("commit_id")
 
         cps = detect_series(
@@ -153,6 +160,7 @@ def detect_from_df(
             metric=test,
             bot=bot,
             variant=variant,
+            submetric=submetric,
         )
         results.extend(cps)
 

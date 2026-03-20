@@ -243,6 +243,10 @@ def _print_grouped(
     for cp in results:
         groups[cp.commit_id].append(cp)
 
+    # Only show these columns if they have more than one distinct value.
+    show_variant = len({cp.variant for cp in results}) > 1
+    show_submetric = any(cp.submetric for cp in results)
+
     has_commit_info = False
     for cid in sorted(groups):
         cp0 = groups[cid][0]
@@ -291,6 +295,10 @@ def _print_grouped(
         )
         table.add_column("BENCHMARK")
         table.add_column("METRIC")
+        if show_variant:
+            table.add_column("VARIANT")
+        if show_submetric:
+            table.add_column("SUBMETRIC")
         table.add_column("CHANGE", justify="right")
         table.add_column("EFFECT", justify="right")
         table.add_column("P-VALUE", justify="right")
@@ -300,14 +308,23 @@ def _print_grouped(
             pct = cp.pct_change * 100
             color = "green" if cp.direction == "improvement" else "red"
             p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
-            table.add_row(
+            row_cells = [
                 rich_escape(cp.benchmark),
                 cp.metric,
-                f"[{color}]{pct:+.2f}%[/{color}]",
-                f"{cp.cohens_d:.2f}d",
-                p_str,
-                cp.confidence,
+            ]
+            if show_variant:
+                row_cells.append(cp.variant)
+            if show_submetric:
+                row_cells.append(cp.submetric)
+            row_cells.extend(
+                [
+                    f"[{color}]{pct:+.2f}%[/{color}]",
+                    f"{cp.cohens_d:.2f}d",
+                    p_str,
+                    cp.confidence,
+                ]
             )
+            table.add_row(*row_cells)
         console.print(table)
 
     if not has_commit_info:
@@ -331,9 +348,16 @@ def _print_flat(
 ):
     results = sorted(results, key=lambda x: abs(x.pct_change), reverse=True)
 
+    show_variant = len({cp.variant for cp in results}) > 1
+    show_submetric = any(cp.submetric for cp in results)
+
     table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
     table.add_column("BENCHMARK")
     table.add_column("METRIC")
+    if show_variant:
+        table.add_column("VARIANT")
+    if show_submetric:
+        table.add_column("SUBMETRIC")
     table.add_column("CHANGE", justify="right")
     table.add_column("EFFECT", justify="right")
     table.add_column("P-VALUE", justify="right")
@@ -359,15 +383,24 @@ def _print_flat(
             desc += f"\n  also: {alt}"
 
         p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
-        table.add_row(
+        row_cells = [
             rich_escape(cp.benchmark),
             cp.metric,
-            f"[{color}]{pct:+.2f}%[/{color}]",
-            f"{cp.cohens_d:.2f}d",
-            p_str,
-            cp.confidence,
-            desc,
+        ]
+        if show_variant:
+            row_cells.append(cp.variant)
+        if show_submetric:
+            row_cells.append(cp.submetric)
+        row_cells.extend(
+            [
+                f"[{color}]{pct:+.2f}%[/{color}]",
+                f"{cp.cohens_d:.2f}d",
+                p_str,
+                cp.confidence,
+                desc,
+            ]
         )
+        table.add_row(*row_cells)
     console.print(table)
 
 

@@ -27,6 +27,8 @@ REQUIRED_COLUMNS = {
 }
 # Optional columns (present when data is pre-aggregated)
 AGGREGATE_COLUMNS = {"stdev", "count"}
+# Optional dimension columns
+OPTIONAL_COLUMNS = {"submetric"}
 
 
 class Adaptor(Protocol):
@@ -78,6 +80,8 @@ def ensure_aggregated(df: pd.DataFrame) -> pd.DataFrame:
         "commit_time",
         "git_hash",
     ]
+    if "submetric" in df.columns:
+        group_cols.insert(4, "submetric")
     grouped = df.groupby(group_cols, sort=False)["value"]
 
     agg = grouped.agg(["mean", "std", "count"]).reset_index()

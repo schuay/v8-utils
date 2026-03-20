@@ -13,6 +13,7 @@ class ChangePoint:
     metric: str
     bot: str
     variant: str
+    submetric: str
     commit_id: int
     prev_commit_id: int
     direction: str  # "improvement" | "regression"
