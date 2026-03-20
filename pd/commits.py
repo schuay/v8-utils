@@ -119,7 +119,7 @@ class CommitStore:
         since: str | None = None,
     ) -> int:
         """Populate commit metadata from git log."""
-        git_format = "%H|%cs|%ct|%an|%s|%b%n--END-COMMIT--"
+        git_format = "%H|%cs|%ct|%ae|%s|%b%n--END-COMMIT--"
         cmd = f'git log origin/main --pretty=format:"{git_format}"'
         if since:
             cmd += f' --since="{since}"'
