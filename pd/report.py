@@ -63,8 +63,27 @@ def _print_commit_range(
     commits: list[CommitInfo],
     commit_store: CommitStore | None,
     indent: str = "  ",
+    verbose: bool = False,
 ):
     """Print a list of commits, surfacing V8 rolls first, then capping the rest."""
+    if verbose:
+        titles_with_roll = [
+            c for c in commits if c.title and _V8_ROLL_RE.search(c.title)
+        ]
+        console.print(
+            f"{indent}[dim yellow]debug: {len(commits)} commits in range, "
+            f"{len(titles_with_roll)} V8 rolls detected, "
+            f"commit_store={'yes' if commit_store else 'no'}[/dim yellow]",
+            highlight=False,
+        )
+        if commits:
+            c0 = commits[0]
+            console.print(
+                f"{indent}[dim yellow]debug: first commit: id={c0.id} "
+                f"title={c0.title[:60] if c0.title else '(empty)'}[/dim yellow]",
+                highlight=False,
+            )
+
     # Separate V8 rolls from other commits
     rolls: list[tuple[CommitInfo, list[CommitInfo]]] = []
     others: list[CommitInfo] = []
@@ -73,7 +92,9 @@ def _print_commit_range(
         if commit_store and c.title:
             m = _V8_ROLL_RE.search(c.title)
             if m:
-                v8_commits = _resolve_v8_roll(commit_store, m.group(1), m.group(2))
+                v8_commits = _resolve_v8_roll(
+                    commit_store, m.group(1), m.group(2), verbose=verbose
+                )
                 rolls.append((c, v8_commits))
                 continue
         others.append(c)
@@ -98,14 +119,27 @@ def _resolve_v8_roll(
     commit_store: CommitStore,
     from_hash: str,
     to_hash: str,
+    verbose: bool = False,
 ) -> list[CommitInfo]:
     """Look up V8 commits between two hashes via the commit store."""
-    # Find commit IDs for the two V8 hashes
     from_info = commit_store.get_by_hash("v8", from_hash)
     to_info = commit_store.get_by_hash("v8", to_hash)
+    if verbose:
+        console.print(
+            f"    [dim yellow]debug: v8 roll {from_hash}..{to_hash} → "
+            f"from={'#' + str(from_info.id) if from_info else 'miss'} "
+            f"to={'#' + str(to_info.id) if to_info else 'miss'}[/dim yellow]",
+            highlight=False,
+        )
     if not from_info or not to_info:
         return []
-    return commit_store.get_range("v8", from_info.id, to_info.id)
+    result = commit_store.get_range("v8", from_info.id, to_info.id)
+    if verbose:
+        console.print(
+            f"    [dim yellow]debug: v8 range {from_info.id}..{to_info.id} → {len(result)} commits[/dim yellow]",
+            highlight=False,
+        )
+    return result
 
 
 # ── Detect report ────────────────────────────────────────────────────────────
@@ -245,9 +279,11 @@ def _print_grouped(
                     else []
                 )
                 if c_range:
-                    _print_commit_range(c_range, commit_store, indent="    ")
+                    _print_commit_range(
+                        c_range, commit_store, indent="    ", verbose=verbose
+                    )
         elif range_commits:
-            _print_commit_range(range_commits, commit_store)
+            _print_commit_range(range_commits, commit_store, verbose=verbose)
 
         # Benchmark table
         table = Table(
