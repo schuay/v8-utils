@@ -56,6 +56,7 @@ class CommitInfo:
     date: str
     timestamp: int
     title: str
+    author: str = ""
 
 
 @dataclass

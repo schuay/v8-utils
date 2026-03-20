@@ -21,10 +21,15 @@ CREATE TABLE IF NOT EXISTS commits (
     date      TEXT NOT NULL DEFAULT '',
     timestamp INTEGER NOT NULL DEFAULT 0,
     title     TEXT NOT NULL DEFAULT '',
+    author    TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (engine, hash)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_id
     ON commits (engine, commit_id) WHERE commit_id IS NOT NULL;
+"""
+
+_MIGRATE_AUTHOR = """\
+ALTER TABLE commits ADD COLUMN author TEXT NOT NULL DEFAULT '';
 """
 
 _DEFAULT_PATH = Path("~/.config/cpd/commits.db").expanduser()
@@ -37,10 +42,15 @@ class CommitStore:
         self.conn = sqlite3.connect(str(path))
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_SCHEMA)
+        # Migrate: add author column if missing
+        try:
+            self.conn.execute(_MIGRATE_AUTHOR)
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     def get(self, engine: str, commit_id: int) -> CommitInfo | None:
         row = self.conn.execute(
-            "SELECT commit_id, hash, date, timestamp, title FROM commits"
+            "SELECT commit_id, hash, date, timestamp, title, author FROM commits"
             " WHERE engine=? AND commit_id=?",
             (engine, commit_id),
         ).fetchone()
@@ -52,12 +62,13 @@ class CommitStore:
             date=row["date"],
             timestamp=row["timestamp"],
             title=row["title"],
+            author=row["author"],
         )
 
     def get_range(self, engine: str, after_id: int, up_to_id: int) -> list[CommitInfo]:
         """All commits with after_id < commit_id <= up_to_id."""
         rows = self.conn.execute(
-            "SELECT commit_id, hash, date, timestamp, title FROM commits"
+            "SELECT commit_id, hash, date, timestamp, title, author FROM commits"
             " WHERE engine=? AND commit_id IS NOT NULL"
             " AND commit_id > ? AND commit_id <= ?"
             " ORDER BY commit_id",
@@ -70,6 +81,7 @@ class CommitStore:
                 date=r["date"],
                 timestamp=r["timestamp"],
                 title=r["title"],
+                author=r["author"],
             )
             for r in rows
         ]
@@ -106,7 +118,7 @@ class CommitStore:
         Returns:
             Number of commits inserted/updated.
         """
-        git_format = "%H|%cs|%ct|%s|%b%n--END-COMMIT--"
+        git_format = "%H|%cs|%ct|%an|%s|%b%n--END-COMMIT--"
         cmd = f'git log origin/main --pretty=format:"{git_format}"'
         if since:
             cmd += f' --since="{since}"'
@@ -122,10 +134,10 @@ class CommitStore:
             raw = raw.strip()
             if not raw:
                 continue
-            parts = raw.split("|", 4)
-            if len(parts) < 5:
+            parts = raw.split("|", 5)
+            if len(parts) < 6:
                 continue
-            h, date_str, ts, subject, body = parts
+            h, date_str, ts, author, subject, body = parts
 
             # Use the last match: reverts/relands copy the original message,
             # so the commit's own ID always appears last.
@@ -141,9 +153,9 @@ class CommitStore:
                 (engine, h),
             )
             self.conn.execute(
-                "UPDATE commits SET commit_id=?, date=?, timestamp=?, title=?"
+                "UPDATE commits SET commit_id=?, date=?, timestamp=?, title=?, author=?"
                 " WHERE engine=? AND hash=? AND commit_id IS NULL",
-                (commit_id, date_str, int(ts), title, engine, h),
+                (commit_id, date_str, int(ts), title, author, engine, h),
             )
             count += 1
 

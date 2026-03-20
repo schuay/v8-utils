@@ -22,6 +22,18 @@ if TYPE_CHECKING:
 console = Console()
 
 
+def _fmt_commit(c: CommitInfo) -> str:
+    """Format a commit as: id hash author title."""
+    parts = [str(c.id)]
+    if c.hash:
+        parts.append(c.hash[:10])
+    if c.author:
+        parts.append(c.author)
+    if c.title:
+        parts.append(rich_escape(c.title[:70]))
+    return " ".join(parts)
+
+
 def _format_candidates(cp: ChangePoint) -> str | None:
     """Format alternative breakpoint candidates, or None if unambiguous."""
     if not cp.candidates:
@@ -160,13 +172,11 @@ def _print_grouped(
                 if c_prob < 0.05:
                     continue
                 c_info = _get_commit_info(c_cid, commit_store, engine, series_points)
-                if c_info and c_info.title:
-                    t = rich_escape(c_info.title)
-                    console.print(f"  [dim]{c_cid} {t}[/dim]")
+                if c_info:
+                    console.print(f"  [dim]{_fmt_commit(c_info)}[/dim]")
         else:
             for c in range_commits:
-                t = rich_escape(c.title) if c.title else ""
-                console.print(f"  [dim]{c.id} {t}[/dim]")
+                console.print(f"  [dim]{_fmt_commit(c)}[/dim]")
 
         # Benchmark table
         table = Table(
@@ -219,9 +229,7 @@ def _print_flat(
         info = _get_commit_info(cp.commit_id, commit_store, engine, series_points)
 
         if len(range_commits) <= 1 and info and info.hash:
-            h = info.hash[:10]
-            title = rich_escape(info.title[:40]) if info.title else ""
-            desc = f"{cp.commit_id} {h} {title}".strip()
+            desc = _fmt_commit(info)
         else:
             n = len(range_commits)
             desc = f"{cp.prev_commit_id + 1}..{cp.commit_id} ({n} commits)"
