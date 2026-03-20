@@ -135,6 +135,23 @@ class Config:
         },
     )
 
+    # ── pd — perf data sources and analysis ──────────────────────────────
+    sources: dict = field(
+        default_factory=dict,
+        metadata={
+            _SECTION: "pd — perf data sources and analysis",
+            _HELP: "Data sources for pd (see pd sources for available adaptors)",
+        },
+    )
+    analysis: dict = field(
+        default_factory=lambda: {
+            "penalty": 3.0,
+            "min_effect_size": 0.5,
+            "min_pct_change": 0.01,
+        },
+        metadata={_HELP: "PELT analysis tuning parameters"},
+    )
+
 
 # ── Template generation ───────────────────────────────────────────────────────
 
@@ -154,6 +171,16 @@ def template() -> str:
 
     for f in dataclasses.fields(Config):
         meta = f.metadata
+
+        # Skip dict fields (TOML tables — users write these directly)
+        if f.type in ("dict", dict) or (
+            hasattr(f, "default_factory")
+            and isinstance(f.default_factory, type)
+            and issubclass(f.default_factory, dict)
+        ):
+            continue
+        if f.name in ("sources", "analysis"):
+            continue
 
         # Section heading
         if section := meta.get(_SECTION):
@@ -237,6 +264,15 @@ def load() -> Config:
         spidermonkey_dir=Path(data["spidermonkey_dir"]).expanduser()
         if "spidermonkey_dir" in data
         else None,
+        sources=data.get("sources", {}),
+        analysis=data.get(
+            "analysis",
+            {
+                "penalty": 3.0,
+                "min_effect_size": 0.5,
+                "min_pct_change": 0.01,
+            },
+        ),
     )
     return _cache
 

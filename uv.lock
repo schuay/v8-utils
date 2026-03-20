@@ -1612,6 +1612,13 @@ cpd = [
     { name = "ruptures" },
     { name = "typer" },
 ]
+pd = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "rich" },
+    { name = "ruptures" },
+    { name = "typer" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1627,15 +1634,20 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
     { name = "numpy", marker = "extra == 'cpd'", specifier = ">=1.24" },
+    { name = "numpy", marker = "extra == 'pd'", specifier = ">=1.24" },
     { name = "pandas", marker = "extra == 'cpd'", specifier = ">=2.0" },
+    { name = "pandas", marker = "extra == 'pd'", specifier = ">=2.0" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.32.5" },
     { name = "rich", marker = "extra == 'cpd'", specifier = ">=13" },
+    { name = "rich", marker = "extra == 'pd'", specifier = ">=13" },
     { name = "ruptures", marker = "extra == 'cpd'", specifier = ">=1.1" },
+    { name = "ruptures", marker = "extra == 'pd'", specifier = ">=1.1" },
     { name = "scipy", specifier = ">=1.13" },
     { name = "typer", marker = "extra == 'cpd'", specifier = ">=0.12" },
+    { name = "typer", marker = "extra == 'pd'", specifier = ">=0.12" },
 ]
-provides-extras = ["cpd"]
+provides-extras = ["pd", "cpd"]
 
 [package.metadata.requires-dev]
 dev = [
