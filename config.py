@@ -112,10 +112,17 @@ class Config:
     )
 
     # ── repos — related source repos for cross-reference ──────────────────────
-    jsc_dir: Path | None = field(
+    chromium_dir: Path | None = field(
         default=None,
         metadata={
             _SECTION: "repos — related source repos for cross-reference",
+            _HELP: "Path to Chromium source checkout (for cpd sync chromium)",
+            _OPT: True,
+        },
+    )
+    jsc_dir: Path | None = field(
+        default=None,
+        metadata={
             _HELP: "Path to JavaScriptCore source (WebKit/Source/JavaScriptCore)",
             _OPT: True,
         },
@@ -223,6 +230,9 @@ def load() -> Config:
             "perf_script",
             Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
         ),
+        chromium_dir=Path(data["chromium_dir"]).expanduser()
+        if "chromium_dir" in data
+        else None,
         jsc_dir=Path(data["jsc_dir"]).expanduser() if "jsc_dir" in data else None,
         spidermonkey_dir=Path(data["spidermonkey_dir"]).expanduser()
         if "spidermonkey_dir" in data

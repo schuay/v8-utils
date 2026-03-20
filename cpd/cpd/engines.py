@@ -8,6 +8,9 @@ ENGINES: dict[str, dict] = {
     "v8": {
         "id_regex": r"^ *Cr-Commit-Position:.*#([0-9]+)",
     },
+    "chromium": {
+        "id_regex": r"^ *Cr-Commit-Position:.*#([0-9]+)",
+    },
     "jsc": {
         "id_regex": r"Canonical link:.*/([0-9]+)@",
     },
@@ -31,6 +34,8 @@ def get_src_dir(engine: str) -> Path | None:
 
     if engine == "v8":
         return cfg.v8_out.parent if cfg.v8_out else None
+    elif engine == "chromium":
+        return cfg.chromium_dir
     elif engine == "jsc":
         return cfg.jsc_dir
     elif engine == "spidermonkey":
