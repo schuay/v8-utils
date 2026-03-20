@@ -341,14 +341,20 @@ def _format_results_table(
             return "smaller-better"
         return ""
 
+    def _rd(v: float, min_digits: int) -> str:
+        """Round so that pre-dot + post-dot digits >= min_digits."""
+        pre = len(str(int(abs(v))))
+        post = max(0, min_digits - pre)
+        return f"{v:.{post}f}"
+
     cells = []
     for r in rows:
         bm, bs = r["base_mean"] or 0, r["base_stdev"] or 0
         em, es = r["exp_mean"] or 0, r["exp_stdev"] or 0
         row = [
             r["name"],
-            f"{bm:.3f} ±{bs:.3f}",
-            f"{em:.3f} ±{es:.3f}",
+            f"{_rd(bm, 4)} ±{_rd(bs, 3)}",
+            f"{_rd(em, 4)} ±{_rd(es, 3)}",
             f"{pct(r):+.2f}%",
             f"{r['p_value']:.4f}",
         ]
