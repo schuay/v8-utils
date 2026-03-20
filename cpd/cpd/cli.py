@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-
+from fnmatch import fnmatch
 from typing import Annotated, Optional
 
 import typer
@@ -122,8 +122,6 @@ def detect_cmd(
         filter_kwargs["bot"] = bot
     if benchmark:
         filter_kwargs["benchmark"] = benchmark
-    if metric:
-        filter_kwargs["metric"] = metric
     for f in filters or []:
         if "=" not in f:
             typer.echo(f"Error: filter must be key=value, got: {f}", err=True)
@@ -141,6 +139,8 @@ def detect_cmd(
     series_data = {}
 
     for key in adaptor.list_series(**filter_kwargs):
+        if metric and not fnmatch(key.metric, metric):
+            continue
         series = adaptor.fetch_series(key, since=since_date, until=until_date)
         if not series:
             continue

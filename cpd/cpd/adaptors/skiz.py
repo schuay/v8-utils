@@ -56,7 +56,6 @@ class SkizAdaptor:
         filter_map = {
             "bot": "bot",
             "benchmark": "benchmark",
-            "metric": "test",
             "test": "test",
             "variant": "variant",
         }
