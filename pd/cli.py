@@ -156,6 +156,7 @@ def detect(
         group_by_commit=group_by_commit,
         commit_store=commit_store,
         engine=engine,
+        verbose=verbose,
     )
     commit_store.close()
 

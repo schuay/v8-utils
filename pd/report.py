@@ -164,14 +164,31 @@ def print_detect_report(
     group_by_commit: bool = False,
     commit_store: CommitStore | None = None,
     engine: str | None = None,
+    verbose: bool = False,
 ):
     """Print change-point results as rich tables."""
     if not results:
         console.print("No change points detected.")
         return
 
+    if verbose and commit_store and engine:
+        # Check what's in the commit store for debugging
+        sample = commit_store.get(engine, results[0].commit_id)
+        v8_count = commit_store.conn.execute(
+            "SELECT count(*) FROM commits WHERE engine='v8'"
+        ).fetchone()[0]
+        eng_count = commit_store.conn.execute(
+            "SELECT count(*) FROM commits WHERE engine=?", (engine,)
+        ).fetchone()[0]
+        console.print(
+            f"[dim]commit store: engine={engine}, {eng_count} {engine} commits, "
+            f"{v8_count} v8 commits, "
+            f"sample lookup({results[0].commit_id})={'found' if sample else 'miss'}[/dim]",
+            highlight=False,
+        )
+
     if group_by_commit:
-        _print_grouped(results, commit_store, engine)
+        _print_grouped(results, commit_store, engine, verbose=verbose)
     else:
         _print_flat(results, commit_store, engine)
 
@@ -180,6 +197,7 @@ def _print_grouped(
     results: list[ChangePoint],
     commit_store: CommitStore | None,
     engine: str | None,
+    verbose: bool = False,
 ):
     groups: dict[int, list[ChangePoint]] = defaultdict(list)
     for cp in results:
