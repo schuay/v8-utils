@@ -341,7 +341,9 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
 
     job_ids = [pinpoint.job_id_from_url(u) for u in job_urls]
     fns = [
-        lambda jid=jid: _format_results_table(jid, args.show_all, args.use_cas)
+        lambda jid=jid: _format_results_table(
+            jid, args.show_all, args.use_cas, args.compact
+        )
         for jid in job_ids
     ]
     tables = _run_concurrent(fns, _progress("Fetching results"))
@@ -659,6 +661,11 @@ def main() -> None:
     )
     p.add_argument(
         "--show-all", action="store_true", help="Include non-significant results"
+    )
+    p.add_argument(
+        "--compact",
+        action="store_true",
+        help="Omit sig and direction columns (for pasting to docs)",
     )
     p.add_argument(
         "--use-cas",

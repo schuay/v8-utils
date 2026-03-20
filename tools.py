@@ -300,7 +300,9 @@ def _results_header(job_id: str) -> str:
     return "\n".join(lines)
 
 
-def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | None:
+def _format_results_table(
+    job_id: str, show_all: bool, use_cas: bool, compact: bool = False
+) -> str | None:
     """Format a results table for a single job. Returns None if no results.
 
     Returns an error string (not raises) on failure so multi-job batches
@@ -343,27 +345,21 @@ def _format_results_table(job_id: str, show_all: bool, use_cas: bool) -> str | N
     for r in rows:
         bm, bs = r["base_mean"] or 0, r["base_stdev"] or 0
         em, es = r["exp_mean"] or 0, r["exp_stdev"] or 0
-        cells.append(
-            (
-                r["name"],
-                f"{bm:.3f} ±{bs:.3f}",
-                f"{em:.3f} ±{es:.3f}",
-                f"{pct(r):+.2f}%",
-                f"{r['p_value']:.4f}",
-                "*" if r["significant"] else "",
-                _direction(r.get("unit")),
-            )
-        )
+        row = [
+            r["name"],
+            f"{bm:.3f} ±{bs:.3f}",
+            f"{em:.3f} ±{es:.3f}",
+            f"{pct(r):+.2f}%",
+            f"{r['p_value']:.4f}",
+        ]
+        if not compact:
+            row.append("*" if r["significant"] else "")
+            row.append(_direction(r.get("unit")))
+        cells.append(tuple(row))
 
-    hdrs = (
-        "metric",
-        "base mean±stdev",
-        "exp mean±stdev",
-        "chg%",
-        "p",
-        "sig",
-        "direction",
-    )
+    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p")
+    if not compact:
+        hdrs += ("sig", "direction")
     widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
 
     def fmt_row(cols: tuple) -> str:
@@ -393,6 +389,7 @@ def pinpoint_show_results(
     job_url: str = "",
     show_all: bool = False,
     use_cas: bool = False,
+    compact: bool = False,
     recent: int | None = None,
     patch: str | None = None,
     status: str | None = None,
@@ -408,6 +405,7 @@ def pinpoint_show_results(
 
     job_url:   space-separated Pinpoint job URL(s) or job ID(s)
     show_all:  if False (default), only show statistically significant results.
+    compact:   if True, omit sig and direction columns (for pasting to docs)
     use_cas:   if True, fetch raw per-run values from CAS isolates instead of
                the histogram HTML. Slower but surfaces richer sub-metrics for
                JetStream (Score, First, Average, Worst4 per story).
@@ -452,7 +450,8 @@ def pinpoint_show_results(
         )
 
     fns = [
-        lambda jid=jid: _format_results_table(jid, show_all, use_cas) for jid in job_ids
+        lambda jid=jid: _format_results_table(jid, show_all, use_cas, compact)
+        for jid in job_ids
     ]
     tables = _run_concurrent(fns)
 
