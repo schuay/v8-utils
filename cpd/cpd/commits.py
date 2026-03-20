@@ -149,13 +149,10 @@ class CommitStore:
             title = subject.replace('"', "")
 
             self.conn.execute(
-                "INSERT OR IGNORE INTO commits (engine, hash) VALUES (?, ?)",
-                (engine, h),
-            )
-            self.conn.execute(
-                "UPDATE commits SET commit_id=?, date=?, timestamp=?, title=?, author=?"
-                " WHERE engine=? AND hash=? AND commit_id IS NULL",
-                (commit_id, date_str, int(ts), title, author, engine, h),
+                "INSERT OR REPLACE INTO commits"
+                " (engine, hash, commit_id, date, timestamp, title, author)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (engine, h, commit_id, date_str, int(ts), title, author),
             )
             count += 1
 
