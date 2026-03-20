@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 import tomllib
 from fnmatch import fnmatch
 from typing import Annotated, Optional
@@ -100,6 +101,9 @@ def detect_cmd(
         Optional[list[str]],
         typer.Option("--filter", "-f", help="key=value filters passed to adaptor"),
     ] = None,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Show timing and progress info")
+    ] = False,
 ):
     """Detect change points in benchmark time series."""
     cfg = _load_config()
@@ -135,20 +139,31 @@ def detect_cmd(
     engine = _engine_for_source(source, cfg)
     commit_store = CommitStore()
 
+    def _log(msg: str) -> None:
+        if verbose:
+            typer.echo(msg, err=True)
+
+    # Fetch all series in one query
+    t0 = time.monotonic()
+    _log(f"fetching data...")
+    fetched = adaptor.fetch(since=since_date, until=until_date, **filter_kwargs)
+    _log(f"fetch: {len(fetched)} series in {time.monotonic() - t0:.1f}s")
+
+    # Apply --metric glob filter
+    if metric:
+        fetched = {k: v for k, v in fetched.items() if fnmatch(k.metric, metric)}
+        _log(f"  after --metric filter: {len(fetched)} series")
+
+    # Detect change points
+    t0 = time.monotonic()
     all_results = []
     series_data = {}
-
-    for key in adaptor.list_series(**filter_kwargs):
-        if metric and not fnmatch(key.metric, metric):
-            continue
-        series = adaptor.fetch_series(key, since=since_date, until=until_date)
-        if not series:
-            continue
-
+    for key, series in fetched.items():
         results = detect(series, key=key, config=config)
         if results:
             all_results.extend(results)
             series_data[key] = series
+    _log(f"detect: {len(all_results)} change points in {time.monotonic() - t0:.1f}s")
 
     print_report(
         all_results,
@@ -193,11 +208,10 @@ def series(
         filter_kwargs[k] = v
 
     adaptor = _make_adaptor(source, cfg)
-    count = 0
-    for key in adaptor.list_series(**filter_kwargs):
+    fetched = adaptor.fetch(**filter_kwargs)
+    for key in sorted(fetched, key=lambda k: (k.benchmark, k.metric)):
         typer.echo(f"  {key.benchmark}  [{key.metric}]")
-        count += 1
-    typer.echo(f"\n{count} series found.")
+    typer.echo(f"\n{len(fetched)} series found.")
 
 
 @app.command()

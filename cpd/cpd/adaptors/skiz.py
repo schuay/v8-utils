@@ -10,7 +10,6 @@ Config example:
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -49,10 +48,16 @@ class SkizAdaptor:
     def __init__(self, db_url: str, **_kwargs):
         self._con, self._dialect = _connect(db_url)
 
-    def list_series(self, **filters: str) -> Iterator[SeriesKey]:
+    def fetch(
+        self,
+        since: str | None = None,
+        until: str | None = None,
+        **filters: str,
+    ) -> dict[SeriesKey, list[SeriesPoint]]:
+        """Fetch all series matching filters in a single query."""
         conditions = ["submetric = ''"]
-        params = []
-        # Map CLI filter names to DB column names
+        params: list = []
+
         filter_map = {
             "bot": "bot",
             "benchmark": "benchmark",
@@ -64,51 +69,11 @@ class SkizAdaptor:
                 conditions.append(f"{col} = ?")
                 params.append(filters[key])
 
-        where = " AND ".join(conditions)
-        df = _query(
-            self._con,
-            self._dialect,
-            f"SELECT DISTINCT bot, benchmark, test, variant"
-            f" FROM {_AGG_TABLE} WHERE {where}"
-            f" ORDER BY bot, benchmark, test, variant",
-            params,
-        )
-
-        for _, row in df.iterrows():
-            yield SeriesKey(
-                source="skiz",
-                benchmark=row["benchmark"],
-                metric=row["test"],
-                dimensions={
-                    "bot": row["bot"],
-                    "benchmark": row["benchmark"],
-                    "test": row["test"],
-                    "variant": row["variant"],
-                },
-            )
-
-    def fetch_series(
-        self,
-        key: SeriesKey,
-        since: str | None = None,
-        until: str | None = None,
-    ) -> list[SeriesPoint]:
-        d = key.dimensions
-        conditions = [
-            "bot = ?",
-            "benchmark = ?",
-            "test = ?",
-            "variant = ?",
-            "submetric = ''",
-        ]
-        params: list = [d["bot"], d["benchmark"], d["test"], d["variant"]]
-
         if since:
             conditions.append("commit_time >= ?")
             params.append(since)
         if until:
             conditions.append("commit_time < ?")
-            # +1 day for inclusive upper bound
             from datetime import date, timedelta
 
             try:
@@ -122,16 +87,29 @@ class SkizAdaptor:
         df = _query(
             self._con,
             self._dialect,
-            f"SELECT commit_number, git_hash, commit_time,"
+            f"SELECT bot, benchmark, test, variant,"
+            f"       commit_number, git_hash, commit_time,"
             f"       mean, stdev, count"
             f" FROM {_AGG_TABLE}"
             f" WHERE {where}"
-            f" ORDER BY commit_number",
+            f" ORDER BY bot, benchmark, test, variant, commit_number",
             params,
         )
 
-        return [
-            SeriesPoint(
+        result: dict[SeriesKey, list[SeriesPoint]] = {}
+        for _, r in df.iterrows():
+            key = SeriesKey(
+                source="skiz",
+                benchmark=r["benchmark"],
+                metric=r["test"],
+                dimensions={
+                    "bot": r["bot"],
+                    "benchmark": r["benchmark"],
+                    "test": r["test"],
+                    "variant": r["variant"],
+                },
+            )
+            point = SeriesPoint(
                 commit_id=int(r["commit_number"]),
                 mean=float(r["mean"]),
                 stdev=float(r["stdev"] if pd.notna(r["stdev"]) else 0.0),
@@ -141,8 +119,9 @@ class SkizAdaptor:
                 if pd.notna(r.get("commit_time"))
                 else None,
             )
-            for _, r in df.iterrows()
-        ]
+            result.setdefault(key, []).append(point)
+
+        return result
 
 
 def create(**kwargs) -> SkizAdaptor:

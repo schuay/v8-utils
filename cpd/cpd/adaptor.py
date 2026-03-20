@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.metadata
 import importlib.util
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Protocol
 
@@ -20,21 +19,21 @@ _EP_GROUP = "cpd.adaptors"
 class Adaptor(Protocol):
     """Protocol that data sources implement."""
 
-    def list_series(self, **filters: str) -> Iterator[SeriesKey]:
-        """Enumerate available time series, optionally filtered."""
-        ...
-
-    def fetch_series(
+    def fetch(
         self,
-        key: SeriesKey,
         since: str | None = None,
         until: str | None = None,
-    ) -> list[SeriesPoint]:
-        """Fetch the time series for a given key, ordered by commit_id.
+        **filters: str,
+    ) -> dict[SeriesKey, list[SeriesPoint]]:
+        """Fetch all series matching the filters in a single query.
 
         Args:
             since: Optional YYYY-MM-DD lower bound (inclusive).
             until: Optional YYYY-MM-DD upper bound (inclusive).
+            **filters: Adaptor-specific filters (bot, benchmark, etc.)
+
+        Returns:
+            Mapping of series key to its time series data.
         """
         ...
 
