@@ -118,14 +118,6 @@ class CommitStore:
         Returns:
             Number of commits inserted/updated.
         """
-        # Fetch latest commits from remote
-        subprocess.run(
-            "git fetch origin main",
-            shell=True,
-            cwd=src_dir,
-            capture_output=True,
-        )
-
         git_format = "%H|%cs|%ct|%an|%s|%b%n--END-COMMIT--"
         cmd = f'git log origin/main --pretty=format:"{git_format}"'
         if since:

@@ -216,13 +216,19 @@ def series(
 
 @app.command()
 def sync(
-    engine: Annotated[str, typer.Argument(help="Engine to sync (v8, jsc)")],
+    engine: Annotated[str, typer.Argument(help="Engine to sync (v8, chromium, jsc)")],
     since: Annotated[
         Optional[str],
         typer.Option(help="Sync commits since this date (default: 6 months ago)"),
     ] = None,
+    fetch: Annotated[
+        bool,
+        typer.Option(help="Fetch origin/main before reading git log"),
+    ] = True,
 ):
     """Populate commit metadata from an engine's git repo."""
+    import subprocess
+
     id_regex = get_id_regex(engine)
     if not id_regex:
         typer.echo(f"Error: unknown engine '{engine}'", err=True)
@@ -237,6 +243,18 @@ def sync(
             err=True,
         )
         raise typer.Exit(1)
+
+    if fetch:
+        typer.echo(f"Fetching origin/main in {src_dir}...")
+        res = subprocess.run(
+            "git fetch origin main",
+            shell=True,
+            cwd=src_dir,
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode != 0:
+            typer.echo(f"  fetch failed: {res.stderr.strip()}", err=True)
 
     since_date = since or "6 months ago"
 
