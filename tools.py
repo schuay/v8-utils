@@ -363,7 +363,7 @@ def _format_results_table(
             row.append(_direction(r.get("unit")))
         cells.append(tuple(row))
 
-    hdrs = ("metric", "base mean±stdev", "exp mean±stdev", "chg%", "p")
+    hdrs = ("metric", "base±std", "exp±std", "chg%", "p")
     if not compact:
         hdrs += ("sig", "direction")
     widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
