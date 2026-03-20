@@ -64,28 +64,34 @@ def _print_commit_range(
     commit_store: CommitStore | None,
     indent: str = "  ",
 ):
-    """Print a list of commits, expanding V8 rolls and capping display."""
-    shown = 0
-    for c in commits:
-        if shown >= _MAX_COMMITS_SHOWN:
-            remaining = len(commits) - shown
-            console.print(f"{indent}[dim]... and {remaining} more[/dim]")
-            break
-        console.print(f"{indent}[dim]{_fmt_commit(c)}[/dim]")
-        shown += 1
+    """Print a list of commits, surfacing V8 rolls first, then capping the rest."""
+    # Separate V8 rolls from other commits
+    rolls: list[tuple[CommitInfo, list[CommitInfo]]] = []
+    others: list[CommitInfo] = []
 
-        # Expand V8 rolls: "Roll V8 from abc to def"
+    for c in commits:
         if commit_store and c.title:
             m = _V8_ROLL_RE.search(c.title)
             if m:
                 v8_commits = _resolve_v8_roll(commit_store, m.group(1), m.group(2))
-                if v8_commits:
-                    console.print(
-                        f"{indent}  [dim cyan]V8 {_fmt_range_header(0, len(v8_commits), len(v8_commits))}:[/dim cyan]"
-                    )
-                    for vc in v8_commits:
-                        console.print(f"{indent}  [dim]  {_fmt_commit(vc)}[/dim]")
-                        shown += 1
+                rolls.append((c, v8_commits))
+                continue
+        others.append(c)
+
+    # Always show V8 rolls with their expansions
+    for c, v8_commits in rolls:
+        console.print(f"{indent}[dim]{_fmt_commit(c)}[/dim]")
+        if v8_commits:
+            for vc in v8_commits:
+                console.print(f"{indent}  [dim]{_fmt_commit(vc)}[/dim]")
+
+    # Show remaining commits, capped
+    for i, c in enumerate(others):
+        if i >= _MAX_COMMITS_SHOWN:
+            remaining = len(others) - i
+            console.print(f"{indent}[dim]... and {remaining} more[/dim]")
+            break
+        console.print(f"{indent}[dim]{_fmt_commit(c)}[/dim]")
 
 
 def _resolve_v8_roll(
