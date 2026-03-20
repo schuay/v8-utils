@@ -72,6 +72,24 @@ class CommitStore:
             author=row["author"],
         )
 
+    def get_by_hash(self, engine: str, hash_prefix: str) -> CommitInfo | None:
+        """Look up a commit by hash prefix."""
+        row = self.conn.execute(
+            "SELECT commit_id, hash, date, timestamp, title, author FROM commits"
+            " WHERE engine=? AND hash LIKE ?",
+            (engine, hash_prefix + "%"),
+        ).fetchone()
+        if not row:
+            return None
+        return CommitInfo(
+            id=row["commit_id"],
+            hash=row["hash"],
+            date=row["date"],
+            timestamp=row["timestamp"],
+            title=row["title"],
+            author=row["author"],
+        )
+
     def get_range(self, engine: str, after_id: int, up_to_id: int) -> list[CommitInfo]:
         """All commits with after_id < commit_id <= up_to_id."""
         rows = self.conn.execute(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
@@ -19,8 +20,23 @@ if TYPE_CHECKING:
 
 console = Console()
 
+_V8_ROLL_RE = re.compile(r"Roll V8 from ([0-9a-f]{10,}) to ([0-9a-f]{10,})")
+_MAX_COMMITS_SHOWN = 10
+
 
 # ── Shared helpers ───────────────────────────────────────────────────────────
+
+
+def _short_author(author: str) -> str:
+    """Shorten google.com/chromium.org authors to name@, show full email otherwise."""
+    if not author:
+        return ""
+    # If it looks like an email
+    if "@" in author:
+        name, _, domain = author.partition("@")
+        if domain in ("google.com", "chromium.org"):
+            return f"{name}@"
+    return author
 
 
 def _fmt_commit(c: CommitInfo) -> str:
@@ -29,25 +45,99 @@ def _fmt_commit(c: CommitInfo) -> str:
     if c.hash:
         parts.append(c.hash[:10])
     if c.author:
-        parts.append(c.author)
+        parts.append(_short_author(c.author))
     if c.title:
         parts.append(rich_escape(c.title[:70]))
     return " ".join(parts)
 
 
+def _fmt_range_header(prev_id: int, cid: int, n_commits: int) -> str:
+    """Format a commit range header like '123..456 (5 commits)' or just '123'."""
+    first = prev_id + 1
+    if first == cid:
+        return str(cid)
+    return f"{first}..{cid} ({n_commits} commit{'s' if n_commits != 1 else ''})"
+
+
+def _print_commit_range(
+    commits: list[CommitInfo],
+    commit_store: CommitStore | None,
+    indent: str = "  ",
+):
+    """Print a list of commits, expanding V8 rolls and capping display."""
+    shown = 0
+    for c in commits:
+        if shown >= _MAX_COMMITS_SHOWN:
+            remaining = len(commits) - shown
+            console.print(f"{indent}[dim]... and {remaining} more[/dim]")
+            break
+        console.print(f"{indent}[dim]{_fmt_commit(c)}[/dim]")
+        shown += 1
+
+        # Expand V8 rolls: "Roll V8 from abc to def"
+        if commit_store and c.title:
+            m = _V8_ROLL_RE.search(c.title)
+            if m:
+                v8_commits = _resolve_v8_roll(commit_store, m.group(1), m.group(2))
+                if v8_commits:
+                    console.print(
+                        f"{indent}  [dim cyan]V8 {_fmt_range_header(0, len(v8_commits), len(v8_commits))}:[/dim cyan]"
+                    )
+                    for vc in v8_commits[:5]:
+                        console.print(f"{indent}  [dim]  {_fmt_commit(vc)}[/dim]")
+                        shown += 1
+                    if len(v8_commits) > 5:
+                        console.print(
+                            f"{indent}  [dim]  ... and {len(v8_commits) - 5} more V8 commits[/dim]"
+                        )
+
+
+def _resolve_v8_roll(
+    commit_store: CommitStore,
+    from_hash: str,
+    to_hash: str,
+) -> list[CommitInfo]:
+    """Look up V8 commits between two hashes via the commit store."""
+    # Find commit IDs for the two V8 hashes
+    from_info = commit_store.get_by_hash("v8", from_hash)
+    to_info = commit_store.get_by_hash("v8", to_hash)
+    if not from_info or not to_info:
+        return []
+    return commit_store.get_range("v8", from_info.id, to_info.id)
+
+
 # ── Detect report ────────────────────────────────────────────────────────────
 
 
-def _format_candidates(cp: ChangePoint) -> str | None:
+def _format_candidates(
+    cp: ChangePoint,
+    commit_store: CommitStore | None,
+    engine: str | None,
+) -> str | None:
+    """Format candidate breakpoints as ranges with probabilities."""
     if not cp.candidates:
         return None
     top_prob = max(p for _, p in cp.candidates)
     if top_prob >= 0.90:
         return None
+
     parts = []
+    prev_cid = cp.prev_commit_id
     for cid, prob in cp.candidates:
-        if prob >= 0.05:
-            parts.append(f"{cid}[dim]({prob:.0%})[/dim]")
+        if prob < 0.05:
+            continue
+        # Each candidate is a range from prev data point to this one
+        n = 0
+        if commit_store and engine:
+            range_commits = commit_store.get_range(engine, prev_cid, cid)
+            n = len(range_commits)
+
+        if n > 1:
+            label = f"{prev_cid + 1}..{cid}"
+        else:
+            label = str(cid)
+        parts.append(f"{label}[dim]({prob:.0%})[/dim]")
+
     return " | ".join(parts) if parts else None
 
 
@@ -103,37 +193,43 @@ def _print_grouped(
     for cid in sorted(groups):
         cp0 = groups[cid][0]
         range_commits = _get_commit_range(cp0, commit_store, engine)
+        n = len(range_commits)
 
-        if len(range_commits) <= 1:
+        # Header: always show as range since chromium data points span multiple commits
+        header = _fmt_range_header(cp0.prev_commit_id, cid, n)
+        if n == 1 and range_commits[0].title:
+            has_commit_info = True
+            header = _fmt_commit(range_commits[0])
+        elif n > 1:
+            has_commit_info = True
+        elif n == 0:
+            # No commit data — just show the ID
             info = _get_commit_info(cid, commit_store, engine)
             if info and info.title:
                 has_commit_info = True
-                header = f"Commit {_fmt_commit(info)}"
-            elif info and info.hash:
-                header = f"Commit {cid} {info.hash[:10]}"
-            else:
-                header = f"Commit {cid}"
-        else:
-            header = (
-                f"Commit range {cp0.prev_commit_id + 1}..{cid}"
-                f" ({len(range_commits)} commits)"
-            )
+                header = _fmt_commit(info)
 
         console.print(f"\n[bold]{header}[/bold]")
 
-        alt = _format_candidates(cp0)
+        # Show candidates or commit range listing
+        alt = _format_candidates(cp0, commit_store, engine)
         if alt:
-            console.print(f"  candidates: {alt}")
+            console.print(f"  [dim]candidates: {alt}[/dim]")
+            # Show details for each candidate with significant probability
             for c_cid, c_prob in cp0.candidates:
                 if c_prob < 0.05:
                     continue
-                c_info = _get_commit_info(c_cid, commit_store, engine)
-                if c_info:
-                    console.print(f"  [dim]{_fmt_commit(c_info)}[/dim]")
-        else:
-            for c in range_commits:
-                console.print(f"  [dim]{_fmt_commit(c)}[/dim]")
+                c_range = (
+                    commit_store.get_range(engine, cp0.prev_commit_id, c_cid)
+                    if commit_store and engine
+                    else []
+                )
+                if c_range:
+                    _print_commit_range(c_range, commit_store, indent="    ")
+        elif range_commits:
+            _print_commit_range(range_commits, commit_store)
 
+        # Benchmark table
         table = Table(
             box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1)
         )
@@ -193,15 +289,16 @@ def _print_flat(
         color = "green" if cp.direction == "improvement" else "red"
 
         range_commits = _get_commit_range(cp, commit_store, engine)
-        info = _get_commit_info(cp.commit_id, commit_store, engine)
+        n = len(range_commits)
 
-        if len(range_commits) <= 1 and info and info.hash:
-            desc = _fmt_commit(info)
+        if n == 1 and range_commits[0].title:
+            desc = _fmt_commit(range_commits[0])
+        elif n > 0:
+            desc = _fmt_range_header(cp.prev_commit_id, cp.commit_id, n)
         else:
-            n = len(range_commits)
-            desc = f"{cp.prev_commit_id + 1}..{cp.commit_id} ({n} commits)"
+            desc = str(cp.commit_id)
 
-        alt = _format_candidates(cp)
+        alt = _format_candidates(cp, commit_store, engine)
         if alt:
             desc += f"\n  also: {alt}"
 
