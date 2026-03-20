@@ -143,6 +143,7 @@ def _print_grouped(
     for cp in results:
         groups[cp.commit_id].append(cp)
 
+    has_commit_info = False
     for cid in sorted(groups):
         cp0 = groups[cid][0]
         range_commits = _get_commit_range(cp0, commit_store, engine, series_points)
@@ -150,10 +151,11 @@ def _print_grouped(
         # Header
         if len(range_commits) <= 1:
             info = _get_commit_info(cid, commit_store, engine, series_points)
-            if info and info.hash:
-                h = info.hash[:10]
-                title = rich_escape(info.title[:70]) if info.title else ""
-                header = f"Commit {cid} {h} {title}".strip()
+            if info and info.title:
+                has_commit_info = True
+                header = f"Commit {_fmt_commit(info)}"
+            elif info and info.hash:
+                header = f"Commit {cid} {info.hash[:10]}"
             else:
                 header = f"Commit {cid}"
         else:
@@ -202,6 +204,19 @@ def _print_grouped(
                 cp.confidence,
             )
         console.print(table)
+
+    if not has_commit_info:
+        eng = engine or "<engine>"
+        console.print(
+            f"\n[yellow]Warning: no commit metadata available — "
+            f"titles and authors are missing.[/yellow]"
+        )
+        console.print(
+            f"[dim]To fix, configure the source repo and sync:\n"
+            f"  1. Set {eng}_dir in ~/.config/v8-utils/config.toml\n"
+            f'  2. Set engine = "{eng}" in ~/.config/cpd/config.toml for this source\n'
+            f"  3. Run: cpd sync {eng}[/dim]"
+        )
 
 
 def _print_flat(
