@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import tomllib
-from fnmatch import fnmatch
+
 from typing import Annotated, Optional
 
 import typer
@@ -59,11 +59,18 @@ def _engine_for_source(name: str, cfg: dict) -> str | None:
 @app.command("detect")
 def detect_cmd(
     source: Annotated[str, typer.Argument(help="Data source name")],
+    bot: Annotated[
+        Optional[str],
+        typer.Option("--bot", help="Bot name (exact match, passed to adaptor)"),
+    ] = None,
     benchmark: Annotated[
-        Optional[str], typer.Option("--benchmark", "-b", help="Benchmark glob filter")
+        Optional[str],
+        typer.Option(
+            "--benchmark", "-b", help="Benchmark name (exact match, passed to adaptor)"
+        ),
     ] = None,
     metric: Annotated[
-        Optional[str], typer.Option("--metric", "-m", help="Metric glob filter")
+        Optional[str], typer.Option("--metric", "-m", help="Metric/test glob filter")
     ] = None,
     since: Annotated[
         Optional[str],
@@ -111,6 +118,12 @@ def detect_cmd(
 
     # Parse --filter key=value pairs
     filter_kwargs = {}
+    if bot:
+        filter_kwargs["bot"] = bot
+    if benchmark:
+        filter_kwargs["benchmark"] = benchmark
+    if metric:
+        filter_kwargs["metric"] = metric
     for f in filters or []:
         if "=" not in f:
             typer.echo(f"Error: filter must be key=value, got: {f}", err=True)
@@ -128,11 +141,6 @@ def detect_cmd(
     series_data = {}
 
     for key in adaptor.list_series(**filter_kwargs):
-        if benchmark and not fnmatch(key.benchmark, benchmark):
-            continue
-        if metric and not fnmatch(key.metric, metric):
-            continue
-
         series = adaptor.fetch_series(key, since=since_date, until=until_date)
         if not series:
             continue

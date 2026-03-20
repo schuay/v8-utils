@@ -52,10 +52,18 @@ class SkizAdaptor:
     def list_series(self, **filters: str) -> Iterator[SeriesKey]:
         conditions = ["submetric = ''"]
         params = []
-        for col in ("bot", "benchmark", "test", "variant"):
-            if col in filters:
+        # Map CLI filter names to DB column names
+        filter_map = {
+            "bot": "bot",
+            "benchmark": "benchmark",
+            "metric": "test",
+            "test": "test",
+            "variant": "variant",
+        }
+        for key, col in filter_map.items():
+            if key in filters:
                 conditions.append(f"{col} = ?")
-                params.append(filters[col])
+                params.append(filters[key])
 
         where = " AND ".join(conditions)
         df = _query(
@@ -70,8 +78,8 @@ class SkizAdaptor:
         for _, row in df.iterrows():
             yield SeriesKey(
                 source="skiz",
-                benchmark=f"{row['benchmark']} {row['test']}",
-                metric=row["variant"],
+                benchmark=row["benchmark"],
+                metric=row["test"],
                 dimensions={
                     "bot": row["bot"],
                     "benchmark": row["benchmark"],
