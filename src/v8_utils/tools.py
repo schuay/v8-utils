@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import os
+import subprocess
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -479,10 +480,9 @@ def get_gerrit_issue_url() -> str | None:
       https://chromium-review.googlesource.com/7650974/1
     Returns None if not inside a git repo or the branch has no associated CL.
     """
-    import subprocess as _sp
 
     def _git(*args: str) -> str:
-        r = _sp.run(["git"] + list(args), capture_output=True, text=True)
+        r = subprocess.run(["git"] + list(args), capture_output=True, text=True)
         return r.stdout.strip() if r.returncode == 0 else ""
 
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
@@ -525,14 +525,6 @@ def chat_notify_watching(job_url: str) -> None:
             pass
 
 
-def _job_url(job: dict) -> str | None:
-    """Extract the Pinpoint job URL from a job detail dict."""
-    jid = job.get("job_id")
-    if not jid:
-        return None
-    return job.get("url") or f"https://pinpoint-dot-chromeperf.appspot.com/job/{jid}"
-
-
 def _resolve_patch_sentinel(value: str) -> str | None:
     """Resolve a single patch sentinel: "auto" → detect from branch, "none" → None.
 
@@ -544,10 +536,8 @@ def _resolve_patch_sentinel(value: str) -> str | None:
     if value.lower() == "auto":
         detected = get_gerrit_issue_url()
         if detected is None:
-            import subprocess as _sp
-
             branch = (
-                _sp.run(
+                subprocess.run(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     capture_output=True,
                     text=True,
@@ -702,7 +692,12 @@ def create_pinpoint_jobs(
         watch is None and (cfg_obj.chat_webhook or cfg_obj.chat_app_space)
     )
     if should_watch:
-        urls = [u for j in jobs if (u := _job_url(j))]
+        urls = [
+            j.get("url")
+            or f"https://pinpoint-dot-chromeperf.appspot.com/job/{j['job_id']}"
+            for j in jobs
+            if j.get("job_id")
+        ]
         if urls:
             if not daemon.is_running():
                 daemon.start_background()
@@ -850,8 +845,6 @@ def run_d8(
     stdout_file: redirect stdout to this file path instead of capturing
     stderr_file: redirect stderr to this file path instead of capturing
     """
-    import subprocess
-
     cfg = config.load()
     build = build or cfg.default_build
     d8 = cfg.v8_out / build / "d8"
@@ -1107,8 +1100,6 @@ def repo_git_show(
     ref:    git ref to read from (e.g. commit hash, branch, tag).
             If omitted, reads from the working tree.
     """
-    import subprocess
-
     root = _resolve_repo(repo)
 
     if ref:
@@ -1158,8 +1149,6 @@ def repo_git_grep(
     ref:     git ref to search in (e.g. commit hash, branch, tag).
              If omitted, searches the working tree.
     """
-    import subprocess
-
     root = _resolve_repo(repo)
     cmd = ["git", "grep", "-n", "--no-color", "-E"]
     if context > 0:
@@ -1221,8 +1210,6 @@ def repo_git_find(
     ref:    git ref to list from (e.g. commit hash, branch, tag).
             If omitted, lists from the working tree.
     """
-    import subprocess
-
     root = _resolve_repo(repo)
     if ref:
         cmd = ["git", "ls-tree", "-r", "--name-only", ref, "--", glob]
@@ -1274,8 +1261,6 @@ def repo_git_log(
     limit:  max commits to return (default: 20)
     grep:   optional pattern to filter commit messages
     """
-    import subprocess
-
     root = _resolve_repo(repo)
     cmd = [
         "git",
