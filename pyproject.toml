@@ -25,14 +25,13 @@ v8-mcp = "server:mcp.run"
 pp = "pp:main"
 jsb = "jsb:main"
 pd = "pd.cli:app"
-cpd = "pd.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = [".", "pd", "cpd/cpd"]
+packages = [".", "pd"]
 
 [dependency-groups]
 dev = [
