@@ -1760,6 +1760,9 @@ _RE_SIZE_SUFFIX = _re.compile(
 # Trailing annotations like "<+0x104>" or "(comment text)"
 _RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$")
 
+# Absolute address as jump/call target: "jne 0x7fc5e000a584" → "jne .L0"
+_RE_ABS_JUMP = _re.compile(r"^(j[a-z]*|call)\s+0x([0-9a-f]+)\s*$", _re.IGNORECASE)
+
 
 def _clean_asm_for_mca(raw: str) -> str:
     """Strip address/hex prefixes from V8 print-code or perf annotate output."""
@@ -1785,11 +1788,19 @@ def _clean_asm_for_mca(raw: str) -> str:
 
     if v8_format:
         # V8 print-code uses hybrid syntax: AT&T suffixes + Intel operands.
-        # Strip size suffixes and trailing annotations.
+        # Strip size suffixes, trailing annotations, and convert absolute
+        # jump targets to labels.
+        label_map: dict[str, str] = {}
         fixed: list[str] = []
         for line in cleaned:
             line = _RE_TRAILING_ANNOTATION.sub("", line)
             line = _RE_SIZE_SUFFIX.sub(r"\1\2", line)
+            m = _RE_ABS_JUMP.match(line.strip())
+            if m:
+                addr = m.group(2)
+                if addr not in label_map:
+                    label_map[addr] = f".L{len(label_map)}"
+                line = f"{m.group(1)} {label_map[addr]}"
             fixed.append(line)
         cleaned = fixed
 
