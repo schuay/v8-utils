@@ -1160,9 +1160,10 @@ def repo_grep(
     import subprocess
 
     root = _resolve_repo(repo)
-    cmd = ["git", "grep", "-n", "--no-color", "-E", pattern]
+    cmd = ["git", "grep", "-n", "--no-color", "-E"]
     if context > 0:
-        cmd.extend([f"-C{context}"])
+        cmd.append(f"-C{context}")
+    cmd.append(pattern)
     if ref:
         cmd.append(ref)
     if glob:
