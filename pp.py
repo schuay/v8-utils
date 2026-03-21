@@ -264,7 +264,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         filters.append(f"bot={args.bot}")
     since = pinpoint.parse_since(args.since)
     jobs = _fetch_jobs_list(
-        count=args.count, user=args.user, filters=filters or None, since=since
+        count=args.recent, user=args.user, filters=filters or None, since=since
     )
     if not jobs:
         print("No jobs found.")
@@ -571,11 +571,11 @@ def main() -> None:
     )
     p.add_argument(
         "-n",
-        "--count",
+        "--recent",
         type=int,
         default=20,
         metavar="N",
-        help="Number of jobs (default: 20)",
+        help="Number of most recent jobs to show (default: 20)",
     )
     p.add_argument(
         "-u",
