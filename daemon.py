@@ -328,9 +328,23 @@ def is_running() -> bool:
     try:
         pid = int(PID_PATH.read_text())
         os.kill(pid, 0)
+        # Detect zombies: they pass the kill-0 check but aren't really alive.
+        try:
+            state = Path(f"/proc/{pid}/status").read_text()
+            if "\nState:\tZ" in state:
+                _cleanup_stale()
+                return False
+        except OSError:
+            pass  # non-Linux or no procfs — trust the kill check
         return True
     except (ValueError, ProcessLookupError, PermissionError):
         return False
+
+
+def _cleanup_stale() -> None:
+    """Remove stale PID/socket files left by a dead daemon."""
+    PID_PATH.unlink(missing_ok=True)
+    SOCK_PATH.unlink(missing_ok=True)
 
 
 def send_job(job_url: str) -> None:
@@ -340,13 +354,23 @@ def send_job(job_url: str) -> None:
 
 
 def start_background() -> None:
-    """Fork and start the daemon in the background."""
+    """Fork and start the daemon in the background.
+
+    Uses a double-fork so the daemon is reparented to init/PID 1, preventing
+    zombies when the caller (e.g. an MCP server) never waits on children.
+    """
     _STATE_DIR.mkdir(parents=True, exist_ok=True)
     r_fd, w_fd = os.pipe()
     pid = os.fork()
     if pid == 0:
+        # First child: setsid + fork again, then exit immediately.
         os.close(r_fd)
         os.setsid()
+        pid2 = os.fork()
+        if pid2 > 0:
+            # Intermediate child exits so the grandchild is reparented to init.
+            os._exit(0)
+        # Grandchild: this is the actual daemon.
         with open("/dev/null") as devnull:
             os.dup2(devnull.fileno(), 0)
         log_fd = os.open(LOG_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
@@ -354,9 +378,10 @@ def start_background() -> None:
         os.dup2(log_fd, 2)
         os.close(log_fd)
         run(ready_fd=w_fd)
-        sys.exit(0)
-    # Parent: block until child signals readiness (write end closed after listen())
+        os._exit(0)
+    # Parent: reap the intermediate child, then wait for daemon readiness.
     os.close(w_fd)
+    os.waitpid(pid, 0)
     ready = os.read(r_fd, 1)
     os.close(r_fd)
     if not ready:
