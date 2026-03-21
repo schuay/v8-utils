@@ -9,7 +9,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-import pinpoint
+from . import pinpoint
 
 _XSSI = ")]}'\n"
 

@@ -17,12 +17,12 @@ import os
 import re
 import sys
 
-import chat
-import config
-import daemon
-import pinpoint
+from . import chat
+from . import config
+from . import daemon
+from . import pinpoint
 
-from tools import (
+from .tools import (
     _fetch_job_detail,
     _fetch_jobs_list,
     _format_results_table,

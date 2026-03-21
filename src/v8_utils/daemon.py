@@ -31,8 +31,8 @@ from pathlib import Path
 
 import httpx
 
-import config
-import pinpoint
+from . import config
+from . import pinpoint
 
 _STATE_DIR = Path("~/.local/share/v8-utils").expanduser()
 SOCK_PATH = _STATE_DIR / "daemon.sock"

@@ -25,7 +25,7 @@ from statistics import mean, stdev
 
 from scipy.stats import ttest_ind
 
-import config as cfg_module
+from . import config as cfg_module
 
 
 # ---------- Variant ----------

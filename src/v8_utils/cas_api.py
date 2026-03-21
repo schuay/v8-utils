@@ -27,7 +27,7 @@ import httpx
 from google.auth import default as _gauth_default
 from google.auth.transport.requests import Request as _AuthRequest
 
-import rbe_pb2
+from . import rbe_pb2
 
 log = logging.getLogger(__name__)
 

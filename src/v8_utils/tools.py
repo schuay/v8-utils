@@ -9,12 +9,12 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
 
-import config
-import daemon
-import gerrit as gerrit_tools
-import jsb as jsb_module
-import perf as perf_tools
-import pinpoint
+from . import config
+from . import daemon
+from . import gerrit as gerrit_tools
+from . import jsb as jsb_module
+from . import perf as perf_tools
+from . import pinpoint
 
 mcp = FastMCP("v8-utils", log_level="WARNING")
 

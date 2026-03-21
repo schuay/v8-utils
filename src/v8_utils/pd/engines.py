@@ -20,13 +20,7 @@ ENGINES: dict[str, dict] = {
 def get_src_dir(engine: str) -> Path | None:
     """Derive engine source directory from v8-utils config."""
     try:
-        # v8-utils config is in the parent package
-        import sys
-
-        v8_utils = Path(__file__).resolve().parents[2]
-        if str(v8_utils) not in sys.path:
-            sys.path.insert(0, str(v8_utils))
-        from config import load as load_v8_config
+        from ..config import load as load_v8_config
 
         cfg = load_v8_config()
     except Exception:

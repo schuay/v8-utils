@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import sys
 
-import config
+from . import config
 
 # ── Changelog entries ────────────────────────────────────────────────────────
 # Append new entries at the end. Never remove or reorder.

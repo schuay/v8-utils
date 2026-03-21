@@ -1,13 +1,10 @@
 """Unit tests for jsb — pure functions only, no subprocess or filesystem."""
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-from jsb import (
+from v8_utils.jsb import (
     Variant,
     _fmt_delta,
     _fmt_stat,

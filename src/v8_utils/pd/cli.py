@@ -24,7 +24,7 @@ app = typer.Typer(
 def _load_config() -> dict:
     """Load sources and analysis config from v8-utils config."""
     try:
-        import config as v8_config
+        from .. import config as v8_config
 
         cfg = v8_config.load()
         return {

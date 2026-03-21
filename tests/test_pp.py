@@ -3,18 +3,14 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
-import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent))
-
-import changelog
-import daemon
-import pinpoint
-from pinpoint import (
+from v8_utils import changelog
+from v8_utils import daemon
+from v8_utils import pinpoint
+from v8_utils.pinpoint import (
     _apply_significance,
     _extract_change_and_patchset,
     _extract_change_id,
