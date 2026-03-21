@@ -34,13 +34,7 @@ def get_src_dir(engine: str) -> Path | None:
 
     if engine == "v8":
         return cfg.v8_out.parent if cfg.v8_out else None
-    elif engine == "chromium":
-        return cfg.chromium_dir
-    elif engine == "jsc":
-        return cfg.jsc_dir
-    elif engine == "spidermonkey":
-        return cfg.spidermonkey_dir
-    return None
+    return cfg.repos.get(engine)
 
 
 def get_id_regex(engine: str) -> str | None:

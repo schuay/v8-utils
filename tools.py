@@ -937,7 +937,7 @@ def jsb_run_bench(
     """
     cfg = config.load()
     js3 = suite.lower() != "js2"
-    suite_dir = cfg.js3_dir if js3 else cfg.js2_dir
+    suite_dir = cfg.repos.get("js3") if js3 else cfg.repos.get("js2")
     suite_label = "JS3" if js3 else "JS2"
 
     variants = [jsb_module.Variant.parse(b) for b in builds]
@@ -1053,34 +1053,40 @@ def gerrit_fetch(
 
 # ── repo tools ───────────────────────────────────────────────────────────────
 
-_REPO_ALIASES: dict[str, str] = {
-    "jsc": "jsc_dir",
-    "js2": "js2_dir",
-    "js3": "js3_dir",
-    "spidermonkey": "spidermonkey_dir",
-}
-
 _MAX_READ_LINES = 2000
 _MAX_GREP_MATCHES = 100
 
 
 def _resolve_repo(repo: str) -> Path:
-    """Resolve a repo alias to its configured path, or raise ValueError."""
-    key = _REPO_ALIASES.get(repo)
-    if key is None:
-        valid = ", ".join(sorted(_REPO_ALIASES))
-        raise ValueError(f"Unknown repo {repo!r}. Valid repos: {valid}")
+    """Resolve a repo name to its configured path, or raise ValueError."""
     cfg = config.load()
-    path = getattr(cfg, key)
+    path = cfg.repos.get(repo)
     if path is None:
-        raise ValueError(
-            f"Repo {repo!r} is not configured. "
-            f"Set {key} in ~/.config/v8-utils/config.toml, e.g.:\n"
-            f'  {key} = "~/path/to/{repo}"'
-        )
+        valid = ", ".join(sorted(cfg.repos))
+        raise ValueError(f"Unknown repo {repo!r}. Configured repos: {valid}")
     if not path.is_dir():
         raise ValueError(f"Repo {repo!r} path does not exist: {path}")
     return path
+
+
+def _register_repo_resources():
+    """Register MCP resources for configured repos."""
+    cfg = config.load()
+    for alias, path in cfg.repos.items():
+        if not path.is_dir():
+            continue
+
+        def _make_resource(p: str):
+            @mcp.resource(f"repo://{alias}", name=alias, description=p)
+            def _repo_resource():
+                return p
+
+            return _repo_resource
+
+        _make_resource(str(path))
+
+
+_register_repo_resources()
 
 
 @mcp.tool()
@@ -1093,7 +1099,7 @@ def repo_read(
 ) -> CallToolResult:
     """Read a file from a related source repo.
 
-    repo:   repo alias — one of: jsc, js2, js3, spidermonkey
+    repo:   repo name from the repo:// MCP resources
     path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
     offset: 0-based line offset to start reading from (default: 0)
     limit:  max lines to return (default: 2000)
@@ -1143,7 +1149,7 @@ def repo_grep(
 ) -> CallToolResult:
     """Search for a pattern in a related source repo using git grep.
 
-    repo:    repo alias — one of: jsc, js2, js3, spidermonkey
+    repo:    repo name from the repo:// MCP resources
     pattern: regex pattern to search for
     glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"
     context: lines of context around each match (default: 0)

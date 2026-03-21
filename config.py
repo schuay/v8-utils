@@ -83,20 +83,6 @@ class Config:
             _TOML: "~/v8/out",
         },
     )
-    js2_dir: Path = field(
-        default=Path("~/JetStream2").expanduser(),
-        metadata={
-            _HELP: "Path to a JetStream2 checkout",
-            _TOML: "~/JetStream2",
-        },
-    )
-    js3_dir: Path = field(
-        default=Path("~/JetStream3").expanduser(),
-        metadata={
-            _HELP: "Path to a JetStream3 checkout",
-            _TOML: "~/JetStream3",
-        },
-    )
     default_build: str = field(
         default="release",
         metadata={
@@ -111,27 +97,15 @@ class Config:
         },
     )
 
-    # ── repos — related source repos for cross-reference ──────────────────────
-    chromium_dir: Path | None = field(
-        default=None,
-        metadata={
-            _SECTION: "repos — related source repos for cross-reference",
-            _HELP: "Path to Chromium source checkout (for cpd sync chromium)",
-            _OPT: True,
+    # ── repos — source repos accessible via MCP tools ─────────────────────────
+    repos: dict[str, Path] = field(
+        default_factory=lambda: {
+            "js2": Path("~/JetStream2").expanduser(),
+            "js3": Path("~/JetStream3").expanduser(),
         },
-    )
-    jsc_dir: Path | None = field(
-        default=None,
         metadata={
-            _HELP: "Path to JavaScriptCore source (WebKit/Source/JavaScriptCore)",
-            _OPT: True,
-        },
-    )
-    spidermonkey_dir: Path | None = field(
-        default=None,
-        metadata={
-            _HELP: "Path to SpiderMonkey source (gecko-dev/js/src)",
-            _OPT: True,
+            _SECTION: "repos — source repos accessible via MCP tools",
+            _HELP: 'Name → path mapping, e.g. jsc = "~/aspect/aspect-aspect/aspect"',
         },
     )
 
@@ -173,13 +147,22 @@ def template() -> str:
         meta = f.metadata
 
         # Skip dict fields (TOML tables — users write these directly)
-        if f.type in ("dict", dict) or (
-            hasattr(f, "default_factory")
-            and isinstance(f.default_factory, type)
-            and issubclass(f.default_factory, dict)
-        ):
-            continue
         if f.name in ("sources", "analysis"):
+            continue
+
+        # Repos table — render as [repos] section with examples
+        if f.name == "repos":
+            if section := meta.get(_SECTION):
+                bar = "─" * max(0, 60 - len(section))
+                lines += ["", f"# ── {section} {bar}"]
+            if help_text := meta.get(_HELP):
+                lines.append(f"# {help_text}")
+            lines.append("[repos]")
+            lines.append('js2 = "~/JetStream2"')
+            lines.append('js3 = "~/JetStream3"')
+            lines.append('# jsc = "~/aspect/aspect-aspect/aspect"')
+            lines.append('# spidermonkey = "~/gecko-dev/js/src"')
+            lines.append('# chromium = "~/chromium/src"')
             continue
 
         # Section heading
@@ -243,6 +226,25 @@ def load() -> Config:
     def _path(key: str, default: Path) -> Path:
         return Path(data[key]).expanduser() if key in data else default
 
+    # Build repos dict: start with defaults, overlay [repos] table, migrate legacy keys
+    repos: dict[str, Path] = {
+        "js2": Path("~/JetStream2").expanduser(),
+        "js3": Path("~/JetStream3").expanduser(),
+    }
+    if "repos" in data:
+        repos.update({k: Path(v).expanduser() for k, v in data["repos"].items()})
+    # Migrate legacy individual *_dir keys
+    _LEGACY_REPO_KEYS = {
+        "js2_dir": "js2",
+        "js3_dir": "js3",
+        "jsc_dir": "jsc",
+        "spidermonkey_dir": "spidermonkey",
+        "chromium_dir": "chromium",
+    }
+    for old_key, repo_name in _LEGACY_REPO_KEYS.items():
+        if old_key in data and repo_name not in repos:
+            repos[repo_name] = Path(data[old_key]).expanduser()
+
     _cache = Config(
         user=data.get("user"),
         poll_interval=int(data.get("poll_interval", 60)),
@@ -250,20 +252,12 @@ def load() -> Config:
         chat_service_account_email=data.get("chat_service_account_email"),
         chat_app_space=data.get("chat_app_space"),
         v8_out=_path("v8_out", Path("~/v8/out").expanduser()),
-        js2_dir=_path("js2_dir", Path("~/JetStream2").expanduser()),
-        js3_dir=_path("js3_dir", Path("~/JetStream3").expanduser()),
         default_build=data.get("default_build", "release"),
         perf_script=_path(
             "perf_script",
             Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
         ),
-        chromium_dir=Path(data["chromium_dir"]).expanduser()
-        if "chromium_dir" in data
-        else None,
-        jsc_dir=Path(data["jsc_dir"]).expanduser() if "jsc_dir" in data else None,
-        spidermonkey_dir=Path(data["spidermonkey_dir"]).expanduser()
-        if "spidermonkey_dir" in data
-        else None,
+        repos=repos,
         sources=data.get("sources", {}),
         analysis=data.get(
             "analysis",
