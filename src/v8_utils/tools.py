@@ -1742,6 +1742,18 @@ _RE_V8_PRINT_CODE = _re.compile(r"^0x[0-9a-f]+\s+[0-9a-f]+\s+[0-9a-f]+\s+(.*)")
 #      3.15 :   1d508c3:        testb  $0x8,(%rsi,%r14,1)
 _RE_PERF_ANNOTATE = _re.compile(r"^\s*\d+\.\d+\s*:\s+[0-9a-f]+:\s+(.*)")
 
+# GDB disassemble format (with optional => marker and /r hex bytes):
+#    0x00005555555fc5c0 <Main()+0>:	push   rbp
+# => 0x00005555555fdd64 <main+4>:	pop    rbp
+#    0x00005555555fdd6a:	int3
+#    0x00005555555fc5c0 <Main()+0>:	55                 	push   rbp   (with /r)
+_RE_GDB_DISASM = _re.compile(
+    r"^(?:=>)?\s*0x[0-9a-f]+"  # optional => marker, address
+    r"(?:\s+<[^>]+>)?:\s+"  # optional <symbol+offset>, then colon
+    r"(?:[0-9a-f]{2}(?:\s[0-9a-f]{2})*\s+)?"  # optional hex bytes (/r flag)
+    r"(.*)"  # instruction
+)
+
 # V8 code comment / ANSI escape lines
 _RE_V8_COMMENT = _re.compile(r"^\s*\[3[24]m|\s*\]")
 
@@ -1783,6 +1795,18 @@ def _clean_asm_for_mca(raw: str) -> str:
         m = _RE_PERF_ANNOTATE.match(line)
         if m:
             cleaned.append(m.group(1))
+            continue
+        # GDB wrapper lines
+        if line.startswith("Dump of assembler code") or line.startswith(
+            "End of assembler dump"
+        ):
+            continue
+        # GDB disassemble: "   0xADDR <sym+off>:  instruction"
+        m = _RE_GDB_DISASM.match(line)
+        if m:
+            instr = m.group(1).strip()
+            if instr:
+                cleaned.append(instr)
             continue
         # Skip ANSI escape lines (V8 code comments with [34m prefix)
         if _RE_V8_COMMENT.match(line):
@@ -1830,7 +1854,7 @@ def llvm_mca(
     Simulates how the CPU pipeline would execute the given instructions and
     reports throughput, latency, bottlenecks, and port pressure.
 
-    assembly:    x86-64 assembly (as produced by V8 JIT / perf)
+    assembly:    x86-64 assembly (as produced by V8 JIT / perf / GDB disassemble)
     cpu:         CPU model for simulation (default: host CPU).
                  Examples: skylake, znver3, alderlake, cortex-a76
     syntax:      "intel" (default, V8 print-code) or "att" (perf annotate)
