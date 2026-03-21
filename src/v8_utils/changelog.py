@@ -51,14 +51,27 @@ _RESET = "\033[0m"
 
 
 def _format_entry(text: str, color: bool = True) -> str:
+    # Process backticks first so underscores inside code spans are protected.
+    codes: list[str] = []
+
+    def _stash_code(m: re.Match[str]) -> str:
+        codes.append(m.group(1))
+        return f"\x00{len(codes) - 1}\x00"
+
+    text = re.sub(r"`(.+?)`", _stash_code, text)
+
     if not color:
         text = re.sub(r"\*(.+?)\*", r"\1", text)
         text = re.sub(r"_(.+?)_", r"\1", text)
-        text = re.sub(r"`(.+?)`", r"\1", text)
-        return text
-    text = re.sub(r"\*(.+?)\*", rf"{_BOLD}\1{_RESET}", text)
-    text = re.sub(r"_(.+?)_", rf"{_DIM}\1{_RESET}", text)
-    text = re.sub(r"`(.+?)`", rf"{_CYAN}\1{_RESET}", text)
+    else:
+        text = re.sub(r"\*(.+?)\*", rf"{_BOLD}\1{_RESET}", text)
+        text = re.sub(r"_(.+?)_", rf"{_DIM}\1{_RESET}", text)
+
+    def _restore_code(m: re.Match[str]) -> str:
+        s = codes[int(m.group(1))]
+        return f"{_CYAN}{s}{_RESET}" if color else s
+
+    text = re.sub(r"\x00(\d+)\x00", _restore_code, text)
     return text
 
 
