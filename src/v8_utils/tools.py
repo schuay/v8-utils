@@ -1857,7 +1857,7 @@ def llvm_mca(
     assembly:    x86-64 assembly (as produced by V8 JIT / perf / GDB disassemble)
     cpu:         CPU model for simulation (default: host CPU).
                  Examples: skylake, znver3, alderlake, cortex-a76
-    syntax:      "intel" (default, V8 print-code) or "att" (perf annotate)
+    syntax:      "intel" (default) or "att"; auto-detected from GDB/perf output
     bottleneck:  include bottleneck analysis showing what limits throughput
     timeline:    include cycle-by-cycle pipeline timeline (verbose)
     """
@@ -1869,6 +1869,10 @@ def llvm_mca(
 
     src = _clean_asm_for_mca(assembly.strip())
     att = syntax.lower() == "att"
+
+    # Auto-detect AT&T syntax from % register prefixes (e.g. GDB default output)
+    if not att and _re.search(r"%[re]?[abcd]x|%[re]?[sd]i|%[re]?[bs]p|%r\d+|%xmm", src):
+        att = True
 
     # Prepend syntax directive if not already present
     if ".intel_syntax" not in src and ".att_syntax" not in src:
