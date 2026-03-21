@@ -38,6 +38,8 @@ ENTRIES: list[str] = [
     "Better *upgrade* handling — MCP tools warn when server is stale, chat daemon auto-restarts",
     "`show-results --compact` omits sig and direction columns for cleaner doc pastes",
     "*create-job* sets human-readable job names — CL subject for patch jobs, flags for flag-only jobs",
+    "v8-utils mcp: added `godbolt_compile` and `godbolt_list_compilers` tools for compiling snippets via Godbolt and inspecting generated assembly",
+    "v8-utils mcp: `godbolt_compile`: added `mca` and `opt_remarks` flags for llvm-mca pipeline analysis and LLVM optimization remarks (clang only)",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

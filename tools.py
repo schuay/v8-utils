@@ -1641,6 +1641,9 @@ def _godbolt_resolve_compiler(compiler: str, target: str, language: str) -> str:
     return matches[0]["id"]
 
 
+_MCA_DEFAULT_CPU = {"x64": "skylake", "arm64": "cortex-a76"}
+
+
 @mcp.tool()
 def godbolt_compile(
     source: str,
@@ -1649,6 +1652,8 @@ def godbolt_compile(
     language: str = "c++",
     flags: str = "-O3 -fno-strict-aliasing -fno-omit-frame-pointer",
     compiler_id: str | None = None,
+    mca: bool = False,
+    opt_remarks: bool = False,
 ) -> CallToolResult:
     """Compile a code snippet on Godbolt and return the assembly output.
 
@@ -1658,27 +1663,46 @@ def godbolt_compile(
     language:    "c++" or "c" (default: "c++")
     flags:       compiler flags (default: V8 release flags)
     compiler_id: exact Godbolt compiler ID; overrides target/compiler/language
+    mca:         run llvm-mca pipeline analysis on the assembly (clang only).
+                 Shows throughput, bottlenecks, and port pressure per instruction.
+                 Useful to check if a loop is bound by execution ports or latency.
+    opt_remarks: include LLVM optimization pass remarks (clang only).
+                 Shows which optimizations fired or failed and why.
+                 Useful to understand missed inlining, vectorization, etc.
     """
     import httpx
+
+    if (
+        (mca or opt_remarks)
+        and "clang" not in compiler.lower()
+        and (compiler_id is None or "clang" not in compiler_id.lower())
+    ):
+        return _text_result("Error: mca and opt_remarks require a Clang compiler.")
 
     if compiler_id is None:
         compiler_id = _godbolt_resolve_compiler(compiler, target, language)
 
+    options: dict = {
+        "userArguments": flags,
+        "filters": {
+            "intel": True,
+            "demangle": True,
+            "commentOnly": True,
+            "directives": True,
+        },
+    }
+
+    if mca:
+        cpu = _MCA_DEFAULT_CPU.get(target, "")
+        mca_arg = f"-mcpu={cpu}" if cpu else ""
+        options["tools"] = [{"id": "llvm-mcatrunk", "args": mca_arg}]
+
+    if opt_remarks:
+        options["compilerOptions"] = {"produceOptInfo": True}
+
     r = httpx.post(
         f"https://godbolt.org/api/compiler/{compiler_id}/compile",
-        json={
-            "source": source,
-            "lang": language,
-            "options": {
-                "userArguments": flags,
-                "filters": {
-                    "intel": True,
-                    "demangle": True,
-                    "commentOnly": True,
-                    "directives": True,
-                },
-            },
-        },
+        json={"source": source, "lang": language, "options": options},
         headers={"Accept": "application/json"},
         timeout=30,
     )
@@ -1696,6 +1720,35 @@ def godbolt_compile(
     asm_lines = data.get("asm") or []
     for a in asm_lines:
         lines.append(a.get("text", ""))
+
+    if mca:
+        for tool_entry in data.get("tools") or []:
+            if tool_entry.get("id") == "llvm-mcatrunk":
+                lines.append("")
+                lines.append("# --- llvm-mca analysis ---")
+                for s in tool_entry.get("stderr") or []:
+                    lines.append(s.get("text", ""))
+                for s in tool_entry.get("stdout") or []:
+                    lines.append(s.get("text", ""))
+
+    if opt_remarks:
+        opt_output = data.get("optOutput") or []
+        if opt_output:
+            lines.append("")
+            lines.append("# --- optimization remarks ---")
+            for opt_type in ("Missed", "Passed", "Analysis"):
+                entries = [o for o in opt_output if o.get("optType") == opt_type]
+                if not entries:
+                    continue
+                lines.append(f"# {opt_type} ({len(entries)}):")
+                for o in entries:
+                    loc = o.get("DebugLoc") or {}
+                    loc_str = (
+                        f"{loc.get('File', '?')}:{loc.get('Line', '?')}" if loc else ""
+                    )
+                    fn = o.get("Function", "")
+                    display = o.get("displayString", "")
+                    lines.append(f"  [{fn}] {loc_str}: {display}")
 
     return _text_result("\n".join(lines))
 
