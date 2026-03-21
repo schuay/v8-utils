@@ -1734,6 +1734,68 @@ def d8_trace_index(path: str) -> CallToolResult:
 # ---------------------------------------------------------------------------
 
 
+# V8 print-opt-code format:
+#   0x7fc5e000a500    80  453bd8               cmpl r11,r8
+_RE_V8_PRINT_CODE = _re.compile(r"^0x[0-9a-f]+\s+[0-9a-f]+\s+[0-9a-f]+\s+(.*)")
+
+# perf annotate format:
+#      3.15 :   1d508c3:        testb  $0x8,(%rsi,%r14,1)
+_RE_PERF_ANNOTATE = _re.compile(r"^\s*\d+\.\d+\s*:\s+[0-9a-f]+:\s+(.*)")
+
+# V8 code comment / ANSI escape lines
+_RE_V8_COMMENT = _re.compile(r"^\s*\[3[24]m|\s*\]")
+
+
+# V8 uses a hybrid syntax: AT&T size suffixes (movl, addl) with Intel operand
+# order. Strip the suffix so the Intel parser accepts them.
+_RE_SIZE_SUFFIX = _re.compile(
+    r"^(REX\.W\s+)?"  # optional REX.W prefix
+    r"(j[a-z]+|set[a-z]+|mov[sz]?|lea|add|sub|cmp|test|and|or|xor|sar|shr|shl|"
+    r"sal|inc|dec|neg|not|imul|idiv|mul|div|push|pop|call|ret|nop|"
+    r"cmov[a-z]+)"
+    r"([bwlq])\b",  # size suffix
+    _re.IGNORECASE,
+)
+
+# Trailing annotations like "<+0x104>" or "(comment text)"
+_RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$")
+
+
+def _clean_asm_for_mca(raw: str) -> str:
+    """Strip address/hex prefixes from V8 print-code or perf annotate output."""
+    cleaned: list[str] = []
+    v8_format = False
+    for line in raw.splitlines():
+        # V8 print-opt-code: "0xADDR  OFF  HEX  instruction"
+        m = _RE_V8_PRINT_CODE.match(line)
+        if m:
+            v8_format = True
+            cleaned.append(m.group(1))
+            continue
+        # perf annotate: "  pct : addr: instruction"
+        m = _RE_PERF_ANNOTATE.match(line)
+        if m:
+            cleaned.append(m.group(1))
+            continue
+        # Skip ANSI escape lines (V8 code comments with [34m prefix)
+        if _RE_V8_COMMENT.match(line):
+            continue
+        # Pass through everything else (plain asm, labels, directives)
+        cleaned.append(line)
+
+    if v8_format:
+        # V8 print-code uses hybrid syntax: AT&T suffixes + Intel operands.
+        # Strip size suffixes and trailing annotations.
+        fixed: list[str] = []
+        for line in cleaned:
+            line = _RE_TRAILING_ANNOTATION.sub("", line)
+            line = _RE_SIZE_SUFFIX.sub(r"\1\2", line)
+            fixed.append(line)
+        cleaned = fixed
+
+    return "\n".join(cleaned)
+
+
 @mcp.tool()
 def llvm_mca(
     assembly: str,
@@ -1760,7 +1822,7 @@ def llvm_mca(
             "Error: llvm-mca not found. Install LLVM (e.g. pacman -S llvm)."
         )
 
-    src = assembly.strip()
+    src = _clean_asm_for_mca(assembly.strip())
     att = syntax.lower() == "att"
 
     # Prepend syntax directive if not already present
