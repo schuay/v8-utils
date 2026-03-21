@@ -1784,7 +1784,6 @@ def llvm_mca(
 
     if r.stderr.strip():
         for line in r.stderr.strip().splitlines():
-            # Skip known noisy warnings
             if (
                 "found a return instruction" in line
                 or "program counter updates" in line
@@ -1797,9 +1796,78 @@ def llvm_mca(
         return _text_result("\n".join(lines))
 
     if r.stdout.strip():
-        lines.append(r.stdout.strip())
+        lines.append(_filter_mca_output(r.stdout))
 
     return _text_result("\n".join(lines))
+
+
+def _filter_mca_output(raw: str) -> str:
+    """Filter llvm-mca output to keep only the most useful sections.
+
+    Always keeps: summary, bottleneck analysis, critical sequence,
+    instruction info. Only includes resource pressure tables when the
+    bottleneck analysis indicates resource pressure is significant (>10%).
+    """
+    sections: list[tuple[str, list[str]]] = []
+    current_name = "summary"
+    current_lines: list[str] = []
+
+    # Known section headers
+    _SECTION_STARTS = {
+        "Cycles with backend pressure": "bottleneck",
+        "Critical sequence": "critical",
+        "Instruction Info": "instruction_info",
+        "Resources:": "resources",
+        "Resource pressure per iteration": "pressure_summary",
+        "Resource pressure by instruction": "pressure_detail",
+        "Timeline view": "timeline",
+        "Average Wait times": "wait_times",
+    }
+
+    for line in raw.strip().splitlines():
+        for prefix, name in _SECTION_STARTS.items():
+            if line.startswith(prefix):
+                sections.append((current_name, current_lines))
+                current_name = name
+                current_lines = []
+                break
+        current_lines.append(line)
+    sections.append((current_name, current_lines))
+
+    # Check if resource pressure is a significant bottleneck
+    resource_pressure_pct = 0.0
+    for name, slines in sections:
+        if name == "bottleneck":
+            for sl in slines:
+                if "Resource Pressure" in sl and "%" in sl:
+                    try:
+                        resource_pressure_pct = float(
+                            sl.split("[")[1].split("%")[0].strip()
+                        )
+                    except (IndexError, ValueError):
+                        pass
+                    break
+
+    keep = {
+        "summary",
+        "bottleneck",
+        "critical",
+        "instruction_info",
+        "timeline",
+        "wait_times",
+    }
+    if resource_pressure_pct > 10:
+        keep.update({"resources", "pressure_summary", "pressure_detail"})
+
+    out: list[str] = []
+    for name, slines in sections:
+        if name in keep:
+            # Strip excessive blank lines
+            text = "\n".join(slines).strip()
+            if text:
+                out.append(text)
+
+    return "\n\n".join(out)
 
 
 # ---------------------------------------------------------------------------
