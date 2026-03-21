@@ -75,17 +75,10 @@ class Config:
     )
 
     # ── jsb — JetStream bench runner ─────────────────────────────────────────
-    v8_out: Path = field(
-        default=Path("~/v8/out").expanduser(),
-        metadata={
-            _SECTION: "jsb — JetStream bench runner",
-            _HELP: "Root of V8 build outputs; build dirs live here, e.g. out/release/d8",
-            _TOML: "~/v8/out",
-        },
-    )
     default_build: str = field(
         default="release",
         metadata={
+            _SECTION: "jsb — JetStream bench runner",
             _HELP: "Default build name used by jsb when -b is not specified",
         },
     )
@@ -100,6 +93,7 @@ class Config:
     # ── repos — source repos accessible via MCP tools ─────────────────────────
     repos: dict[str, Path] = field(
         default_factory=lambda: {
+            "v8": Path("~/v8").expanduser(),
             "js2": Path("~/JetStream2").expanduser(),
             "js3": Path("~/JetStream3").expanduser(),
         },
@@ -125,6 +119,11 @@ class Config:
         },
         metadata={_HELP: "PELT analysis tuning parameters"},
     )
+
+    @property
+    def v8_out(self) -> Path:
+        """V8 build output root — repos["v8"] / "out"."""
+        return self.repos["v8"] / "out"
 
 
 # ── Template generation ───────────────────────────────────────────────────────
@@ -158,6 +157,7 @@ def template() -> str:
             if help_text := meta.get(_HELP):
                 lines.append(f"# {help_text}")
             lines.append("[repos]")
+            lines.append('v8 = "~/v8"')
             lines.append('js2 = "~/JetStream2"')
             lines.append('js3 = "~/JetStream3"')
             lines.append('# jsc = "~/aspect/aspect-aspect/aspect"')
@@ -228,6 +228,7 @@ def load() -> Config:
 
     # Build repos dict: start with defaults, overlay [repos] table, migrate legacy keys
     repos: dict[str, Path] = {
+        "v8": Path("~/v8").expanduser(),
         "js2": Path("~/JetStream2").expanduser(),
         "js3": Path("~/JetStream3").expanduser(),
     }
@@ -244,6 +245,9 @@ def load() -> Config:
     for old_key, repo_name in _LEGACY_REPO_KEYS.items():
         if old_key in data and repo_name not in repos:
             repos[repo_name] = Path(data[old_key]).expanduser()
+    # Migrate legacy v8_out (e.g. "~/v8/out") → repos["v8"] = parent
+    if "v8_out" in data and "v8" not in repos:
+        repos["v8"] = Path(data["v8_out"]).expanduser().parent
 
     _cache = Config(
         user=data.get("user"),
@@ -251,7 +255,6 @@ def load() -> Config:
         chat_webhook=data.get("chat_webhook"),
         chat_service_account_email=data.get("chat_service_account_email"),
         chat_app_space=data.get("chat_app_space"),
-        v8_out=_path("v8_out", Path("~/v8/out").expanduser()),
         default_build=data.get("default_build", "release"),
         perf_script=_path(
             "perf_script",

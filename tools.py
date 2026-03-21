@@ -844,8 +844,8 @@ def run_d8(
     For benchmarking, use the jsb_run_bench tool instead.
 
     args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
-    build:       build directory name under v8_out (default: config default_build)
-    cwd:         working directory for d8 (default: v8_out parent)
+    build:       build directory name under repos["v8"]/out (default: config default_build)
+    cwd:         working directory for d8 (default: repos["v8"])
     timeout:     max seconds before killing the process (default: 60)
     stdout_file: redirect stdout to this file path instead of capturing
     stderr_file: redirect stderr to this file path instead of capturing

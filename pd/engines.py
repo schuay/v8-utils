@@ -32,8 +32,6 @@ def get_src_dir(engine: str) -> Path | None:
     except Exception:
         return None
 
-    if engine == "v8":
-        return cfg.v8_out.parent if cfg.v8_out else None
     return cfg.repos.get(engine)
 
 
