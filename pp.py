@@ -306,6 +306,9 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             print(f"  {_DIM}exp-flags:{_RESET}  {exp_flags}")
         print()
 
+    job_ids = [j.get("job_id", "") for j in jobs]
+    print(f"{_DIM}job ids:{_RESET} {' '.join(job_ids)}")
+
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
