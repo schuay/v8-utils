@@ -937,7 +937,7 @@ def jsb_run_bench(
     """
     cfg = config.load()
     js3 = suite.lower() != "js2"
-    suite_dir = cfg.repos.get("js3") if js3 else cfg.repos.get("js2")
+    suite_dir = cfg.repos["js3"].path if js3 else cfg.repos["js2"].path
     suite_label = "JS3" if js3 else "JS2"
 
     variants = [jsb_module.Variant.parse(b) for b in builds]
@@ -1060,30 +1060,31 @@ _MAX_GREP_MATCHES = 100
 def _resolve_repo(repo: str) -> Path:
     """Resolve a repo name to its configured path, or raise ValueError."""
     cfg = config.load()
-    path = cfg.repos.get(repo)
-    if path is None:
+    entry = cfg.repos.get(repo)
+    if entry is None:
         valid = ", ".join(sorted(cfg.repos))
         raise ValueError(f"Unknown repo {repo!r}. Configured repos: {valid}")
-    if not path.is_dir():
-        raise ValueError(f"Repo {repo!r} path does not exist: {path}")
-    return path
+    if not entry.path.is_dir():
+        raise ValueError(f"Repo {repo!r} path does not exist: {entry.path}")
+    return entry.path
 
 
 def _register_repo_resources():
     """Register MCP resources for configured repos."""
     cfg = config.load()
-    for alias, path in cfg.repos.items():
-        if not path.is_dir():
+    for alias, entry in cfg.repos.items():
+        if not entry.path.is_dir():
             continue
+        desc = entry.desc or str(entry.path)
 
-        def _make_resource(p: str):
-            @mcp.resource(f"repo://{alias}", name=alias, description=p)
+        def _make_resource(a: str, d: str, p: str):
+            @mcp.resource(f"repo://{a}", name=a, description=d)
             def _repo_resource():
                 return p
 
             return _repo_resource
 
-        _make_resource(str(path))
+        _make_resource(alias, desc, str(entry.path))
 
 
 _register_repo_resources()

@@ -33,6 +33,12 @@ def _f(
 
 
 @dataclass
+class Repo:
+    path: Path
+    desc: str = ""
+
+
+@dataclass
 class Config:
     # ── General ──────────────────────────────────────────────────────────────
     user: str | None = field(
@@ -91,15 +97,19 @@ class Config:
     )
 
     # ── repos — source repos accessible via MCP tools ─────────────────────────
-    repos: dict[str, Path] = field(
+    repos: dict[str, Repo] = field(
         default_factory=lambda: {
-            "v8": Path("~/v8").expanduser(),
-            "js2": Path("~/JetStream2").expanduser(),
-            "js3": Path("~/JetStream3").expanduser(),
+            "v8": Repo(Path("~/v8").expanduser(), "V8 JavaScript engine"),
+            "js2": Repo(
+                Path("~/JetStream2").expanduser(), "JetStream2 benchmark suite"
+            ),
+            "js3": Repo(
+                Path("~/JetStream3").expanduser(), "JetStream3 benchmark suite"
+            ),
         },
         metadata={
             _SECTION: "repos — source repos accessible via MCP tools",
-            _HELP: 'Name → path mapping, e.g. jsc = "~/aspect/aspect-aspect/aspect"',
+            _HELP: "Repos available via repo_read/repo_grep MCP tools",
         },
     )
 
@@ -122,8 +132,8 @@ class Config:
 
     @property
     def v8_out(self) -> Path:
-        """V8 build output root — repos["v8"] / "out"."""
-        return self.repos["v8"] / "out"
+        """V8 build output root — repos["v8"].path / "out"."""
+        return self.repos["v8"].path / "out"
 
 
 # ── Template generation ───────────────────────────────────────────────────────
@@ -156,13 +166,26 @@ def template() -> str:
                 lines += ["", f"# ── {section} {bar}"]
             if help_text := meta.get(_HELP):
                 lines.append(f"# {help_text}")
-            lines.append("[repos]")
-            lines.append('v8 = "~/v8"')
-            lines.append('js2 = "~/JetStream2"')
-            lines.append('js3 = "~/JetStream3"')
-            lines.append('# jsc = "~/aspect/aspect-aspect/aspect"')
-            lines.append('# spidermonkey = "~/gecko-dev/js/src"')
-            lines.append('# chromium = "~/chromium/src"')
+            lines.append("")
+            lines.append("[repos.v8]")
+            lines.append('path = "~/v8"')
+            lines.append('desc = "V8 JavaScript engine"')
+            lines.append("")
+            lines.append("[repos.js2]")
+            lines.append('path = "~/JetStream2"')
+            lines.append('desc = "JetStream2 benchmark suite"')
+            lines.append("")
+            lines.append("[repos.js3]")
+            lines.append('path = "~/JetStream3"')
+            lines.append('desc = "JetStream3 benchmark suite"')
+            lines.append("")
+            lines.append("# [repos.jsc]")
+            lines.append('# path = "~/aspect/aspect-aspect/aspect"')
+            lines.append('# desc = "JavaScriptCore engine"')
+            lines.append("")
+            lines.append("# [repos.spidermonkey]")
+            lines.append('# path = "~/gecko-dev/js/src"')
+            lines.append('# desc = "SpiderMonkey engine"')
             continue
 
         # Section heading
@@ -227,13 +250,21 @@ def load() -> Config:
         return Path(data[key]).expanduser() if key in data else default
 
     # Build repos dict: start with defaults, overlay [repos] table, migrate legacy keys
-    repos: dict[str, Path] = {
-        "v8": Path("~/v8").expanduser(),
-        "js2": Path("~/JetStream2").expanduser(),
-        "js3": Path("~/JetStream3").expanduser(),
+    repos: dict[str, Repo] = {
+        "v8": Repo(Path("~/v8").expanduser(), "V8 JavaScript engine"),
+        "js2": Repo(Path("~/JetStream2").expanduser(), "JetStream2 benchmark suite"),
+        "js3": Repo(Path("~/JetStream3").expanduser(), "JetStream3 benchmark suite"),
     }
     if "repos" in data:
-        repos.update({k: Path(v).expanduser() for k, v in data["repos"].items()})
+        for name, val in data["repos"].items():
+            if isinstance(val, dict):
+                repos[name] = Repo(
+                    Path(val["path"]).expanduser(),
+                    val.get("desc", ""),
+                )
+            else:
+                # Legacy flat format: repos.name = "path"
+                repos[name] = Repo(Path(val).expanduser())
     # Migrate legacy individual *_dir keys
     _LEGACY_REPO_KEYS = {
         "js2_dir": "js2",
@@ -244,10 +275,12 @@ def load() -> Config:
     }
     for old_key, repo_name in _LEGACY_REPO_KEYS.items():
         if old_key in data and repo_name not in repos:
-            repos[repo_name] = Path(data[old_key]).expanduser()
+            repos[repo_name] = Repo(Path(data[old_key]).expanduser())
     # Migrate legacy v8_out (e.g. "~/v8/out") → repos["v8"] = parent
     if "v8_out" in data and "v8" not in repos:
-        repos["v8"] = Path(data["v8_out"]).expanduser().parent
+        repos["v8"] = Repo(
+            Path(data["v8_out"]).expanduser().parent, "V8 JavaScript engine"
+        )
 
     _cache = Config(
         user=data.get("user"),

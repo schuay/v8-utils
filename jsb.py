@@ -371,7 +371,7 @@ examples:
 
     cfg = cfg_module.load()
     v8_out = cfg.v8_out
-    suite_dir = cfg.repos.get("js2") if args.js2 else cfg.repos.get("js3")
+    suite_dir = cfg.repos["js2"].path if args.js2 else cfg.repos["js3"].path
     suite = "JS2" if args.js2 else "JS3"
     js3 = not args.js2
 

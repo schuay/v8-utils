@@ -32,7 +32,8 @@ def get_src_dir(engine: str) -> Path | None:
     except Exception:
         return None
 
-    return cfg.repos.get(engine)
+    entry = cfg.repos.get(engine)
+    return entry.path if entry else None
 
 
 def get_id_regex(engine: str) -> str | None:
