@@ -1745,7 +1745,6 @@ _RE_PERF_ANNOTATE = _re.compile(r"^\s*\d+\.\d+\s*:\s+[0-9a-f]+:\s+(.*)")
 # V8 code comment / ANSI escape lines
 _RE_V8_COMMENT = _re.compile(r"^\s*\[3[24]m|\s*\]")
 
-
 # V8 uses a hybrid syntax: AT&T size suffixes (movl, addl) with Intel operand
 # order. Strip the suffix so the Intel parser accepts them.
 _RE_SIZE_SUFFIX = _re.compile(
@@ -1757,8 +1756,11 @@ _RE_SIZE_SUFFIX = _re.compile(
     _re.IGNORECASE,
 )
 
-# Trailing annotations like "<+0x104>" or "(comment text)"
-_RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$")
+# Trailing annotations: "<+0x104>", "(comment)", ";; comment"
+_RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$|\s+;;.*$")
+
+# REX.W prefix — strip it, the instruction works without it in the assembler
+_RE_REX_PREFIX = _re.compile(r"^REX\.W\s+", _re.IGNORECASE)
 
 # Absolute address as jump/call target: "jne 0x7fc5e000a584" → "jne .L0"
 _RE_ABS_JUMP = _re.compile(r"^(j[a-z]*|call)\s+0x([0-9a-f]+)\s*$", _re.IGNORECASE)
@@ -1788,14 +1790,18 @@ def _clean_asm_for_mca(raw: str) -> str:
 
     if v8_format:
         # V8 print-code uses hybrid syntax: AT&T suffixes + Intel operands.
-        # Strip size suffixes, trailing annotations, and convert absolute
-        # jump targets to labels.
+        # Strip non-instruction lines, REX.W prefixes, size suffixes,
+        # trailing annotations, and convert absolute jump targets to labels.
         label_map: dict[str, str] = {}
         fixed: list[str] = []
         for line in cleaned:
             line = _RE_TRAILING_ANNOTATION.sub("", line)
+            line = _RE_REX_PREFIX.sub("", line)
             line = _RE_SIZE_SUFFIX.sub(r"\1\2", line)
-            m = _RE_ABS_JUMP.match(line.strip())
+            stripped = line.strip()
+            if not stripped:
+                continue
+            m = _RE_ABS_JUMP.match(stripped)
             if m:
                 addr = m.group(2)
                 if addr not in label_map:
