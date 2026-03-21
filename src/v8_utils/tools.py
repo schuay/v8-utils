@@ -1738,6 +1738,7 @@ def d8_trace_index(path: str) -> CallToolResult:
 def llvm_mca(
     assembly: str,
     cpu: str | None = None,
+    syntax: str = "intel",
     bottleneck: bool = True,
     timeline: bool = False,
 ) -> CallToolResult:
@@ -1746,9 +1747,10 @@ def llvm_mca(
     Simulates how the CPU pipeline would execute the given instructions and
     reports throughput, latency, bottlenecks, and port pressure.
 
-    assembly:    x86-64 assembly in Intel syntax (as produced by V8 JIT / perf)
+    assembly:    x86-64 assembly (as produced by V8 JIT / perf)
     cpu:         CPU model for simulation (default: host CPU).
                  Examples: skylake, znver3, alderlake, cortex-a76
+    syntax:      "intel" (default, V8 print-code) or "att" (perf annotate)
     bottleneck:  include bottleneck analysis showing what limits throughput
     timeline:    include cycle-by-cycle pipeline timeline (verbose)
     """
@@ -1758,14 +1760,22 @@ def llvm_mca(
             "Error: llvm-mca not found. Install LLVM (e.g. pacman -S llvm)."
         )
 
-    # Prepend Intel syntax directive if not already present
     src = assembly.strip()
-    if ".intel_syntax" not in src:
-        src = ".intel_syntax noprefix\n" + src
+    att = syntax.lower() == "att"
+
+    # Prepend syntax directive if not already present
+    if ".intel_syntax" not in src and ".att_syntax" not in src:
+        if att:
+            src = ".att_syntax\n" + src
+        else:
+            src = ".intel_syntax noprefix\n" + src
+
+    # output-asm-variant: 0=AT&T, 1=Intel
+    output_variant = "0" if att else "1"
 
     cmd = [
         mca,
-        "--output-asm-variant=1",
+        f"--output-asm-variant={output_variant}",
         "--noalias",
         "--skip-unsupported-instructions=any",
     ]
