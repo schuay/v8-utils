@@ -1762,8 +1762,10 @@ _RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$|\s+;
 # REX.W prefix — strip it, the instruction works without it in the assembler
 _RE_REX_PREFIX = _re.compile(r"^REX\.W\s+", _re.IGNORECASE)
 
-# Absolute address as jump/call target: "jne 0x7fc5e000a584" → "jne .L0"
-_RE_ABS_JUMP = _re.compile(r"^(j[a-z]*|call)\s+0x([0-9a-f]+)\s*$", _re.IGNORECASE)
+# Absolute address as jump/call target: "jne 0x7fc5..." or "jne 1d50886" → "jne .L0"
+_RE_ABS_JUMP = _re.compile(
+    r"^(j[a-z]*|call)\s+(?:0x)?([0-9a-f]{4,})\s*$", _re.IGNORECASE
+)
 
 
 def _clean_asm_for_mca(raw: str) -> str:
@@ -1790,27 +1792,29 @@ def _clean_asm_for_mca(raw: str) -> str:
 
     if v8_format:
         # V8 print-code uses hybrid syntax: AT&T suffixes + Intel operands.
-        # Strip non-instruction lines, REX.W prefixes, size suffixes,
-        # trailing annotations, and convert absolute jump targets to labels.
-        label_map: dict[str, str] = {}
+        # Strip REX.W prefixes, size suffixes, and trailing annotations.
         fixed: list[str] = []
         for line in cleaned:
             line = _RE_TRAILING_ANNOTATION.sub("", line)
             line = _RE_REX_PREFIX.sub("", line)
             line = _RE_SIZE_SUFFIX.sub(r"\1\2", line)
-            stripped = line.strip()
-            if not stripped:
-                continue
-            m = _RE_ABS_JUMP.match(stripped)
-            if m:
-                addr = m.group(2)
-                if addr not in label_map:
-                    label_map[addr] = f".L{len(label_map)}"
-                line = f"{m.group(1)} {label_map[addr]}"
-            fixed.append(line)
+            if line.strip():
+                fixed.append(line)
         cleaned = fixed
 
-    return "\n".join(cleaned)
+    # Convert absolute jump/call targets to labels (both formats).
+    label_map: dict[str, str] = {}
+    fixed = []
+    for line in cleaned:
+        m = _RE_ABS_JUMP.match(line.strip())
+        if m:
+            addr = m.group(2)
+            if addr not in label_map:
+                label_map[addr] = f".L{len(label_map)}"
+            line = f"{m.group(1)} {label_map[addr]}"
+        fixed.append(line)
+
+    return "\n".join(fixed)
 
 
 @mcp.tool()
