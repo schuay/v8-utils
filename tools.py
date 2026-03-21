@@ -1577,3 +1577,158 @@ def perf_diff(
             f"{delta_s:>8}  {base:>6}  {after:>7}  {r['dso']:<20}  {r['symbol']}"
         )
     return _text_result("\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Godbolt (Compiler Explorer)
+# ---------------------------------------------------------------------------
+
+_godbolt_compiler_cache: dict[str, list[dict]] | None = None
+
+_GODBOLT_ISET_MAP = {
+    "x64": {"amd64", "x86-64", "x86_64"},
+    "arm64": {"aarch64", "arm64"},
+}
+
+
+def _godbolt_get_compilers(language: str) -> list[dict]:
+    """Fetch and cache compiler list from Godbolt. Cached per-language for process lifetime."""
+    import httpx
+
+    global _godbolt_compiler_cache
+    if _godbolt_compiler_cache is None:
+        _godbolt_compiler_cache = {}
+    if language not in _godbolt_compiler_cache:
+        r = httpx.get(
+            f"https://godbolt.org/api/compilers/{language}",
+            params={"fields": "id,name,semver,instructionSet"},
+            headers={"Accept": "application/json"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        _godbolt_compiler_cache[language] = r.json()
+    return _godbolt_compiler_cache[language]
+
+
+def _godbolt_resolve_compiler(compiler: str, target: str, language: str) -> str:
+    """Resolve (compiler, target) to a Godbolt compiler ID."""
+    compilers = _godbolt_get_compilers(language)
+    iset_aliases = _GODBOLT_ISET_MAP.get(target, {target.lower()})
+
+    matches = []
+    for c in compilers:
+        iset = (c.get("instructionSet") or "").lower()
+        if iset not in iset_aliases:
+            continue
+        name = (c.get("name") or "").lower()
+        if compiler.lower() not in name:
+            continue
+        matches.append(c)
+
+    if not matches:
+        raise ValueError(
+            f"No Godbolt compiler found for compiler={compiler!r}, "
+            f"target={target!r}, language={language!r}"
+        )
+
+    def sort_key(c: dict) -> tuple[int, ...]:
+        try:
+            return tuple(int(x) for x in (c.get("semver") or "0").split("."))
+        except ValueError:
+            return (0,)
+
+    matches.sort(key=sort_key, reverse=True)
+    return matches[0]["id"]
+
+
+@mcp.tool()
+def godbolt_compile(
+    source: str,
+    target: str = "x64",
+    compiler: str = "clang",
+    language: str = "c++",
+    flags: str = "-O2",
+    compiler_id: str | None = None,
+) -> CallToolResult:
+    """Compile a code snippet on Godbolt and return the assembly output.
+
+    source:      the source code to compile
+    target:      "x64" or "arm64" (default: "x64")
+    compiler:    "gcc" or "clang" (default: "clang")
+    language:    "c++" or "c" (default: "c++")
+    flags:       compiler flags (default: "-O2")
+    compiler_id: exact Godbolt compiler ID; overrides target/compiler/language
+    """
+    import httpx
+
+    if compiler_id is None:
+        compiler_id = _godbolt_resolve_compiler(compiler, target, language)
+
+    r = httpx.post(
+        f"https://godbolt.org/api/compiler/{compiler_id}/compile",
+        json={
+            "source": source,
+            "lang": language,
+            "options": {
+                "userArguments": flags,
+                "filters": {
+                    "intel": True,
+                    "demangle": True,
+                    "commentOnly": True,
+                    "directives": True,
+                },
+            },
+        },
+        headers={"Accept": "application/json"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    data = r.json()
+
+    lines: list[str] = [f"# {compiler_id} {flags}"]
+
+    stderr_lines = data.get("stderr") or []
+    if stderr_lines:
+        for s in stderr_lines:
+            lines.append(s.get("text", ""))
+        lines.append("")
+
+    asm_lines = data.get("asm") or []
+    for a in asm_lines:
+        lines.append(a.get("text", ""))
+
+    return _text_result("\n".join(lines))
+
+
+@mcp.tool()
+def godbolt_list_compilers(
+    language: str = "c++",
+    filter: str | None = None,
+) -> CallToolResult:
+    """List available compilers on Godbolt for a language. Use filter to narrow results.
+
+    language: "c++", "c", "rust", etc. (default: "c++")
+    filter:   substring match on name/instructionSet, e.g. "clang 19" or "arm64"
+    """
+    compilers = _godbolt_get_compilers(language)
+
+    if filter:
+        needle = filter.lower()
+        compilers = [
+            c
+            for c in compilers
+            if needle in (c.get("name") or "").lower()
+            or needle in (c.get("instructionSet") or "").lower()
+        ]
+
+    lines = [f"{'id':<30} {'name':<45} {'instructionSet'}"]
+    lines.append("-" * len(lines[0]))
+    for c in compilers:
+        lines.append(
+            f"{c.get('id', ''):<30} {c.get('name', ''):<45} {c.get('instructionSet', '')}"
+        )
+
+    if len(lines) == 2:
+        return _text_result("No compilers matched the filter.")
+
+    return _text_result("\n".join(lines))
