@@ -37,6 +37,7 @@ ENTRIES: list[str] = [
     "Subcommand shortcuts: `pp s` (show-results), `pp l` (list-jobs), `pp c` (create-job)",
     "Better *upgrade* handling — MCP tools warn when server is stale, chat daemon auto-restarts",
     "`show-results --compact` omits sig and direction columns for cleaner doc pastes",
+    "*create-job* sets human-readable job names — CL subject for patch jobs, flags for flag-only jobs",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

@@ -957,6 +957,7 @@ def create_job(
     exp_js_flags: str | None = None,
     repeat: int = 100,
     bug_id: int | None = None,
+    name: str | None = None,
 ) -> dict:
     """Create a new Pinpoint A/B try job. Requires luci-auth login."""
     if benchmark in BENCHMARK_ALIASES:
@@ -983,6 +984,7 @@ def create_job(
         if exp_js_flags
         else None,
         "tags": '{"origin": "v8-utils"}',
+        "name": name,
     }
     payload = {k: v for k, v in payload.items() if v is not None}
 

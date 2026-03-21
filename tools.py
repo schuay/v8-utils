@@ -643,12 +643,30 @@ def create_pinpoint_jobs(
                 if on_auto_hash:
                     on_auto_hash(cfg, None, e)
 
+    # Pre-fetch Gerrit subjects for human-readable job names
+    patch_subjects: dict[str, str | None] = {}
+    for p in exp_patches:
+        if p and p not in patch_subjects:
+            patch_subjects[p] = pinpoint.fetch_gerrit_subject(p)
+    if base_patch and base_patch not in patch_subjects:
+        patch_subjects[base_patch] = pinpoint.fetch_gerrit_subject(base_patch)
+
     combos = list(
         itertools.product(configurations, pairs, exp_patches, exp_js_flags_list)
     )
     jobs = []
     for i, (cfg, (bench, default_story), exp_patch, exp_js_flags) in enumerate(combos):
         git_hash = auto_hashes.get(cfg)
+        # Build human-readable job name
+        subject = patch_subjects.get(exp_patch) if exp_patch else None
+        parts = []
+        if subject:
+            parts.append(subject)
+        elif exp_js_flags:
+            parts.append(f"flags: {exp_js_flags}")
+        parts.append(f"({cfg}, {bench})")
+        job_name = " ".join(parts)
+
         result = pinpoint.create_job(
             benchmark=bench,
             configuration=cfg,
@@ -662,6 +680,7 @@ def create_pinpoint_jobs(
             exp_js_flags=exp_js_flags,
             repeat=repeat,
             bug_id=bug_id,
+            name=job_name,
         )
         job_url = result.get("url")
         if job_url:
