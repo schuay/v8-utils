@@ -1647,7 +1647,7 @@ def godbolt_compile(
     target: str = "x64",
     compiler: str = "clang",
     language: str = "c++",
-    flags: str = "-O2",
+    flags: str = "-O3 -fno-strict-aliasing -fno-omit-frame-pointer",
     compiler_id: str | None = None,
 ) -> CallToolResult:
     """Compile a code snippet on Godbolt and return the assembly output.
@@ -1656,7 +1656,7 @@ def godbolt_compile(
     target:      "x64" or "arm64" (default: "x64")
     compiler:    "gcc" or "clang" (default: "clang")
     language:    "c++" or "c" (default: "c++")
-    flags:       compiler flags (default: "-O2")
+    flags:       compiler flags (default: V8 release flags)
     compiler_id: exact Godbolt compiler ID; overrides target/compiler/language
     """
     import httpx
