@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import os
+import shutil
 import subprocess
 from collections.abc import Callable
 from datetime import datetime
@@ -1726,6 +1727,79 @@ def d8_trace_index(path: str) -> CallToolResult:
         return _text_result(_build_trace_index(path))
     except FileNotFoundError:
         return _text_result(f"File not found: {path}")
+
+
+# ---------------------------------------------------------------------------
+# llvm-mca
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def llvm_mca(
+    assembly: str,
+    cpu: str | None = None,
+    bottleneck: bool = True,
+    timeline: bool = False,
+) -> CallToolResult:
+    """Run llvm-mca pipeline analysis on raw assembly (e.g. from perf_annotate).
+
+    Simulates how the CPU pipeline would execute the given instructions and
+    reports throughput, latency, bottlenecks, and port pressure.
+
+    assembly:    x86-64 assembly in Intel syntax (as produced by V8 JIT / perf)
+    cpu:         CPU model for simulation (default: host CPU).
+                 Examples: skylake, znver3, alderlake, cortex-a76
+    bottleneck:  include bottleneck analysis showing what limits throughput
+    timeline:    include cycle-by-cycle pipeline timeline (verbose)
+    """
+    mca = shutil.which("llvm-mca")
+    if mca is None:
+        return _text_result(
+            "Error: llvm-mca not found. Install LLVM (e.g. pacman -S llvm)."
+        )
+
+    # Prepend Intel syntax directive if not already present
+    src = assembly.strip()
+    if ".intel_syntax" not in src:
+        src = ".intel_syntax noprefix\n" + src
+
+    cmd = [
+        mca,
+        "--output-asm-variant=1",
+        "--noalias",
+        "--skip-unsupported-instructions=any",
+    ]
+    if cpu:
+        cmd.append(f"--mcpu={cpu}")
+    if bottleneck:
+        cmd.append("--bottleneck-analysis")
+    if timeline:
+        cmd.append("--timeline")
+
+    r = subprocess.run(cmd, input=src, capture_output=True, text=True, timeout=30)
+
+    lines: list[str] = []
+    header = f"# llvm-mca{f' -mcpu={cpu}' if cpu else ''}"
+    lines.append(header)
+
+    if r.stderr.strip():
+        for line in r.stderr.strip().splitlines():
+            # Skip known noisy warnings
+            if (
+                "found a return instruction" in line
+                or "program counter updates" in line
+            ):
+                continue
+            lines.append(line)
+
+    if r.returncode != 0 and not r.stdout.strip():
+        lines.append(f"llvm-mca exited with code {r.returncode}")
+        return _text_result("\n".join(lines))
+
+    if r.stdout.strip():
+        lines.append(r.stdout.strip())
+
+    return _text_result("\n".join(lines))
 
 
 # ---------------------------------------------------------------------------
