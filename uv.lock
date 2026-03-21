@@ -1596,27 +1596,16 @@ source = { editable = "." }
 dependencies = [
     { name = "dateparser" },
     { name = "google-auth" },
+    { name = "google-cloud-spanner" },
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
+    { name = "numpy" },
+    { name = "pandas" },
     { name = "protobuf" },
     { name = "requests" },
+    { name = "rich" },
+    { name = "ruptures" },
     { name = "scipy" },
-]
-
-[package.optional-dependencies]
-cpd = [
-    { name = "google-cloud-spanner" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "rich" },
-    { name = "ruptures" },
-    { name = "typer" },
-]
-pd = [
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "rich" },
-    { name = "ruptures" },
     { name = "typer" },
 ]
 
@@ -1630,24 +1619,18 @@ dev = [
 requires-dist = [
     { name = "dateparser", specifier = ">=1.3.0" },
     { name = "google-auth", specifier = ">=2.0" },
-    { name = "google-cloud-spanner", marker = "extra == 'cpd'", specifier = ">=3.63.0" },
+    { name = "google-cloud-spanner", specifier = ">=3.63.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
-    { name = "numpy", marker = "extra == 'cpd'", specifier = ">=1.24" },
-    { name = "numpy", marker = "extra == 'pd'", specifier = ">=1.24" },
-    { name = "pandas", marker = "extra == 'cpd'", specifier = ">=2.0" },
-    { name = "pandas", marker = "extra == 'pd'", specifier = ">=2.0" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "pandas", specifier = ">=2.0" },
     { name = "protobuf", specifier = ">=5.0" },
     { name = "requests", specifier = ">=2.32.5" },
-    { name = "rich", marker = "extra == 'cpd'", specifier = ">=13" },
-    { name = "rich", marker = "extra == 'pd'", specifier = ">=13" },
-    { name = "ruptures", marker = "extra == 'cpd'", specifier = ">=1.1" },
-    { name = "ruptures", marker = "extra == 'pd'", specifier = ">=1.1" },
+    { name = "rich", specifier = ">=13" },
+    { name = "ruptures", specifier = ">=1.1" },
     { name = "scipy", specifier = ">=1.13" },
-    { name = "typer", marker = "extra == 'cpd'", specifier = ">=0.12" },
-    { name = "typer", marker = "extra == 'pd'", specifier = ">=0.12" },
+    { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["pd", "cpd"]
 
 [package.metadata.requires-dev]
 dev = [
