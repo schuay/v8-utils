@@ -109,7 +109,7 @@ class Config:
         },
         metadata={
             _SECTION: "repos — source repos accessible via MCP tools",
-            _HELP: "Repos available via repo_read/repo_grep MCP tools",
+            _HELP: "Repos available via repo_git_* MCP tools",
         },
     )
 

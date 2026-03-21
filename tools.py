@@ -1091,14 +1091,14 @@ _register_repo_resources()
 
 
 @mcp.tool()
-def repo_read(
+def repo_git_show(
     repo: str,
     path: str,
     offset: int = 0,
     limit: int = _MAX_READ_LINES,
     ref: str | None = None,
 ) -> CallToolResult:
-    """Read a file from a related source repo.
+    """Read a file from a related source repo (git show / working tree).
 
     repo:   repo name from the repo:// MCP resources
     path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
@@ -1140,7 +1140,7 @@ def repo_read(
 
 
 @mcp.tool()
-def repo_grep(
+def repo_git_grep(
     repo: str,
     pattern: str,
     glob: str | None = None,
@@ -1199,6 +1199,108 @@ def repo_grep(
         result += f"\n(truncated — showing first {limit} matches)"
     else:
         result = "\n".join(collected)
+    return _text_result(result)
+
+
+_MAX_LS_FILES = 500
+_MAX_LOG_LINES = 2000
+
+
+@mcp.tool()
+def repo_git_find(
+    repo: str,
+    glob: str,
+    limit: int = _MAX_LS_FILES,
+    ref: str | None = None,
+) -> CallToolResult:
+    """List files in a related source repo matching a glob pattern (git ls-files).
+
+    repo:   repo name from the repo:// MCP resources
+    glob:   file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"
+    limit:  max files to return (default: 500)
+    ref:    git ref to list from (e.g. commit hash, branch, tag).
+            If omitted, lists from the working tree.
+    """
+    import subprocess
+
+    root = _resolve_repo(repo)
+    if ref:
+        cmd = ["git", "ls-tree", "-r", "--name-only", ref, "--", glob]
+    else:
+        cmd = ["git", "ls-files", "--", glob]
+
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=root,
+    )
+    collected: list[str] = []
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            collected.append(line.rstrip("\n"))
+            if len(collected) >= limit + 1:
+                proc.kill()
+                break
+    finally:
+        proc.wait()
+
+    if not collected:
+        return _text_result("No files found.")
+
+    if len(collected) > limit:
+        result = "\n".join(collected[:limit])
+        result += f"\n(truncated — showing first {limit} files)"
+    else:
+        result = "\n".join(collected)
+    return _text_result(result)
+
+
+@mcp.tool()
+def repo_git_log(
+    repo: str,
+    path: str | None = None,
+    ref: str | None = None,
+    limit: int = 20,
+    grep: str | None = None,
+) -> CallToolResult:
+    """Show git log in a related source repo.
+
+    repo:   repo name from the repo:// MCP resources
+    path:   optional file path to show history for
+    ref:    git ref to start from (default: HEAD)
+    limit:  max commits to return (default: 20)
+    grep:   optional pattern to filter commit messages
+    """
+    import subprocess
+
+    root = _resolve_repo(repo)
+    cmd = [
+        "git",
+        "log",
+        f"-{limit}",
+        "--format=%h %as %an  %s",
+    ]
+    if grep:
+        cmd.extend(["--grep", grep, "-i"])
+    if ref:
+        cmd.append(ref)
+    if path:
+        cmd.extend(["--", path])
+
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=root,
+    )
+    if proc.returncode != 0:
+        raise ValueError(f"git log failed: {proc.stderr.strip()[:500]}")
+    result = proc.stdout.strip()
+    if not result:
+        return _text_result("No commits found.")
     return _text_result(result)
 
 
