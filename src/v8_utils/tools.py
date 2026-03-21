@@ -505,7 +505,7 @@ def chat_notify_watching(job_url: str) -> None:
     cfg = config.load()
     if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
-            import chat
+            from . import chat
 
             chat.notify(
                 cfg.chat_app_space,

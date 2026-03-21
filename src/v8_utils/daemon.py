@@ -159,7 +159,7 @@ def _notify_webhook(webhook: str, job: dict, results: list[dict] | None = None) 
 def _notify_chat_app(
     space: str, service_account_email: str, job: dict, results: list[dict] | None = None
 ) -> None:
-    import chat
+    from . import chat
 
     chat.notify(space, service_account_email, _message_text(job, results))
     log.info("Chat app notification sent for %s", job.get("job_id"))

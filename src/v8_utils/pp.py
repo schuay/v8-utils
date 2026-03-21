@@ -828,7 +828,7 @@ def main() -> None:
     if not args.verbose:
         for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
-    import changelog
+    from . import changelog
 
     changelog.show_unseen()
 

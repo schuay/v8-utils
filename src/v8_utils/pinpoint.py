@@ -743,7 +743,7 @@ def pivot_results_cas(job_id: str, significance: str = "pinpoint") -> list[dict]
 
     Requires: gcloud auth application-default login
     """
-    import cas_api
+    from . import cas_api
 
     job = fetch_job(job_id)
     if job.get("status") != "Completed":
