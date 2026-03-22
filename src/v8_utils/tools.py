@@ -75,6 +75,27 @@ def _text_result(text: str) -> CallToolResult:
     )
 
 
+def _fetch_job_details_sorted(job_ids: list[str]) -> list[tuple[str, dict]]:
+    """Fetch job details in parallel, deduplicate, sort oldest-first.
+
+    Returns [(job_id, detail_dict), ...].  On fetch error the dict
+    contains an ``"error"`` key instead of normal fields.
+    """
+    job_ids = list(dict.fromkeys(job_ids))
+
+    def fetch(jid: str) -> dict:
+        try:
+            return _fetch_job_detail(jid)
+        except Exception as e:
+            return {"job_id": jid, "error": str(e)}
+
+    fns = [lambda jid=jid: fetch(jid) for jid in job_ids]
+    details = _run_concurrent(fns)
+    paired = list(zip(job_ids, details))
+    paired.sort(key=lambda p: p[1].get("created") or "")
+    return paired
+
+
 def _fetch_job_detail(job_url: str) -> dict:
     """Fetch job details as a dict (internal helper)."""
     job_id = pinpoint.job_id_from_url(job_url)
@@ -116,20 +137,13 @@ def pinpoint_show_job(job_url: str) -> CallToolResult:
     if not urls:
         return _text_result("No job URLs provided.")
 
-    def fetch(u: str) -> dict | str:
-        try:
-            return _fetch_job_detail(u)
-        except Exception as e:
-            return f"Error fetching {u}: {e}"
-
-    fns = [lambda u=u: fetch(u) for u in urls]
-    results = _run_concurrent(fns)
-
-    # Sort by creation date (oldest first) when displaying multiple jobs.
-    if len(results) > 1:
-        results.sort(key=lambda r: r.get("created", "") if isinstance(r, dict) else "")
-
-    blocks = [_format_job_detail(r) if isinstance(r, dict) else r for r in results]
+    paired = _fetch_job_details_sorted(urls)
+    blocks = []
+    for jid, detail in paired:
+        if "error" in detail:
+            blocks.append(f"Error fetching {jid}: {detail['error']}")
+        else:
+            blocks.append(_format_job_detail(detail))
     return _text_result("\n\n".join(blocks))
 
 
@@ -476,19 +490,9 @@ def pinpoint_show_results(
             "Provide a job_url, use recent=N, or pass filter flags (patch, benchmark, bot)."
         )
 
-    # Deduplicate while preserving order.
-    job_ids = list(dict.fromkeys(job_ids))
-
-    # Pre-fetch job details in parallel (used for sorting + header display).
-    detail_fns = [lambda jid=jid: _fetch_job_detail(jid) for jid in job_ids]
-    job_details = _run_concurrent(detail_fns)
-
-    # Sort by creation date, oldest first.
-    paired = list(zip(job_ids, job_details))
-    if len(paired) > 1:
-        paired.sort(key=lambda p: p[1].get("created") or "")
-    job_ids = [p[0] for p in paired]
-    detail_map = {p[0]: p[1] for p in paired}
+    paired = _fetch_job_details_sorted(job_ids)
+    job_ids = [jid for jid, _ in paired]
+    detail_map = dict(paired)
 
     fns = [
         lambda jid=jid: _format_results_table(

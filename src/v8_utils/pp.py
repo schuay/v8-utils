@@ -23,7 +23,7 @@ from . import daemon
 from . import pinpoint
 
 from .tools import (
-    _fetch_job_detail,
+    _fetch_job_details_sorted,
     _fetch_jobs_list,
     _format_results_table,
     _run_concurrent,
@@ -210,19 +210,12 @@ def _print_job(j: dict) -> None:
 
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
-    def fetch(u: str):
-        try:
-            return _fetch_job_detail(u)
-        except Exception as e:
-            return f"Error fetching {u}: {e}"
-
-    fns = [lambda u=u: fetch(u) for u in args.job_urls]
-    details = _run_concurrent(fns, _progress("Fetching jobs"))
-    for i, detail in enumerate(details):
+    paired = _fetch_job_details_sorted(args.job_urls)
+    for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        if isinstance(detail, str):
-            print(detail)
+        if "error" in detail:
+            print(f"Error fetching {jid}: {detail['error']}")
         else:
             _print_job(detail)
 
@@ -269,6 +262,8 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
     if not jobs:
         print("No jobs found.")
         return
+    # Display oldest first (API returns newest first).
+    jobs.reverse()
 
     patches = [j.get("experiment_patch") or "" for j in jobs]
     with concurrent.futures.ThreadPoolExecutor() as ex:
@@ -342,10 +337,13 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         print("No jobs specified. Use job URLs/IDs, --recent N, or filter flags.")
         return
 
-    job_ids = [pinpoint.job_id_from_url(u) for u in job_urls]
+    paired = _fetch_job_details_sorted([pinpoint.job_id_from_url(u) for u in job_urls])
+    job_ids = [jid for jid, _ in paired]
+    detail_map = dict(paired)
+
     fns = [
         lambda jid=jid: _format_results_table(
-            jid, args.show_all, args.use_cas, args.compact
+            jid, args.show_all, args.use_cas, args.compact, job=detail_map.get(jid)
         )
         for jid in job_ids
     ]
