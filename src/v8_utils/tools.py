@@ -294,7 +294,7 @@ def _results_header(job: dict) -> str:
         header_parts.append(bench_str)
     created = job.get("created")
     if created:
-        header_parts.append(f"date: {created[:10]}")
+        header_parts.append(f"date: {created[:16].replace('T', ' ')}")
     if header_parts:
         lines.append("  ".join(header_parts))
     if patch_url:
