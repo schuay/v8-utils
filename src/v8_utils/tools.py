@@ -116,15 +116,21 @@ def pinpoint_show_job(job_url: str) -> CallToolResult:
     if not urls:
         return _text_result("No job URLs provided.")
 
-    def fetch(u: str) -> str:
+    def fetch(u: str) -> dict | str:
         try:
-            return _format_job_detail(_fetch_job_detail(u))
+            return _fetch_job_detail(u)
         except Exception as e:
             return f"Error fetching {u}: {e}"
 
     fns = [lambda u=u: fetch(u) for u in urls]
-    details = _run_concurrent(fns)
-    return _text_result("\n\n".join(details))
+    results = _run_concurrent(fns)
+
+    # Sort by creation date (oldest first) when displaying multiple jobs.
+    if len(results) > 1:
+        results.sort(key=lambda r: r.get("created", "") if isinstance(r, dict) else "")
+
+    blocks = [_format_job_detail(r) if isinstance(r, dict) else r for r in results]
+    return _text_result("\n\n".join(blocks))
 
 
 @mcp.tool()
@@ -221,6 +227,8 @@ def pinpoint_list_jobs(
     jobs = _fetch_jobs_list(count, user, filters or None, since=since_dt)
     if not jobs:
         return _text_result("No jobs found.")
+    # Display oldest first (API returns newest first).
+    jobs.reverse()
     return _text_result(_format_job_list(jobs))
 
 
@@ -265,12 +273,8 @@ def _format_job_list(jobs: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def _results_header(job_id: str) -> str:
+def _results_header(job: dict) -> str:
     """Build the header lines (bot/benchmark/patch/flags) for a results table."""
-    try:
-        job = _fetch_job_detail(job_id)
-    except Exception:
-        job = {}
     patch_url = job.get("experiment_patch")
     patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
     base_flags = job.get("base_extra_args")
@@ -288,6 +292,9 @@ def _results_header(job_id: str) -> str:
         if story:
             bench_str += f" / {story}"
         header_parts.append(bench_str)
+    created = job.get("created")
+    if created:
+        header_parts.append(f"date: {created[:10]}")
     if header_parts:
         lines.append("  ".join(header_parts))
     if patch_url:
@@ -303,9 +310,15 @@ def _results_header(job_id: str) -> str:
 
 
 def _format_results_table(
-    job_id: str, show_all: bool, use_cas: bool, compact: bool = False
+    job_id: str,
+    show_all: bool,
+    use_cas: bool,
+    compact: bool = False,
+    job: dict | None = None,
 ) -> str | None:
     """Format a results table for a single job. Returns None if no results.
+
+    job: pre-fetched job detail dict (avoids re-fetching for header).
 
     Returns an error string (not raises) on failure so multi-job batches
     can continue.
@@ -323,8 +336,14 @@ def _format_results_table(
 
     rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
     omitted = len(all_rows) - len(rows)
+    if job is None:
+        try:
+            job = _fetch_job_detail(job_id)
+        except Exception:
+            job = {}
+
     if not rows:
-        header = _results_header(job_id)
+        header = _results_header(job)
         if header:
             return f"{header}\n(no statistically significant results)"
         return "(no statistically significant results)"
@@ -377,7 +396,7 @@ def _format_results_table(
         )
 
     sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
-    header = _results_header(job_id)
+    header = _results_header(job)
     lines: list[str] = [header] if header else []
     lines += [
         "",
@@ -457,8 +476,24 @@ def pinpoint_show_results(
             "Provide a job_url, use recent=N, or pass filter flags (patch, benchmark, bot)."
         )
 
+    # Deduplicate while preserving order.
+    job_ids = list(dict.fromkeys(job_ids))
+
+    # Pre-fetch job details in parallel (used for sorting + header display).
+    detail_fns = [lambda jid=jid: _fetch_job_detail(jid) for jid in job_ids]
+    job_details = _run_concurrent(detail_fns)
+
+    # Sort by creation date, oldest first.
+    paired = list(zip(job_ids, job_details))
+    if len(paired) > 1:
+        paired.sort(key=lambda p: p[1].get("created") or "")
+    job_ids = [p[0] for p in paired]
+    detail_map = {p[0]: p[1] for p in paired}
+
     fns = [
-        lambda jid=jid: _format_results_table(jid, show_all, use_cas, compact)
+        lambda jid=jid: _format_results_table(
+            jid, show_all, use_cas, compact, job=detail_map.get(jid)
+        )
         for jid in job_ids
     ]
     tables = _run_concurrent(fns)
