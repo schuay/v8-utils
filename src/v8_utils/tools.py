@@ -428,7 +428,7 @@ def _format_results_table(
         sep,
         *[fmt_row(c) for c in cells],
     ]
-    data_start = (1 if header else 0) + 3
+    data_start = (header.count("\n") + 1 if header else 0) + 3
     line_directions = {
         data_start + i: _direction(r.get("unit")) for i, r in enumerate(rows)
     }

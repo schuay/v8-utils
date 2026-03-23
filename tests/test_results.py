@@ -156,6 +156,24 @@ class TestFormatResultsTable:
         assert "Error: timeout" in t.text
 
     @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value="Some CL")
+    def test_directions_with_multiline_header(self, _mock_gerrit, mock_pivot):
+        """Header with patch line produces multiple lines; direction map
+        must account for that offset."""
+        mock_pivot.return_value = [
+            _row("m1", 100, 95, unit="ms_smallerIsBetter"),
+        ]
+        job = _job(experiment_patch="https://crrev.com/c/12345")
+        t = _format_results_table("j1", show_all=True, use_cas=False, job=job)
+        # Find the data line
+        for lineno, line in enumerate(t.text.splitlines()):
+            if "m1" in line:
+                assert t.line_directions.get(lineno) == "smaller-better"
+                break
+        else:
+            pytest.fail("data line not found")
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
     def test_directions_mapped(self, mock_pivot):
         mock_pivot.return_value = [
             _row("small", unit="ms_smallerIsBetter"),
