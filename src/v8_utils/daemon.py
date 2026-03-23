@@ -295,8 +295,13 @@ def _socket_loop(
 
 
 def _restart(watched: dict[str, str], lock: threading.Lock) -> None:
-    """Save state, then exec a fresh daemon process with the new code."""
-    _save_watched(watched, lock)
+    """Save state, then exec a fresh daemon process with the new code.
+
+    Holds the lock through exec so the socket thread cannot add a job
+    between the save and the process replacement.
+    """
+    lock.acquire()
+    WATCHED_PATH.write_text(json.dumps(list(watched)))
     SOCK_PATH.unlink(missing_ok=True)
     PID_PATH.unlink(missing_ok=True)
     os.execv(sys.executable, [sys.executable, "-m", "v8_utils.daemon"])
@@ -305,7 +310,6 @@ def _restart(watched: dict[str, str], lock: threading.Lock) -> None:
 def _cleanup() -> None:
     SOCK_PATH.unlink(missing_ok=True)
     PID_PATH.unlink(missing_ok=True)
-    WATCHED_PATH.unlink(missing_ok=True)
 
 
 def run(ready_fd: int | None = None) -> None:
@@ -313,11 +317,16 @@ def run(ready_fd: int | None = None) -> None:
     PID_PATH.write_text(str(os.getpid()))
     _setup_logging()
 
-    signal.signal(signal.SIGTERM, lambda *_: (_cleanup(), sys.exit(0)))
-    signal.signal(signal.SIGINT, lambda *_: (_cleanup(), sys.exit(0)))
-
     watched: dict[str, str] = _load_watched()
     lock = threading.Lock()
+
+    def _shutdown(*_: object) -> None:
+        _save_watched(watched, lock)
+        _cleanup()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
 
     if watched:
         log.info("restored %d watched job(s): %s", len(watched), ", ".join(watched))

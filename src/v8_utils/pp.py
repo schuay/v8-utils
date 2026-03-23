@@ -456,13 +456,13 @@ def _cmd_watch(args: argparse.Namespace) -> None:
 
 
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
-    import signal
+    import signal as sig
 
     if not daemon.is_running():
         print(f"{_YELLOW}Daemon is not running.{_RESET}")
         return
     pid = int(daemon.PID_PATH.read_text())
-    os.kill(pid, signal.SIGTERM)
+    os.kill(pid, sig.SIGTERM)
     print(f"{_GREEN}Stopped daemon{_RESET} (pid {pid}).")
 
 
