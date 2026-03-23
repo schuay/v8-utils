@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Protocol
 
 import pandas as pd
+from platformdirs import user_config_dir
 
 _EP_GROUP = "pd.adaptors"
-_ADAPTORS_DIR = Path("~/.config/v8-utils/adaptors").expanduser()
+_ADAPTORS_DIR = Path(user_config_dir("v8-utils")) / "adaptors"
 
 # Required columns in the DataFrame returned by fetch()
 REQUIRED_COLUMNS = {

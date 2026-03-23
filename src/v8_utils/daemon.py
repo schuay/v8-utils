@@ -10,11 +10,11 @@ Notification methods (in preference order):
 New jobs are submitted via a Unix domain socket. The daemon is started
 automatically by `pp watch`; it can also be run directly.
 
-State files:
-  ~/.local/share/v8-utils/daemon.pid
-  ~/.local/share/v8-utils/daemon.sock
-  ~/.local/share/v8-utils/daemon.log
-  ~/.local/share/v8-utils/daemon.watched
+State files (under platformdirs.user_data_dir("v8-utils")):
+  daemon.pid
+  daemon.sock
+  daemon.log
+  daemon.watched
 """
 
 from __future__ import annotations

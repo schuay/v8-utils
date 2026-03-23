@@ -9,7 +9,9 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-CONFIG_PATH = Path("~/.config/v8-utils/config.toml").expanduser()
+from platformdirs import user_config_dir
+
+CONFIG_PATH = Path(user_config_dir("v8-utils")) / "config.toml"
 
 _SECTION = "section"  # metadata key for section headings
 _HELP = "help"  # metadata key for description

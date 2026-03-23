@@ -11,6 +11,8 @@ import sqlite3
 import subprocess
 from pathlib import Path
 
+from platformdirs import user_config_dir
+
 from .models import CommitInfo
 
 _SCHEMA = """\
@@ -32,7 +34,7 @@ _MIGRATE_AUTHOR = """\
 ALTER TABLE commits ADD COLUMN author TEXT NOT NULL DEFAULT '';
 """
 
-_DEFAULT_PATH = Path("~/.config/v8-utils/commits.db").expanduser()
+_DEFAULT_PATH = Path(user_config_dir("v8-utils")) / "commits.db"
 _LEGACY_PATH = Path("~/.config/cpd/commits.db").expanduser()
 
 
