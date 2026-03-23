@@ -229,9 +229,8 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
     while True:
         time.sleep(cfg.poll_interval)
         if os.path.getmtime(__file__) != _STARTUP_MTIME:
-            log.warning("daemon code changed on disk — exiting for upgrade")
-            _save_watched(watched, lock)
-            os._exit(0)
+            log.warning("daemon code changed on disk — restarting")
+            _restart(watched, lock)
         with lock:
             job_ids = list(watched)
         if not job_ids:
@@ -293,6 +292,14 @@ def _socket_loop(
 
 
 # ── Daemon entry point ────────────────────────────────────────────────────────
+
+
+def _restart(watched: dict[str, str], lock: threading.Lock) -> None:
+    """Save state, then exec a fresh daemon process with the new code."""
+    _save_watched(watched, lock)
+    SOCK_PATH.unlink(missing_ok=True)
+    PID_PATH.unlink(missing_ok=True)
+    os.execv(sys.executable, [sys.executable, "-m", "v8_utils.daemon"])
 
 
 def _cleanup() -> None:
