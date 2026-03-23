@@ -9,6 +9,7 @@ import statistics
 import subprocess
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -22,6 +23,35 @@ _LOGIN_INSTRUCTIONS = (
     "Not logged in via luci-auth. "
     "Run:  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
 )
+
+_CACHE_PATH = Path("~/.local/share/v8-utils/job_cache.json").expanduser()
+_TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
+
+
+def _load_cache() -> dict:
+    """Load the job cache from disk, returning an empty cache on any error."""
+    try:
+        return json.loads(_CACHE_PATH.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"jobs": {}, "newest_created": {}}
+
+
+def _save_cache(cache: dict) -> None:
+    """Save the job cache to disk, pruning jobs older than 90 days."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
+    cache["jobs"] = {
+        jid: j for jid, j in cache["jobs"].items() if j.get("created", "") > cutoff
+    }
+    _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _CACHE_PATH.write_text(json.dumps(cache))
+
+
+def _safe_fetch_job(job_id: str) -> dict | None:
+    """Fetch a single job, returning None on failure."""
+    try:
+        return fetch_job(job_id)
+    except Exception:
+        return None
 
 
 # ── LUCI auth ─────────────────────────────────────────────────────────────────
@@ -347,9 +377,18 @@ def parse_since(value: str) -> datetime:
 
 
 def _fetch_jobs_for_email(
-    email: str, count: int, filters: list[str] | None, since: datetime | None
+    email: str,
+    count: int,
+    filters: list[str] | None,
+    since: datetime | None,
+    cache: dict | None = None,
 ) -> list[dict]:
-    """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API."""
+    """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API.
+
+    When *cache* is provided, raw jobs are stored in it and pagination stops
+    at the cache high-water mark (newest_created for this email).
+    """
+    newest = cache["newest_created"].get(email) if cache else None
     matched: list[dict] = []
     seen_ids: set[str] = set()
     params: dict = {"filter": f"user={email}"}
@@ -373,7 +412,23 @@ def _fetch_jobs_for_email(
             break
         r.raise_for_status()
         data = r.json()
-        page = [j for j in data.get("jobs", []) if not _is_cq_job(j)]
+        raw_page = data.get("jobs", [])
+
+        # Store raw jobs in cache before any filtering
+        if cache is not None:
+            for j in raw_page:
+                jid = j.get("job_id")
+                if jid:
+                    cache["jobs"][jid] = j
+
+        # Cache boundary: stop when we reach already-cached jobs
+        if newest and raw_page:
+            last = raw_page[-1].get("created", "")
+            if last and last <= newest:
+                raw_page = [j for j in raw_page if j.get("created", "") > newest]
+                hit_cutoff = True
+
+        page = [j for j in raw_page if not _is_cq_job(j)]
         # Check the since cutoff on all jobs *before* filtering so we stop
         # paging even when no jobs on this page match the filter.
         if since and page:
@@ -411,6 +466,7 @@ def fetch_jobs(
 ) -> list[dict]:
     """Fetch the `count` most recent non-CQ jobs for a user.
 
+    Uses a local disk cache to avoid re-fetching terminal jobs.
     Queries all email variants (@google.com, @chromium.org) and merges.
     The /api/jobs endpoint is public; no auth required.
 
@@ -423,18 +479,57 @@ def fetch_jobs(
     if since == datetime.min:
         since = None
     variants = user_email_variants(user)
+    cache = _load_cache()
+
+    # 1. Fetch new jobs from API (stop at cache boundary)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as ex:
-        results = list(
-            ex.map(lambda e: _fetch_jobs_for_email(e, count, filters, since), variants)
+        list(
+            ex.map(
+                lambda e: _fetch_jobs_for_email(e, count, filters, since, cache),
+                variants,
+            )
         )
-    seen_ids: set[str] = set()
-    all_jobs: list[dict] = []
-    for jobs in results:
-        for j in jobs:
-            if j["job_id"] not in seen_ids:
-                seen_ids.add(j["job_id"])
-                all_jobs.append(j)
+
+    # 2. Update newest_created watermarks from cached jobs
+    variant_set = set(variants)
+    for j in cache["jobs"].values():
+        email = j.get("user", "")
+        if email in variant_set:
+            created = j.get("created", "")
+            if created > cache["newest_created"].get(email, ""):
+                cache["newest_created"][email] = created
+
+    # 3. Re-fetch non-terminal cached jobs to update status
+    stale_ids = [
+        jid
+        for jid, j in cache["jobs"].items()
+        if j.get("status") not in _TERMINAL_STATES and j.get("user") in variant_set
+    ]
+    if stale_ids:
+        with concurrent.futures.ThreadPoolExecutor() as ex:
+            updated = list(ex.map(_safe_fetch_job, stale_ids))
+        for job in updated:
+            if job:
+                cache["jobs"][job["job_id"]] = job
+
+    # 4. Build result from cache
+    all_jobs = [
+        j
+        for j in cache["jobs"].values()
+        if j.get("user") in variant_set and not _is_cq_job(j)
+    ]
+    if since:
+        all_jobs = [
+            j for j in all_jobs if _parse_created(j.get("created", "")) >= since
+        ]
+    if filters:
+        all_jobs = [
+            j for j in all_jobs if all(_job_matches_filter(j, f) for f in filters)
+        ]
     all_jobs.sort(key=lambda j: j.get("created", ""), reverse=True)
+
+    # 5. Save and return
+    _save_cache(cache)
     return all_jobs[:count]
 
 
