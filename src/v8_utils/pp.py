@@ -23,7 +23,6 @@ from . import daemon
 from . import pinpoint
 
 from .tools import (
-    FormattedTable,
     _fetch_job_details_sorted,
     _fetch_jobs_list,
     _format_results_table,
@@ -83,48 +82,6 @@ def _colorize_json(text: str) -> str:
         return m.group(0)
 
     return _JSON_RE.sub(_replace, text)
-
-
-def _colorize_results(table: FormattedTable) -> str:
-    if not _CYAN:
-        return table.text
-
-    out = []
-    for lineno, line in enumerate(table.text.splitlines()):
-        if line.startswith("bot:"):
-            # Combined "bot: m1  benchmark: sp3 / Story" line
-            parts = re.split(r"\s{2,}", line)
-            colored = []
-            for part in parts:
-                key, _, val = part.partition(": ")
-                colored.append(f"{_DIM}{key}:{_RESET} {_BOLD}{val}{_RESET}")
-            out.append(f" {_DIM}│{_RESET} ".join(colored))
-        elif (
-            line.startswith("patch:")
-            or line.startswith("base-flags:")
-            or line.startswith("exp-flags:")
-        ):
-            key, _, rest = line.partition(":")
-            out.append(f"{_DIM}{key}:{_RESET} {_CYAN}{rest.strip()}{_RESET}")
-        elif re.fullmatch(r"-+", line):
-            out.append(f"{_DIM}{line}{_RESET}")
-        elif line.startswith("(") and "omitted" in line:
-            out.append(f"{_DIM}{line}{_RESET}")
-        elif "chg%" in line:
-            out.append(f"{_BOLD}{line}{_RESET}")
-        else:
-            # For smaller-better metrics, invert: - is good (green), + is bad (red)
-            inverted = table.line_directions.get(lineno) == "smaller-better"
-
-            def _color_pct(m: re.Match) -> str:
-                val = m.group(0)
-                good = val.startswith("-") if inverted else val.startswith("+")
-                return f"{_GREEN}{val}{_RESET}" if good else f"{_RED}{val}{_RESET}"
-
-            line = re.sub(r"[+-]\d+\.\d+%", _color_pct, line)
-            line = re.sub(r"\*\s*$", f"{_BOLD}{_GREEN}*{_RESET}", line)
-            out.append(line)
-    return "\n".join(out)
 
 
 # ── Output helpers ─────────────────────────────────────────────────────────────
@@ -342,9 +299,15 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     job_ids = [jid for jid, _ in paired]
     detail_map = dict(paired)
 
+    use_ansi = bool(_CYAN)
     fns = [
         lambda jid=jid: _format_results_table(
-            jid, args.show_all, args.use_cas, args.compact, job=detail_map.get(jid)
+            jid,
+            args.show_all,
+            args.use_cas,
+            args.compact,
+            job=detail_map.get(jid),
+            ansi=use_ansi,
         )
         for jid in job_ids
     ]
@@ -361,7 +324,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         if table is None:
             print("No results found.")
         else:
-            print(_colorize_results(table))
+            print(table)
 
 
 def _cmd_create_job(args: argparse.Namespace) -> None:
