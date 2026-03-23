@@ -128,12 +128,4 @@ def discover() -> dict[str, callable]:
                 continue
             found.setdefault(py.stem, _load_from_file(py))
 
-    # 4. Legacy path (~/.config/cpd/adaptors/*.py) for migration
-    legacy = Path("~/.config/cpd/adaptors").expanduser()
-    if legacy.is_dir():
-        for py in sorted(legacy.glob("*.py")):
-            if py.name.startswith("_"):
-                continue
-            found.setdefault(py.stem, _load_from_file(py))
-
     return found

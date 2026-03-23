@@ -35,19 +35,12 @@ ALTER TABLE commits ADD COLUMN author TEXT NOT NULL DEFAULT '';
 """
 
 _DEFAULT_PATH = Path(user_config_dir("v8-utils")) / "commits.db"
-_LEGACY_PATH = Path("~/.config/cpd/commits.db").expanduser()
 
 
 class CommitStore:
     def __init__(self, db_path: Path | None = None):
         if db_path is None:
-            # Prefer new path, fall back to legacy
-            if _DEFAULT_PATH.exists():
-                db_path = _DEFAULT_PATH
-            elif _LEGACY_PATH.exists():
-                db_path = _LEGACY_PATH
-            else:
-                db_path = _DEFAULT_PATH
+            db_path = _DEFAULT_PATH
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
