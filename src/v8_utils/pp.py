@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -94,17 +95,45 @@ def _out(result) -> None:
         print(_colorize_json(json.dumps(result, indent=2)))
 
 
-def _progress(label: str):
-    """Return an on_progress callback that prints a status line to stderr."""
+def _make_progress():
+    """Create a rich Progress instance on stderr, or None if not a TTY."""
     if not sys.stderr.isatty():
         return None
+    from rich.console import Console
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
 
-    def _on_progress(done: int, total: int) -> None:
-        print(f"\r{_DIM}{label}... {done}/{total}{_RESET}", end="", file=sys.stderr)
-        if done == total:
-            print(f"\r{' ' * (len(label) + 12)}\r", end="", file=sys.stderr)
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(bar_width=20),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=Console(stderr=True),
+        transient=True,
+    )
 
-    return _on_progress
+
+@contextlib.contextmanager
+def _progress_ctx(label: str, total: int | None = None):
+    """Single-task progress context. Yields an on_progress callback."""
+    progress = _make_progress()
+    if progress is None:
+        yield None
+        return
+    with progress:
+        task = progress.add_task(label, total=total)
+
+        def on_progress(done: int, total: int) -> None:
+            progress.update(task, completed=done, total=total)
+
+        yield on_progress
 
 
 # ── Command handlers ───────────────────────────────────────────────────────────
@@ -168,7 +197,8 @@ def _print_job(j: dict) -> None:
 
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
-    paired = _fetch_job_details_sorted(args.job_urls)
+    with _progress_ctx("Fetching jobs", total=len(args.job_urls)) as on_progress:
+        paired = _fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
     for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
@@ -192,14 +222,13 @@ def _cmd_cancel_job(args: argparse.Namespace) -> None:
             return f"Job {job_id}: Error: {e}"
 
     fns = [lambda u=u: cancel(u) for u in args.job_urls]
-    results = _run_concurrent(fns, _progress("Cancelling jobs"))
+    with _progress_ctx("Cancelling", total=len(fns)) as on_progress:
+        results = _run_concurrent(fns, on_progress)
     for line in results:
         print(line)
 
 
 def _cmd_list_jobs(args: argparse.Namespace) -> None:
-    import concurrent.futures
-
     patch = resolve_patch_filter(args.patch)
     if args.patch and args.patch.lower() == "auto" and patch:
         print(f"{_DIM}autodetected --patch: {patch} (from current branch){_RESET}")
@@ -214,23 +243,43 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
     if args.bot:
         filters.append(f"bot={args.bot}")
     since = pinpoint.parse_since(args.since)
-    jobs = _fetch_jobs_list(
-        count=args.recent, user=args.user, filters=filters or None, since=since
-    )
+    progress = _make_progress()
+    if progress:
+        with progress:
+            t1 = progress.add_task("Fetching jobs", total=None)
+            jobs = _fetch_jobs_list(
+                count=args.recent, user=args.user, filters=filters or None, since=since
+            )
+            progress.update(t1, total=1, completed=1)
+            if not jobs:
+                # progress clears on exit
+                pass
+            else:
+                patches = [j.get("experiment_patch") or "" for j in jobs]
+                fns = [
+                    lambda p=p: pinpoint.fetch_gerrit_subject(p) if p else None
+                    for p in patches
+                ]
+                t2 = progress.add_task("Fetching details", total=len(fns))
+                subjects = _run_concurrent(
+                    fns, lambda done, total: progress.update(t2, completed=done)
+                )
+    else:
+        jobs = _fetch_jobs_list(
+            count=args.recent, user=args.user, filters=filters or None, since=since
+        )
+        patches = [j.get("experiment_patch") or "" for j in jobs] if jobs else []
+        fns = [
+            lambda p=p: pinpoint.fetch_gerrit_subject(p) if p else None for p in patches
+        ]
+        subjects = _run_concurrent(fns) if fns else []
+
     if not jobs:
         print("No jobs found.")
         return
     # Display oldest first (API returns newest first).
     jobs.reverse()
-
-    patches = [j.get("experiment_patch") or "" for j in jobs]
-    with concurrent.futures.ThreadPoolExecutor() as ex:
-        subjects = list(
-            ex.map(
-                lambda p: pinpoint.fetch_gerrit_subject(p) if p else None,
-                patches,
-            )
-        )
+    subjects = list(reversed(subjects))
 
     for j, subject in zip(jobs, subjects):
         created = (j.get("created") or "")[:16].replace("T", " ")
@@ -281,21 +330,42 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         filters.append(f"bot={args.bot}")
     has_filters = len(filters) > 1 or args.recent
 
+    progress = _make_progress()
+
     if args.recent or has_filters:
         since_str = args.since or ("one month ago" if has_filters else None)
         since = pinpoint.parse_since(since_str) if since_str else None
         count = args.recent or 20
+        if progress:
+            progress.start()
+            t_list = progress.add_task("Fetching jobs", total=None)
         jobs = _fetch_jobs_list(count=count, filters=filters, since=since)
+        if progress:
+            progress.update(t_list, total=1, completed=1)
         if not jobs:
+            if progress:
+                progress.stop()
             print("No completed jobs found matching filters.")
             return
         job_urls.extend(j["job_id"] for j in jobs)
 
     if not job_urls:
+        if progress:
+            progress.stop()
         print("No jobs specified. Use job URLs/IDs, --recent N, or filter flags.")
         return
 
-    paired = _fetch_job_details_sorted([pinpoint.job_id_from_url(u) for u in job_urls])
+    ids = [pinpoint.job_id_from_url(u) for u in job_urls]
+    if progress and not progress.live.is_started:
+        progress.start()
+    if progress:
+        t_details = progress.add_task("Fetching details", total=len(ids))
+    paired = _fetch_job_details_sorted(
+        ids,
+        on_progress=(
+            (lambda d, t: progress.update(t_details, completed=d)) if progress else None
+        ),
+    )
     job_ids = [jid for jid, _ in paired]
     detail_map = dict(paired)
 
@@ -311,7 +381,14 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         )
         for jid in job_ids
     ]
-    tables = _run_concurrent(fns, _progress("Fetching results"))
+    if progress:
+        t_results = progress.add_task("Fetching results", total=len(fns))
+    tables = _run_concurrent(
+        fns,
+        (lambda d, t: progress.update(t_results, completed=d)) if progress else None,
+    )
+    if progress:
+        progress.stop()
 
     multi = len(job_ids) > 1
     for i, (job_id, table) in enumerate(zip(job_ids, tables)):

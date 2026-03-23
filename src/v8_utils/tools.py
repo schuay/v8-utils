@@ -45,7 +45,10 @@ def _run_concurrent(
     return results
 
 
-def _fetch_job_details_sorted(job_ids: list[str]) -> list[tuple[str, dict]]:
+def _fetch_job_details_sorted(
+    job_ids: list[str],
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[tuple[str, dict]]:
     """Fetch job details in parallel, deduplicate, sort oldest-first.
 
     Returns [(job_id, detail_dict), ...].  On fetch error the dict
@@ -60,7 +63,7 @@ def _fetch_job_details_sorted(job_ids: list[str]) -> list[tuple[str, dict]]:
             return {"job_id": jid, "error": str(e)}
 
     fns = [lambda jid=jid: fetch(jid) for jid in job_ids]
-    details = _run_concurrent(fns)
+    details = _run_concurrent(fns, on_progress)
     paired = list(zip(job_ids, details))
     paired.sort(key=lambda p: p[1].get("created") or "")
     return paired
