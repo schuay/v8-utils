@@ -5,14 +5,16 @@ import subprocess
 from collections.abc import Callable
 from datetime import datetime
 
+from rich import box
+from rich.console import Console
+from rich.table import Table
+
 from . import config
 from . import pinpoint
 
 # ── ANSI escape codes ─────────────────────────────────────────────────────────
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
-_RED = "\033[31m"
-_GREEN = "\033[32m"
 _CYAN = "\033[36m"
 _RESET = "\033[0m"
 
@@ -190,7 +192,7 @@ def _format_results_table(
         except Exception:
             job = {}
 
-    b, d, g, rd, r = (_BOLD, _DIM, _GREEN, _RED, _RESET) if ansi else ("",) * 5
+    d, r = (_DIM, _RESET) if ansi else ("", "")
 
     if not rows:
         header = _results_header(job, ansi=ansi)
@@ -219,65 +221,50 @@ def _format_results_table(
         post = max(0, min_digits - pre)
         return f"{v:.{post}f}"
 
-    cells = []
-    directions = []
+    def _pct_style(pct_str: str, direction: str) -> str:
+        inverted = direction == "smaller-better"
+        good = pct_str.startswith("-") if inverted else pct_str.startswith("+")
+        return "green" if good else "red"
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
+    table.add_column("metric")
+    table.add_column("base±std", justify="right")
+    table.add_column("exp±std", justify="right")
+    table.add_column("chg%", justify="right")
+    table.add_column("p", justify="right")
+    if not compact:
+        table.add_column("sig", justify="right")
+        table.add_column("direction")
+
     for row in rows:
         bm, bs = row["base_mean"] or 0, row["base_stdev"] or 0
         em, es = row["exp_mean"] or 0, row["exp_stdev"] or 0
-        cols = [
+        pct_str = f"{pct(row):+.2f}%"
+        direction = _direction(row.get("unit"))
+        style = _pct_style(pct_str, direction)
+        cols: list[str] = [
             row["name"],
             f"{_rd(bm, 4)} ±{_rd(bs, 3)}",
             f"{_rd(em, 4)} ±{_rd(es, 3)}",
-            f"{pct(row):+.2f}%",
+            f"[{style}]{pct_str}[/]",
             f"{row['p_value']:.4f}",
         ]
         if not compact:
-            cols.append("*" if row["significant"] else "")
-            cols.append(_direction(row.get("unit")))
-        cells.append(tuple(cols))
-        directions.append(_direction(row.get("unit")))
+            sig = "*" if row["significant"] else ""
+            cols.append(f"[bold green]{sig}[/]" if sig else "")
+            cols.append(direction)
+        table.add_row(*cols)
 
-    hdrs = ("metric", "base±std", "exp±std", "chg%", "p")
-    if not compact:
-        hdrs += ("sig", "direction")
-    widths = [max(len(h), max(len(c[i]) for c in cells)) for i, h in enumerate(hdrs)]
+    console = Console(
+        no_color=not ansi, highlight=False, width=200, force_terminal=ansi
+    )
+    with console.capture() as capture:
+        console.print(table, end="")
+    table_text = capture.get()
 
-    def fmt_row(cols: tuple) -> str:
-        return "  ".join(
-            c.ljust(widths[i]) if i == 0 else c.rjust(widths[i])
-            for i, c in enumerate(cols)
-        )
-
-    def _color_pct(pct_str: str, direction: str) -> str:
-        """Wrap a percentage string in ANSI color based on direction."""
-        if not ansi:
-            return pct_str
-        inverted = direction == "smaller-better"
-        good = pct_str.startswith("-") if inverted else pct_str.startswith("+")
-        color = g if good else rd
-        return f"{color}{pct_str}{r}"
-
-    def fmt_data_row(cols: tuple, direction: str) -> str:
-        parts = []
-        for i, c in enumerate(cols):
-            aligned = c.ljust(widths[i]) if i == 0 else c.rjust(widths[i])
-            if ansi and i == 3:  # chg% column
-                aligned = _color_pct(c, direction).rjust(
-                    widths[i] + len(_color_pct(c, direction)) - len(c)
-                )
-            elif ansi and i == 5 and c == "*":  # sig column
-                aligned = f"{b}{g}*{r}".rjust(widths[i] + len(f"{b}{g}*{r}") - 1)
-            parts.append(aligned)
-        return "  ".join(parts)
-
-    sep = "-" * (sum(widths) + 2 * (len(widths) - 1))
     header = _results_header(job, ansi=ansi)
     lines: list[str] = [header] if header else []
-    lines.append("")
-    lines.append(f"{b}{fmt_row(hdrs)}{r}" if ansi else fmt_row(hdrs))
-    lines.append(f"{d}{sep}{r}" if ansi else sep)
-    for i, cols in enumerate(cells):
-        lines.append(fmt_data_row(cols, directions[i]))
+    lines.append(table_text)
     if omitted:
         omit_text = (
             f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)"

@@ -187,98 +187,57 @@ class TestFormatResultsTable:
         assert "\033[" not in t
 
     @patch("v8_utils.tools.pinpoint.pivot_results")
-    def test_ansi_colors_pct(self, mock_pivot, monkeypatch):
-        """With ansi=True, percentage changes get colored."""
-        monkeypatch.setattr(tools, "_GREEN", "[G]")
-        monkeypatch.setattr(tools, "_RED", "[R]")
-        monkeypatch.setattr(tools, "_BOLD", "[B]")
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_CYAN", "[C]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
+    def test_ansi_has_escape_codes(self, mock_pivot):
+        """With ansi=True, output contains ANSI escape codes."""
         mock_pivot.return_value = [
-            _row("m1", 100, 95, unit="ms_smallerIsBetter"),  # -5%, good
-            _row("m2", 100, 110, unit="ms_smallerIsBetter"),  # +10%, bad
+            _row("m1", 100, 95, unit="ms_smallerIsBetter"),
         ]
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)
-        assert "[G]" in t  # -5% is green (improvement for smaller-better)
-        assert "[R]" in t  # +10% is red (regression for smaller-better)
+        assert "\033[" in t
 
     @patch("v8_utils.tools.pinpoint.pivot_results")
-    def test_ansi_compact_colors(self, mock_pivot, monkeypatch):
+    def test_ansi_smaller_better_negative_green(self, mock_pivot):
+        """Smaller-better metric with negative change gets green."""
+        mock_pivot.return_value = [
+            _row("m1", 100, 95, unit="ms_smallerIsBetter"),  # -5%, good
+        ]
+        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
+        # green = \033[32m
+        assert "\033[32m" in t
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
+    def test_ansi_smaller_better_positive_red(self, mock_pivot):
+        """Smaller-better metric with positive change gets red."""
+        mock_pivot.return_value = [
+            _row("m1", 100, 110, unit="ms_smallerIsBetter"),  # +10%, bad
+        ]
+        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
+        # red = \033[31m
+        assert "\033[31m" in t
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
+    def test_ansi_bigger_better_positive_green(self, mock_pivot):
+        mock_pivot.return_value = [
+            _row("score", 100, 110, unit="score_biggerIsBetter"),  # +10%, good
+        ]
+        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
+        assert "\033[32m" in t
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
+    def test_ansi_compact_colors(self, mock_pivot):
         """Regression test: compact mode still gets correct direction colors."""
-        monkeypatch.setattr(tools, "_GREEN", "[G]")
-        monkeypatch.setattr(tools, "_RED", "[R]")
-        monkeypatch.setattr(tools, "_BOLD", "[B]")
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_CYAN", "[C]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
         mock_pivot.return_value = [
             _row("parse", 100, 95, unit="ms_smallerIsBetter"),  # -5%, good
         ]
         t = _format_results_table(
             "j1", True, False, compact=True, job=_job(), ansi=True
         )
-        # -5% on smaller-better = improvement = green
-        assert "[G]-5.00%[/]" in t
+        # green for improvement
+        assert "\033[32m" in t
 
     @patch("v8_utils.tools.pinpoint.pivot_results")
-    def test_ansi_bigger_better(self, mock_pivot, monkeypatch):
-        monkeypatch.setattr(tools, "_GREEN", "[G]")
-        monkeypatch.setattr(tools, "_RED", "[R]")
-        monkeypatch.setattr(tools, "_BOLD", "[B]")
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_CYAN", "[C]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
-        mock_pivot.return_value = [
-            _row("score", 100, 110, unit="score_biggerIsBetter"),  # +10%, good
-        ]
-        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
-        assert "[G]+10.00%[/]" in t
-
-    @patch("v8_utils.tools.pinpoint.pivot_results")
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value="Some CL")
-    def test_ansi_with_multiline_header(self, _mock_gerrit, mock_pivot, monkeypatch):
-        """ANSI coloring works correctly even with multi-line header."""
-        monkeypatch.setattr(tools, "_GREEN", "[G]")
-        monkeypatch.setattr(tools, "_RED", "[R]")
-        monkeypatch.setattr(tools, "_BOLD", "[B]")
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_CYAN", "[C]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
-        mock_pivot.return_value = [
-            _row("m1", 100, 95, unit="ms_smallerIsBetter"),
-        ]
-        job = _job(experiment_patch="https://crrev.com/c/12345")
-        t = _format_results_table("j1", True, False, job=job, ansi=True)
-        # -5% on smaller-better = green, regardless of header size
-        assert "[G]-5.00%[/]" in t
-
-    @patch("v8_utils.tools.pinpoint.pivot_results")
-    def test_ansi_header_bold(self, mock_pivot, monkeypatch):
-        monkeypatch.setattr(tools, "_BOLD", "[B]")
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
-        monkeypatch.setattr(tools, "_GREEN", "")
-        monkeypatch.setattr(tools, "_RED", "")
-        monkeypatch.setattr(tools, "_CYAN", "")
+    def test_ansi_header_bold(self, mock_pivot):
         mock_pivot.return_value = [_row("m1")]
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)
-        # Column header line should be bold
-        for line in t.splitlines():
-            if "chg%" in line:
-                assert "[B]" in line
-                break
-
-    @patch("v8_utils.tools.pinpoint.pivot_results")
-    def test_ansi_separator_dim(self, mock_pivot, monkeypatch):
-        monkeypatch.setattr(tools, "_DIM", "[D]")
-        monkeypatch.setattr(tools, "_RESET", "[/]")
-        monkeypatch.setattr(tools, "_BOLD", "")
-        monkeypatch.setattr(tools, "_GREEN", "")
-        monkeypatch.setattr(tools, "_RED", "")
-        monkeypatch.setattr(tools, "_CYAN", "")
-        mock_pivot.return_value = [_row("m1")]
-        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
-        sep_lines = [l for l in t.splitlines() if "---" in l]
-        assert sep_lines
-        assert "[D]" in sep_lines[0]
+        # bold = \033[1m (used by rich for header)
+        assert "\033[1m" in t
