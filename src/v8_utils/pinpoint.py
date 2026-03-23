@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import re
 import statistics
@@ -421,12 +422,14 @@ def fetch_jobs(
         since = datetime.now(timezone.utc) - _DEFAULT_SINCE
     if since == datetime.min:
         since = None
+    variants = user_email_variants(user)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as ex:
+        results = list(
+            ex.map(lambda e: _fetch_jobs_for_email(e, count, filters, since), variants)
+        )
     seen_ids: set[str] = set()
     all_jobs: list[dict] = []
-    for jobs in [
-        _fetch_jobs_for_email(e, count, filters, since)
-        for e in user_email_variants(user)
-    ]:
+    for jobs in results:
         for j in jobs:
             if j["job_id"] not in seen_ids:
                 seen_ids.add(j["job_id"])

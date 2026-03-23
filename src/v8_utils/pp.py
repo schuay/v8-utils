@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+from datetime import datetime
 
 from . import chat
 from . import config
@@ -118,6 +119,14 @@ def _make_progress():
         console=Console(stderr=True),
         transient=True,
     )
+
+
+def _fetch_label(user: str, since) -> str:
+    """Build a progress label like 'Fetching jobs (user, since Mar 01)'."""
+    parts = [user.split("@")[0]]
+    if since and since != datetime.min:
+        parts.append(f"since {since.strftime('%b %d')}")
+    return f"Fetching jobs ({', '.join(parts)})"
 
 
 @contextlib.contextmanager
@@ -243,16 +252,17 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
     if args.bot:
         filters.append(f"bot={args.bot}")
     since = pinpoint.parse_since(args.since)
+    user = args.user or config.load().user or pinpoint.get_current_user_email()
+    label = _fetch_label(user, since)
     progress = _make_progress()
     if progress:
         with progress:
-            t1 = progress.add_task("Fetching jobs", total=None)
+            t1 = progress.add_task(label, total=None)
             jobs = _fetch_jobs_list(
-                count=args.recent, user=args.user, filters=filters or None, since=since
+                count=args.recent, user=user, filters=filters or None, since=since
             )
             progress.update(t1, total=1, completed=1)
             if not jobs:
-                # progress clears on exit
                 pass
             else:
                 patches = [j.get("experiment_patch") or "" for j in jobs]
@@ -266,7 +276,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
                 )
     else:
         jobs = _fetch_jobs_list(
-            count=args.recent, user=args.user, filters=filters or None, since=since
+            count=args.recent, user=user, filters=filters or None, since=since
         )
         patches = [j.get("experiment_patch") or "" for j in jobs] if jobs else []
         fns = [
@@ -336,10 +346,11 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         since_str = args.since or ("one month ago" if has_filters else None)
         since = pinpoint.parse_since(since_str) if since_str else None
         count = args.recent or 20
+        user = config.load().user or pinpoint.get_current_user_email()
         if progress:
             progress.start()
-            t_list = progress.add_task("Fetching jobs", total=None)
-        jobs = _fetch_jobs_list(count=count, filters=filters, since=since)
+            t_list = progress.add_task(_fetch_label(user, since), total=None)
+        jobs = _fetch_jobs_list(count=count, user=user, filters=filters, since=since)
         if progress:
             progress.update(t_list, total=1, completed=1)
         if not jobs:
