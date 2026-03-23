@@ -30,11 +30,12 @@ import time
 from pathlib import Path
 
 import httpx
+from platformdirs import user_data_dir
 
 from . import config
 from . import pinpoint
 
-_STATE_DIR = Path("~/.local/share/v8-utils").expanduser()
+_STATE_DIR = Path(user_data_dir("v8-utils"))
 SOCK_PATH = _STATE_DIR / "daemon.sock"
 PID_PATH = _STATE_DIR / "daemon.pid"
 LOG_PATH = _STATE_DIR / "daemon.log"

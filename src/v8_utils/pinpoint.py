@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from platformdirs import user_data_dir
+
 import httpx
 from scipy.stats import false_discovery_control, mannwhitneyu
 
@@ -24,7 +26,7 @@ _LOGIN_INSTRUCTIONS = (
     "Run:  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
 )
 
-_CACHE_PATH = Path("~/.local/share/v8-utils/job_cache.json").expanduser()
+_CACHE_PATH = Path(user_data_dir("v8-utils")) / "job_cache.json"
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
 
 
