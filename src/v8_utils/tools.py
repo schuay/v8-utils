@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import NamedTuple
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent
@@ -323,13 +324,20 @@ def _results_header(job: dict) -> str:
     return "\n".join(lines)
 
 
+class FormattedTable(NamedTuple):
+    """Results table text with per-line direction metadata."""
+
+    text: str
+    line_directions: dict[int, str]  # line number → "smaller-better" etc.
+
+
 def _format_results_table(
     job_id: str,
     show_all: bool,
     use_cas: bool,
     compact: bool = False,
     job: dict | None = None,
-) -> str | None:
+) -> FormattedTable | None:
     """Format a results table for a single job. Returns None if no results.
 
     job: pre-fetched job detail dict (avoids re-fetching for header).
@@ -344,7 +352,7 @@ def _format_results_table(
             else pinpoint.pivot_results(job_id)
         )
     except Exception as e:
-        return f"Error: {e}"
+        return FormattedTable(f"Error: {e}", {})
     if not all_rows:
         return None
 
@@ -359,8 +367,10 @@ def _format_results_table(
     if not rows:
         header = _results_header(job)
         if header:
-            return f"{header}\n(no statistically significant results)"
-        return "(no statistically significant results)"
+            return FormattedTable(
+                f"{header}\n(no statistically significant results)", {}
+            )
+        return FormattedTable("(no statistically significant results)", {})
 
     def pct(r: dict) -> float:
         bm = r["base_mean"] or 0
@@ -418,11 +428,15 @@ def _format_results_table(
         sep,
         *[fmt_row(c) for c in cells],
     ]
+    data_start = (1 if header else 0) + 3
+    line_directions = {
+        data_start + i: _direction(r.get("unit")) for i, r in enumerate(rows)
+    }
     if omitted:
         lines.append(
             f"({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)"
         )
-    return "\n".join(lines)
+    return FormattedTable("\n".join(lines), line_directions)
 
 
 @mcp.tool()
@@ -430,7 +444,6 @@ def pinpoint_show_results(
     job_url: str = "",
     show_all: bool = False,
     use_cas: bool = False,
-    compact: bool = False,
     recent: int | None = None,
     patch: str | None = None,
     status: str | None = None,
@@ -446,7 +459,6 @@ def pinpoint_show_results(
 
     job_url:   space-separated Pinpoint job URL(s) or job ID(s)
     show_all:  if False (default), only show statistically significant results.
-    compact:   if True, omit sig and direction columns (for pasting to docs)
     use_cas:   if True, fetch raw per-run values from CAS isolates instead of
                the histogram HTML. Slower but surfaces richer sub-metrics for
                JetStream (Score, First, Average, Worst4 per story).
@@ -496,7 +508,7 @@ def pinpoint_show_results(
 
     fns = [
         lambda jid=jid: _format_results_table(
-            jid, show_all, use_cas, compact, job=detail_map.get(jid)
+            jid, show_all, use_cas, job=detail_map.get(jid)
         )
         for jid in job_ids
     ]
@@ -509,7 +521,7 @@ def pinpoint_show_results(
         if table is None:
             blocks.append(f"{header}\nNo results found.")
         else:
-            blocks.append(f"{header}\n{table}" if multi else table)
+            blocks.append(f"{header}\n{table.text}" if multi else table.text)
     return _text_result("\n\n".join(blocks))
 
 

@@ -23,6 +23,7 @@ from . import daemon
 from . import pinpoint
 
 from .tools import (
+    FormattedTable,
     _fetch_job_details_sorted,
     _fetch_jobs_list,
     _format_results_table,
@@ -84,12 +85,12 @@ def _colorize_json(text: str) -> str:
     return _JSON_RE.sub(_replace, text)
 
 
-def _colorize_results(text: str) -> str:
+def _colorize_results(table: FormattedTable) -> str:
     if not _CYAN:
-        return text
+        return table.text
 
     out = []
-    for line in text.splitlines():
+    for lineno, line in enumerate(table.text.splitlines()):
         if line.startswith("bot:"):
             # Combined "bot: m1  benchmark: sp3 / Story" line
             parts = re.split(r"\s{2,}", line)
@@ -113,7 +114,7 @@ def _colorize_results(text: str) -> str:
             out.append(f"{_BOLD}{line}{_RESET}")
         else:
             # For smaller-better metrics, invert: - is good (green), + is bad (red)
-            inverted = "smaller-better" in line
+            inverted = table.line_directions.get(lineno) == "smaller-better"
 
             def _color_pct(m: re.Match) -> str:
                 val = m.group(0)
