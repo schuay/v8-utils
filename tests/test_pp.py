@@ -73,10 +73,9 @@ class TestGerritChangeIdFromUrl:
         url = "https://example.com/c/v8/v8/+/1234567"
         assert _gerrit_change_id_from_url(url) is None
 
-    def test_crrev_returns_none(self):
-        # crrev is handled by _extract_change_id, not this function
+    def test_crrev_returns_change_id(self):
         url = "https://crrev.com/c/1234567"
-        assert _gerrit_change_id_from_url(url) is None
+        assert _gerrit_change_id_from_url(url) == "1234567"
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -9,11 +9,8 @@ import statistics
 import subprocess
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-
-from platformdirs import user_data_dir
 
 import httpx
 from scipy.stats import false_discovery_control, mannwhitneyu
@@ -26,34 +23,7 @@ _LOGIN_INSTRUCTIONS = (
     "Run:  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
 )
 
-_CACHE_PATH = Path(user_data_dir("v8-utils")) / "job_cache.json"
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
-
-
-def _load_cache() -> dict:
-    """Load the job cache from disk, returning an empty cache on any error."""
-    try:
-        return json.loads(_CACHE_PATH.read_text())
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {"jobs": {}, "newest_created": {}}
-
-
-def _save_cache(cache: dict) -> None:
-    """Save the job cache to disk, pruning jobs older than 90 days."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=90)).isoformat()
-    cache["jobs"] = {
-        jid: j for jid, j in cache["jobs"].items() if j.get("created", "") > cutoff
-    }
-    _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(json.dumps(cache))
-
-
-def _safe_fetch_job(job_id: str) -> dict | None:
-    """Fetch a single job, returning None on failure."""
-    try:
-        return fetch_job(job_id)
-    except Exception:
-        return None
 
 
 # ── LUCI auth ─────────────────────────────────────────────────────────────────
@@ -191,65 +161,49 @@ def resolve_patch(patch: str) -> str:
     )
 
 
+def _extract_patch_fields(
+    patch: str,
+) -> tuple[str | None, str | None, str | None]:
+    """Extract (project, change_id, patchset) from any supported patch form.
+
+    Handles: bare change ID, CHANGE/PATCHSET, crrev.com URLs, full Gerrit URLs.
+    Returns (None, None, None) if no numeric change ID can be found.
+    """
+    from . import pinpoint_cache
+
+    return pinpoint_cache.parse_patch_fields(patch)
+
+
 def _gerrit_change_id_from_url(url: str) -> str | None:
     """Extract a Gerrit change ID from any supported URL format, or return None.
 
     Returns "project~change_id" when the project is present in the URL
     (e.g. /c/v8/v8/+/123), or bare "change_id" otherwise.
     """
-    parsed = urlparse(url)
-    if parsed.hostname != "chromium-review.googlesource.com":
+    project, change, _ = _extract_patch_fields(url)
+    if change is None:
         return None
-    # Canonical: /c/PROJECT/+/CHANGE[/PATCHSET] — change ID is after /+/
-    path = parsed.path
-    plus_idx = path.find("/+/")
-    if plus_idx != -1:
-        result = _parse_change_patchset(path[plus_idx + 3 :])
-        if not result:
-            return None
-        # Extract project from /c/PROJECT/+/...
-        project_seg = path[:plus_idx].lstrip("/")
-        if project_seg.startswith("c/"):
-            project_seg = project_seg[2:]
-        project = project_seg.strip("/").replace("/", "%2F") if project_seg else None
-        return f"{project}~{result[0]}" if project else result[0]
-    # Short: /CHANGE[/PATCHSET]
-    result = _parse_change_patchset(path)
-    return result[0] if result else None
+    if project:
+        return f"{project.replace('/', '%2F')}~{change}"
+    return change
 
 
-def _extract_change_and_patchset(patch: str) -> tuple[str, str | None] | None:
+def _extract_change_and_patchset(
+    patch: str,
+) -> tuple[str, str | None] | None:
     """Extract (change_id, patchset) from any supported patch form.
 
-    Handles: bare change ID, CHANGE/PATCHSET, crrev.com URLs, full Gerrit URLs.
+    Legacy wrapper — returns (change_id, patchset) without project.
     Returns None if no numeric change ID can be found.
     """
-    patch = patch.strip()
-    parsed = urlparse(patch)
-    if parsed.scheme in ("http", "https"):
-        host = parsed.hostname or ""
-        path = parsed.path
-        if "chromium-review.googlesource.com" in host:
-            plus_idx = path.find("/+/")
-            seg = path[plus_idx + 3 :] if plus_idx != -1 else path
-            return _parse_change_patchset(seg)
-        if "crrev.com" in host:
-            # crrev.com/c/CHANGE[/PATCHSET]
-            seg = re.sub(r"^/c/", "/", path)
-            return _parse_change_patchset(seg)
-        return None
-    # No scheme: bare change ID or CHANGE/PATCHSET
-    return _parse_change_patchset(patch.lstrip("/"))
+    _, change, patchset = _extract_patch_fields(patch)
+    return (change, patchset) if change else None
 
 
 def _extract_change_id(patch: str) -> str | None:
-    """Extract a numeric Gerrit change ID from any supported patch form.
-
-    Convenience wrapper around _extract_change_and_patchset that discards
-    the patchset component.
-    """
-    result = _extract_change_and_patchset(patch)
-    return result[0] if result else None
+    """Extract a numeric Gerrit change ID from any supported patch form."""
+    _, change, _ = _extract_patch_fields(patch)
+    return change
 
 
 def fetch_gerrit_subject(patch_url: str) -> str | None:
@@ -279,12 +233,19 @@ def job_id_from_url(job_url: str) -> str:
 
 
 def fetch_job(job_id: str) -> dict[str, Any]:
-    """Fetch raw job JSON from the Pinpoint API."""
+    """Fetch raw job JSON, using the cache for terminal jobs."""
+    from . import pinpoint_cache
+
+    cached = pinpoint_cache.get_job(job_id)
+    if cached and cached.get("status") in _TERMINAL_STATES:
+        return cached
     r = httpx.get(
         f"{_PINPOINT_BASE}/api/job/{job_id}", follow_redirects=True, timeout=30
     )
     r.raise_for_status()
-    return r.json()
+    data = r.json()
+    pinpoint_cache.put_job(data)
+    return data
 
 
 def _is_cq_job(job: dict) -> bool:
@@ -381,22 +342,21 @@ def parse_since(value: str) -> datetime:
 def _fetch_jobs_for_email(
     email: str,
     count: int,
-    filters: list[str] | None,
     since: datetime | None,
-    cache: dict | None = None,
-) -> list[dict]:
-    """Fetch up to `count` non-CQ jobs for a single email via the Pinpoint API.
+) -> None:
+    """Fetch new jobs for an email and store them in the SQLite cache.
 
-    When *cache* is provided, raw jobs are stored in it and pagination stops
-    at the cache high-water mark (newest_created for this email).
+    Stops paginating when we reach the cache watermark (already-fetched jobs)
+    or the since cutoff.
     """
-    newest = cache["newest_created"].get(email) if cache else None
-    matched: list[dict] = []
-    seen_ids: set[str] = set()
+    from . import pinpoint_cache
+
+    watermark = pinpoint_cache.get_watermark(email)
     params: dict = {"filter": f"user={email}"}
     hit_cutoff = False
+    fetched = 0
 
-    while len(matched) < count and not hit_cutoff:
+    while fetched < count and not hit_cutoff:
         r = httpx.get(
             f"{_PINPOINT_BASE}/api/jobs",
             params=params,
@@ -408,46 +368,39 @@ def _fetch_jobs_for_email(
 
             print(
                 f"warning: Pinpoint API returned {r.status_code} during pagination, "
-                f"returning {len(matched)} jobs fetched so far",
+                f"stopping after {fetched} jobs fetched",
                 file=sys.stderr,
             )
             break
         r.raise_for_status()
         data = r.json()
         raw_page = data.get("jobs", [])
+        if not raw_page:
+            break
 
-        # Store raw jobs in cache before any filtering
-        if cache is not None:
-            for j in raw_page:
-                jid = j.get("job_id")
-                if jid:
-                    cache["jobs"][jid] = j
+        # Store all jobs in cache
+        pinpoint_cache.put_jobs(raw_page)
+        fetched += len(raw_page)
 
         # Cache boundary: stop when we reach already-cached jobs
-        if newest and raw_page:
+        if watermark:
             last = raw_page[-1].get("created", "")
-            if last and last <= newest:
-                raw_page = [j for j in raw_page if j.get("created", "") > newest]
+            if last and last <= watermark:
                 hit_cutoff = True
 
-        page = [j for j in raw_page if not _is_cq_job(j)]
-        # Check the since cutoff on all jobs *before* filtering so we stop
-        # paging even when no jobs on this page match the filter.
-        if since and page:
-            last_created = page[-1].get("created", "")
+        # Since cutoff
+        if since:
+            last_created = raw_page[-1].get("created", "")
             if last_created and _parse_created(last_created) < since:
                 hit_cutoff = True
-                page = [
-                    j
-                    for j in page
-                    if not ((c := j.get("created", "")) and _parse_created(c) < since)
-                ]
-        if filters:
-            page = [j for j in page if all(_job_matches_filter(j, f) for f in filters)]
-        for j in page:
-            if j["job_id"] not in seen_ids:
-                seen_ids.add(j["job_id"])
-                matched.append(j)
+
+        # Update watermark with newest job on this page
+        first_created = raw_page[0].get("created", "")
+        if first_created:
+            current = pinpoint_cache.get_watermark(email)
+            if not current or first_created > current:
+                pinpoint_cache.set_watermark(email, first_created)
+
         next_cursor = data.get("next_cursor")
         if (
             not data.get("next")
@@ -456,8 +409,6 @@ def _fetch_jobs_for_email(
         ):
             break
         params["next_cursor"] = next_cursor
-
-    return matched
 
 
 def fetch_jobs(
@@ -468,7 +419,7 @@ def fetch_jobs(
 ) -> list[dict]:
     """Fetch the `count` most recent non-CQ jobs for a user.
 
-    Uses a local disk cache to avoid re-fetching terminal jobs.
+    Uses a local SQLite cache to avoid re-fetching terminal jobs.
     Queries all email variants (@google.com, @chromium.org) and merges.
     The /api/jobs endpoint is public; no auth required.
 
@@ -476,62 +427,70 @@ def fetch_jobs(
     since:   only return jobs created on or after this datetime (default: 30 days ago).
              Pass since=datetime.min to disable the cutoff.
     """
+    from . import pinpoint_cache
+
     if since is None:
         since = datetime.now(timezone.utc) - _DEFAULT_SINCE
     if since == datetime.min:
         since = None
     variants = user_email_variants(user)
-    cache = _load_cache()
 
-    # 1. Fetch new jobs from API (stop at cache boundary)
+    # 1. Fetch new jobs from API (stops at cache watermark)
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as ex:
         list(
             ex.map(
-                lambda e: _fetch_jobs_for_email(e, count, filters, since, cache),
+                lambda e: _fetch_jobs_for_email(e, count, since),
                 variants,
             )
         )
 
-    # 2. Update newest_created watermarks from cached jobs
-    variant_set = set(variants)
-    for j in cache["jobs"].values():
-        email = j.get("user", "")
-        if email in variant_set:
-            created = j.get("created", "")
-            if created > cache["newest_created"].get(email, ""):
-                cache["newest_created"][email] = created
+    # 2. Re-fetch non-terminal cached jobs to update status
+    stale = pinpoint_cache.query_jobs(
+        users=variants,
+        exclude_statuses=list(_TERMINAL_STATES),
+    )
+    if stale:
 
-    # 3. Re-fetch non-terminal cached jobs to update status
-    stale_ids = [
-        jid
-        for jid, j in cache["jobs"].items()
-        if j.get("status") not in _TERMINAL_STATES and j.get("user") in variant_set
-    ]
-    if stale_ids:
+        def _refresh(job: dict) -> None:
+            try:
+                fetch_job(job["job_id"])  # fetches from API + caches
+            except Exception:
+                pass
+
         with concurrent.futures.ThreadPoolExecutor() as ex:
-            updated = list(ex.map(_safe_fetch_job, stale_ids))
-        for job in updated:
-            if job:
-                cache["jobs"][job["job_id"]] = job
+            list(ex.map(_refresh, stale))
 
-    # 4. Build result from cache
-    all_jobs = [
-        j
-        for j in cache["jobs"].values()
-        if j.get("user") in variant_set and not _is_cq_job(j)
-    ]
-    if since:
-        all_jobs = [
-            j for j in all_jobs if _parse_created(j.get("created", "")) >= since
-        ]
+    # 3. Extract patch filter for SQL query (if present)
+    change, patchset = None, None
+    remaining_filters = []
     if filters:
-        all_jobs = [
-            j for j in all_jobs if all(_job_matches_filter(j, f) for f in filters)
-        ]
-    all_jobs.sort(key=lambda j: j.get("created", ""), reverse=True)
+        for f in filters:
+            if f.startswith("patch="):
+                result = _extract_change_and_patchset(f.partition("=")[2])
+                if result:
+                    change, patchset = result
+            else:
+                remaining_filters.append(f)
 
-    # 5. Save and return
-    _save_cache(cache)
+    # 4. Query cache
+    since_str = since.isoformat() if since else None
+    all_jobs = pinpoint_cache.query_jobs(
+        users=variants,
+        since=since_str,
+        change=change,
+        patchset=patchset,
+    )
+    # Client-side filters for fields not in the DB schema
+    all_jobs = [j for j in all_jobs if not _is_cq_job(j)]
+    if remaining_filters:
+        all_jobs = [
+            j
+            for j in all_jobs
+            if all(_job_matches_filter(j, f) for f in remaining_filters)
+        ]
+
+    # 5. Prune old entries periodically
+    pinpoint_cache.prune()
     return all_jobs[:count]
 
 
@@ -683,6 +642,11 @@ def pivot_results(job_id: str, significance: str = "pinpoint") -> list[dict]:
                   or "fdr" (Benjamini-Hochberg FDR correction, α=0.05).
     Only metrics with exactly two labels are included.
     """
+    from . import pinpoint_cache
+
+    cached = pinpoint_cache.get_results(job_id, source="histogram")
+    if cached is not None:
+        return cached
     histograms, guids = fetch_histograms(job_id)
     groups = _collect_groups(histograms, guids)
 
@@ -716,7 +680,10 @@ def pivot_results(job_id: str, significance: str = "pinpoint") -> list[dict]:
                 "p_value": p,
             }
         )
-    return _apply_significance(rows, method=significance)
+    rows = _apply_significance(rows, method=significance)
+    if rows:
+        pinpoint_cache.put_results(job_id, rows, source="histogram")
+    return rows
 
 
 def fetch_raw_values(job_id: str) -> list[dict]:
@@ -843,7 +810,11 @@ def pivot_results_cas(job_id: str, significance: str = "pinpoint") -> list[dict]
 
     Requires: gcloud auth application-default login
     """
-    from . import cas_api
+    from . import cas_api, pinpoint_cache
+
+    cached = pinpoint_cache.get_results(job_id, source="cas")
+    if cached is not None:
+        return cached
 
     job = fetch_job(job_id)
     if job.get("status") != "Completed":
@@ -958,7 +929,10 @@ def pivot_results_cas(job_id: str, significance: str = "pinpoint") -> list[dict]
                 "p_value": p,
             }
         )
-    return _apply_significance(rows, method=significance)
+    rows = _apply_significance(rows, method=significance)
+    if rows:
+        pinpoint_cache.put_results(job_id, rows, source="cas")
+    return rows
 
 
 # ── Build lookup ──────────────────────────────────────────────────────────────
