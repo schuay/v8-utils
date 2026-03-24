@@ -10,7 +10,6 @@ Database location: ~/.local/share/v8-utils/cache.db
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
@@ -107,7 +106,7 @@ def parse_patch_fields(
             return None, change, patchset
 
         if "crrev.com" in host:
-            seg = re.sub(r"^/c/", "/", path)
+            seg = "/" + path[3:] if path.startswith("/c/") else path
             change, patchset = _parse_change_patchset(seg)
             return None, change, patchset
 
@@ -212,7 +211,8 @@ def query_jobs(
     where = " AND ".join(clauses) if clauses else "1"
     sql = f"SELECT data FROM jobs WHERE {where} ORDER BY created DESC"
     if limit:
-        sql += f" LIMIT {limit}"
+        sql += " LIMIT ?"
+        params.append(limit)
     rows = get_db().execute(sql, params).fetchall()
     return [json.loads(r[0]) for r in rows]
 

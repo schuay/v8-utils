@@ -396,10 +396,9 @@ def _fetch_jobs_for_email(
 
         # Update watermark with newest job on this page
         first_created = raw_page[0].get("created", "")
-        if first_created:
-            current = pinpoint_cache.get_watermark(email)
-            if not current or first_created > current:
-                pinpoint_cache.set_watermark(email, first_created)
+        if first_created and (not watermark or first_created > watermark):
+            pinpoint_cache.set_watermark(email, first_created)
+            watermark = first_created
 
         next_cursor = data.get("next_cursor")
         if (
