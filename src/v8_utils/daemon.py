@@ -229,7 +229,11 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
     cfg = config.load()
     while True:
         time.sleep(cfg.poll_interval)
-        if os.path.getmtime(__file__) != _STARTUP_MTIME:
+        try:
+            mtime_changed = os.path.getmtime(__file__) != _STARTUP_MTIME
+        except OSError:
+            mtime_changed = True  # file gone → upgrade happened
+        if mtime_changed:
             log.warning("daemon code changed on disk — restarting")
             _restart(watched, lock)
         with lock:
