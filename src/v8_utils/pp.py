@@ -237,12 +237,14 @@ def _cmd_cancel_job(args: argparse.Namespace) -> None:
         print(line)
 
 
-def _cmd_list_jobs(args: argparse.Namespace) -> None:
+def _build_filters(
+    args: argparse.Namespace, *, extra: list[str] | None = None
+) -> list[str]:
+    """Build job filter list from common CLI flags (--patch, --status, etc.)."""
+    filters = list(extra or [])
     patch = resolve_patch_filter(args.patch)
     if args.patch and args.patch.lower() == "auto" and patch:
         print(f"{_DIM}autodetected --patch: {patch} (from current branch){_RESET}")
-
-    filters = []
     if patch:
         filters.append(f"patch={patch}")
     if args.status:
@@ -251,8 +253,18 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         filters.append(f"benchmark={args.benchmark}")
     if args.bot:
         filters.append(f"bot={args.bot}")
+    return filters
+
+
+def _resolve_user(args: argparse.Namespace) -> str:
+    """Resolve user email from --user flag, config, or luci-auth."""
+    return args.user or config.load().user or pinpoint.get_current_user_email()
+
+
+def _cmd_list_jobs(args: argparse.Namespace) -> None:
+    filters = _build_filters(args)
     since = pinpoint.parse_since(args.since)
-    user = args.user or config.load().user or pinpoint.get_current_user_email()
+    user = _resolve_user(args)
     label = _fetch_label(user, since)
     progress = _make_progress()
     if progress:
@@ -325,19 +337,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
 
-    patch = resolve_patch_filter(args.patch)
-    if args.patch and args.patch.lower() == "auto" and patch:
-        print(f"{_DIM}autodetected --patch: {patch} (from current branch){_RESET}")
-
-    filters = ["status=Completed"]
-    if patch:
-        filters.append(f"patch={patch}")
-    if args.status:
-        filters.append(f"status={args.status}")
-    if args.benchmark:
-        filters.append(f"benchmark={args.benchmark}")
-    if args.bot:
-        filters.append(f"bot={args.bot}")
+    filters = _build_filters(args, extra=["status=Completed"])
     has_filters = len(filters) > 1 or args.recent
 
     progress = _make_progress()
@@ -346,7 +346,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         since_str = args.since or ("one month ago" if has_filters else None)
         since = pinpoint.parse_since(since_str) if since_str else None
         count = args.recent or 20
-        user = config.load().user or pinpoint.get_current_user_email()
+        user = _resolve_user(args)
         if progress:
             progress.start()
             t_list = progress.add_task(_fetch_label(user, since), total=None)
@@ -681,6 +681,12 @@ def main() -> None:
         default=None,
         metavar="N",
         help="Show results for the N most recent completed jobs",
+    )
+    p.add_argument(
+        "-u",
+        "--user",
+        default=None,
+        help="User email (default: current luci-auth user)",
     )
     p.add_argument(
         "-p",
