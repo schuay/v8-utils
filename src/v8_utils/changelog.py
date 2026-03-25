@@ -42,6 +42,7 @@ ENTRIES: list[str] = [
     "v8-utils mcp: `godbolt_compile`: added `mca` and `opt_remarks` flags for llvm-mca pipeline analysis and LLVM optimization remarks (clang only)",
     "`show-results` and `show-job` now display creation date and sort jobs oldest-first",
     "v8-utils mcp: added `llvm_mca` tool for local pipeline analysis of raw assembly from perf or d8",
+    "Results are *cached locally* — repeated queries and `--patch` lookups are near-instant",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
