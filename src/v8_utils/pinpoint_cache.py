@@ -311,11 +311,13 @@ def prune(days: int = 90) -> None:
             (cutoff,),
         )
         db.execute("DELETE FROM jobs WHERE created < ?", (cutoff,))
+        # Remove watermarks for users with no remaining jobs
+        db.execute(
+            "DELETE FROM watermarks WHERE user NOT IN (SELECT DISTINCT user FROM jobs)"
+        )
         # Update floor to oldest remaining job per user
         db.execute(
             "UPDATE watermarks SET floor = "
             "(SELECT MIN(created) FROM jobs WHERE jobs.user = watermarks.user)"
         )
-        # Remove watermarks for users with no remaining jobs
-        db.execute("DELETE FROM watermarks WHERE floor IS NULL")
         db.commit()
