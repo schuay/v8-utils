@@ -1,6 +1,7 @@
 """Shared tool implementations for v8-utils (used by both CLI and MCP)."""
 
 import concurrent.futures
+import logging
 import subprocess
 from collections.abc import Callable
 from datetime import datetime
@@ -58,10 +59,13 @@ def _fetch_job_details_sorted(
     """
     job_ids = list(dict.fromkeys(job_ids))
 
+    log = logging.getLogger("v8-utils")
+
     def fetch(jid: str) -> dict:
         try:
             return _fetch_job_detail(jid)
         except Exception as e:
+            log.debug("fetch_job_detail failed for %s", jid, exc_info=True)
             return {"job_id": jid, "error": str(e)}
 
     fns = [lambda jid=jid: fetch(jid) for jid in job_ids]
@@ -180,6 +184,9 @@ def _format_results_table(
             else pinpoint.pivot_results(job_id)
         )
     except Exception as e:
+        logging.getLogger("v8-utils").debug(
+            "pivot_results failed for %s", job_id, exc_info=True
+        )
         return f"Error: {e}"
     if not all_rows:
         return None
@@ -190,6 +197,9 @@ def _format_results_table(
         try:
             job = _fetch_job_detail(job_id)
         except Exception:
+            logging.getLogger("v8-utils").debug(
+                "fetch_job_detail failed for %s", job_id, exc_info=True
+            )
             job = {}
 
     d, r = (_DIM, _RESET) if ansi else ("", "")
