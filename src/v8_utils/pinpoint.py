@@ -339,75 +339,90 @@ def parse_since(value: str) -> datetime:
     return dt
 
 
-def _fetch_jobs_for_email(
-    email: str,
-    count: int,
-    since: datetime | None,
-) -> None:
-    """Fetch new jobs for an email and store them in the SQLite cache.
+def _fetch_jobs_for_email(email: str, since: datetime | None) -> None:
+    """Fetch jobs for an email, ensuring the cache covers [since, now].
 
-    Stops paginating when we reach the cache watermark (already-fetched jobs)
-    or the since cutoff.
+    Maintains the invariant that jobs in the cache range [floor, ceiling]
+    are exhaustive — every job in that time range is present.
     """
     from . import pinpoint_cache
 
-    watermark = pinpoint_cache.get_watermark(email)
+    ceiling, floor = pinpoint_cache.get_range(email)
+    since_str = since.isoformat() if since else None
     params: dict = {"filter": f"user={email}"}
-    hit_cutoff = False
-    fetched = 0
+    newest_seen = ceiling  # track the newest timestamp we've seen
 
-    while fetched < count and not hit_cutoff:
-        r = httpx.get(
-            f"{_PINPOINT_BASE}/api/jobs",
-            params=params,
-            follow_redirects=True,
-            timeout=30,
-        )
-        if r.status_code >= 500:
-            import sys
+    def _paginate_until(stop_at: str | None) -> bool:
+        """Paginate from current cursor until we see a job with created <= stop_at.
 
-            print(
-                f"warning: Pinpoint API returned {r.status_code} during pagination, "
-                f"stopping after {fetched} jobs fetched",
-                file=sys.stderr,
+        Stores all fetched jobs. Returns True if we ran out of pages
+        (no more jobs exist on the server).
+        """
+        nonlocal params, newest_seen
+        while True:
+            r = httpx.get(
+                f"{_PINPOINT_BASE}/api/jobs",
+                params=params,
+                follow_redirects=True,
+                timeout=30,
             )
-            break
-        r.raise_for_status()
-        data = r.json()
-        raw_page = data.get("jobs", [])
-        if not raw_page:
-            break
+            if r.status_code >= 500:
+                import sys
 
-        # Store all jobs in cache
-        pinpoint_cache.put_jobs(raw_page)
-        fetched += len(raw_page)
+                print(
+                    f"warning: Pinpoint API returned {r.status_code} during "
+                    f"pagination, returning partial results",
+                    file=sys.stderr,
+                )
+                return True
+            r.raise_for_status()
+            try:
+                data = r.json()
+            except Exception:
+                return True  # non-JSON response, treat as end of pages
+            raw_page = data.get("jobs", [])
+            if not raw_page:
+                return True
 
-        # Cache boundary: stop when we reach already-cached jobs
-        if watermark:
+            pinpoint_cache.put_jobs(raw_page)
+
+            # Track newest seen for ceiling update
+            first = raw_page[0].get("created", "")
+            if first and (not newest_seen or first > newest_seen):
+                newest_seen = first
+
+            # Check if we've reached the stop point
             last = raw_page[-1].get("created", "")
-            if last and last <= watermark:
-                hit_cutoff = True
+            if stop_at and last and last <= stop_at:
+                return False
 
-        # Since cutoff
-        if since:
-            last_created = raw_page[-1].get("created", "")
-            if last_created and _parse_created(last_created) < since:
-                hit_cutoff = True
+            next_cursor = data.get("next_cursor")
+            if (
+                not data.get("next")
+                or not next_cursor
+                or next_cursor == params.get("next_cursor")
+            ):
+                return True
+            params["next_cursor"] = next_cursor
 
-        # Update watermark with newest job on this page
-        first_created = raw_page[0].get("created", "")
-        if first_created and (not watermark or first_created > watermark):
-            pinpoint_cache.set_watermark(email, first_created)
-            watermark = first_created
+    if ceiling:
+        # Phase 1: close the gap from now down to ceiling
+        exhausted = _paginate_until(ceiling)
+        # Phase 2: if since is older than floor, extend downward
+        if not exhausted and since_str and (not floor or since_str < floor):
+            _paginate_until(since_str)
+    else:
+        # Cold cache: fetch from now down to since
+        _paginate_until(since_str)
 
-        next_cursor = data.get("next_cursor")
-        if (
-            not data.get("next")
-            or not next_cursor
-            or next_cursor == params.get("next_cursor")
-        ):
-            break
-        params["next_cursor"] = next_cursor
+    # Update the range
+    new_ceiling = newest_seen or ""
+    if since_str and (not floor or since_str < floor):
+        new_floor = since_str
+    else:
+        new_floor = floor or since_str or ""
+    if new_ceiling:
+        pinpoint_cache.set_range(email, new_ceiling, new_floor)
 
 
 def fetch_jobs(
@@ -434,11 +449,11 @@ def fetch_jobs(
         since = None
     variants = user_email_variants(user)
 
-    # 1. Fetch new jobs from API (stops at cache watermark)
+    # 1. Ensure cache covers [since, now] for all email variants
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(variants)) as ex:
         list(
             ex.map(
-                lambda e: _fetch_jobs_for_email(e, count, since),
+                lambda e: _fetch_jobs_for_email(e, since),
                 variants,
             )
         )

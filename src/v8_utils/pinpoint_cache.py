@@ -45,9 +45,13 @@ CREATE TABLE IF NOT EXISTS results (
 
 CREATE TABLE IF NOT EXISTS watermarks (
     user TEXT PRIMARY KEY,
-    newest_created TEXT NOT NULL
+    ceiling TEXT NOT NULL,
+    floor TEXT NOT NULL
 );
 """
+
+
+_SCHEMA_VERSION = 2  # bump when schema changes to clear stale caches
 
 
 def get_db() -> sqlite3.Connection:
@@ -57,12 +61,29 @@ def get_db() -> sqlite3.Connection:
         with _lock:
             if _db is None:
                 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-                _db = sqlite3.connect(
+                _ensure_schema_version()
+                conn = sqlite3.connect(
                     str(_DB_PATH), timeout=10, check_same_thread=False
                 )
-                _db.execute("PRAGMA journal_mode=WAL")
-                _db.executescript(_SCHEMA)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.executescript(_SCHEMA)
+                conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+                _db = conn
     return _db
+
+
+def _ensure_schema_version() -> None:
+    """Delete the cache file if its schema is outdated."""
+    if not _DB_PATH.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(_DB_PATH))
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        conn.close()
+        if version != _SCHEMA_VERSION:
+            _DB_PATH.unlink()
+    except Exception:
+        _DB_PATH.unlink(missing_ok=True)
 
 
 # ── Patch URL parsing ─────────────────────────────────────────────────────────
@@ -249,21 +270,22 @@ def put_results(job_id: str, rows: list[dict], source: str = "histogram") -> Non
 # ── Watermarks ────────────────────────────────────────────────────────────────
 
 
-def get_watermark(user: str) -> str | None:
-    """Get the newest_created timestamp for a user."""
+def get_range(user: str) -> tuple[str | None, str | None]:
+    """Return (ceiling, floor) for a user, or (None, None) if uncached."""
     row = (
         get_db()
-        .execute("SELECT newest_created FROM watermarks WHERE user = ?", (user,))
+        .execute("SELECT ceiling, floor FROM watermarks WHERE user = ?", (user,))
         .fetchone()
     )
-    return row[0] if row else None
+    return (row[0], row[1]) if row else (None, None)
 
 
-def set_watermark(user: str, created: str) -> None:
-    """Update the high-water mark for a user."""
+def set_range(user: str, ceiling: str, floor: str) -> None:
+    """Update the cached [floor, ceiling] range for a user."""
     with _lock:
         get_db().execute(
-            "INSERT OR REPLACE INTO watermarks VALUES (?, ?)", (user, created)
+            "INSERT OR REPLACE INTO watermarks VALUES (?, ?, ?)",
+            (user, ceiling, floor),
         )
         get_db().commit()
 
@@ -272,7 +294,7 @@ def set_watermark(user: str, created: str) -> None:
 
 
 def prune(days: int = 90) -> None:
-    """Remove jobs and results older than `days`."""
+    """Remove jobs and results older than `days`, updating floor accordingly."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     with _lock:
         db = get_db()
@@ -282,4 +304,11 @@ def prune(days: int = 90) -> None:
             (cutoff,),
         )
         db.execute("DELETE FROM jobs WHERE created < ?", (cutoff,))
+        # Update floor to oldest remaining job per user
+        db.execute(
+            "UPDATE watermarks SET floor = "
+            "(SELECT MIN(created) FROM jobs WHERE jobs.user = watermarks.user)"
+        )
+        # Remove watermarks for users with no remaining jobs
+        db.execute("DELETE FROM watermarks WHERE floor IS NULL")
         db.commit()
