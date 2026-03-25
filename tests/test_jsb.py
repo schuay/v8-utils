@@ -202,7 +202,7 @@ class TestFormatTable:
     def test_single_variant(self):
         v = [Variant(build="release")]
         results = [{"Score": [100.0, 102.0]}]
-        table = format_table("bench", "JS3", 2, v, results)
+        table = format_table(["bench"], "JS3", 2, v, results)
         assert "bench" in table
         assert "JS3" in table
         assert "Score" in table
@@ -212,14 +212,14 @@ class TestFormatTable:
     def test_two_variants_has_comparison(self):
         vs = [Variant(build="base"), Variant(build="exp")]
         results = [{"Score": [100.0, 102.0]}, {"Score": [110.0, 112.0]}]
-        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        table = format_table(["bench"], "JS3", 2, vs, results, show_all=True)
         assert "chg%" in table
         assert "confidence" in table
 
     def test_metric_ordering(self):
         vs = [Variant(build="rel")]
         results = [{"Zzz-Score": [1.0], "Score": [2.0], "First-Score": [3.0]}]
-        table = format_table("bench", "JS3", 1, vs, results)
+        table = format_table(["bench"], "JS3", 1, vs, results)
         lines = table.strip().splitlines()
         metric_lines = [l for l in lines if "Score" in l and "metric" not in l.lower()]
         names = [l.split()[0] for l in metric_lines]
@@ -233,7 +233,7 @@ class TestFormatTable:
             {"Sig": [100.0, 101.0, 100.5], "Nonsig": [100.0, 100.1, 99.9]},
             {"Sig": [200.0, 201.0, 200.5], "Nonsig": [100.0, 100.2, 99.8]},
         ]
-        table = format_table("bench", "JS3", 3, vs, results, show_all=False)
+        table = format_table(["bench"], "JS3", 3, vs, results, show_all=False)
         assert "Sig" in table
         assert "non-significant" in table
         assert "--show-all" in table
@@ -244,7 +244,7 @@ class TestFormatTable:
             {"Sig": [100.0, 101.0], "Nonsig": [100.0, 100.0]},
             {"Sig": [200.0, 201.0], "Nonsig": [100.0, 100.0]},
         ]
-        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        table = format_table(["bench"], "JS3", 2, vs, results, show_all=True)
         assert "Nonsig" in table
         assert "omitted" not in table
 
@@ -255,7 +255,7 @@ class TestFormatTable:
             {"Score": [110.0, 112.0]},
             {"Score": [120.0, 122.0]},
         ]
-        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        table = format_table(["bench"], "JS3", 2, vs, results, show_all=True)
         assert "a" in table
         assert "b" in table
         assert "c" in table
@@ -286,6 +286,50 @@ class TestSummarise:
         assert out[0]["Score"]["confidence"] == "high"
         # Both sides get the same values
         assert out[0]["Score"]["p_value"] == out[1]["Score"]["p_value"]
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CLI argument parsing
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCliArgs:
+    """Test that argparse produces correct lineitems values."""
+
+    def _parse(self, argv):
+        import argparse
+
+        from v8_utils.jsb import main
+
+        # We can't call main() directly (it calls sys.exit), so replicate
+        # the parser setup and just check args.lineitems.
+        p = argparse.ArgumentParser()
+        p.add_argument("lineitems", nargs="*")
+        p.add_argument("-b", "--build", dest="builds", action="append", default=[])
+        p.add_argument("-n", "--runs", type=int, default=1)
+        p.add_argument("--show-all", action="store_true")
+        return p.parse_args(argv)
+
+    def test_single_lineitem(self):
+        args = self._parse(["regexp-octane", "-b", "release"])
+        assert args.lineitems == ["regexp-octane"]
+
+    def test_multiple_lineitems(self):
+        args = self._parse(["regexp-octane", "WSL", "-b", "release"])
+        assert args.lineitems == ["regexp-octane", "WSL"]
+
+    def test_no_lineitems(self):
+        args = self._parse(["-b", "release"])
+        assert args.lineitems == []
+
+    def test_lineitems_or_none(self):
+        args = self._parse(["-b", "release"])
+        lineitems = args.lineitems or None
+        assert lineitems is None
+
+        args = self._parse(["regexp-octane", "-b", "release"])
+        lineitems = args.lineitems or None
+        assert lineitems == ["regexp-octane"]
 
     def test_two_variants_single_run_no_p(self):
         results = [{"Score": [100.0]}, {"Score": [200.0]}]

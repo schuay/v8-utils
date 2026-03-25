@@ -70,11 +70,13 @@ class Variant:
             return self._d8_path
         return v8_out / self.build / "d8"
 
-    def cmd(self, d8: Path, suite_dir: Path, lineitem: str | None = None) -> list[str]:
+    def cmd(
+        self, d8: Path, suite_dir: Path, lineitems: list[str] | None = None
+    ) -> list[str]:
         flags = self.flags.split() if self.flags else []
         cmd = [str(d8)] + flags + [str(suite_dir / "cli.js")]
-        if lineitem:
-            cmd += ["--", lineitem]
+        if lineitems:
+            cmd += ["--", ",".join(lineitems)]
         return cmd
 
 
@@ -126,7 +128,7 @@ def _run_captured(
 def run_variant(
     variant: Variant,
     suite_dir: Path,
-    lineitem: str | None,
+    lineitems: list[str] | None,
     n: int,
     js3: bool,
     v8_out: Path,
@@ -137,8 +139,8 @@ def run_variant(
     on_run: called after each completed run (for progress updates).
     """
     d8 = variant.d8(v8_out)
-    cmd = variant.cmd(d8, suite_dir, lineitem)
-    full_names = lineitem is None
+    cmd = variant.cmd(d8, suite_dir, lineitems)
+    full_names = lineitems is None or len(lineitems) > 1
     all_scores: dict[str, list[float]] = {}
     for _ in range(n):
         scores = _run_captured(cmd, suite_dir, js3, full_names=full_names)
@@ -152,7 +154,7 @@ def run_variant(
 def run_perf(
     variant: Variant,
     suite_dir: Path,
-    lineitem: str | None,
+    lineitems: list[str] | None,
     v8_out: Path,
     perf_script: Path,
     upload: bool = False,
@@ -170,8 +172,8 @@ def run_perf(
         + (variant.flags.split() if variant.flags else [])
         + [str(suite_dir / "cli.js")]
     )
-    if lineitem:
-        cmd += ["--", lineitem]
+    if lineitems:
+        cmd += ["--", ",".join(lineitems)]
     r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
     output = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
@@ -226,7 +228,7 @@ def _fmt_delta(base: list[float], exp: list[float]) -> tuple[str, float | None, 
 
 
 def format_table(
-    lineitem: str | None,
+    lineitems: list[str] | None,
     suite: str,
     n: int,
     variants: list[Variant],
@@ -287,7 +289,7 @@ def format_table(
         console.print(table, end="")
     table_text = capture.get()
 
-    title = lineitem or "full suite"
+    title = ", ".join(lineitems) if lineitems else "full suite"
     lines = [f"{title}  ({suite}, {n} run{'s' if n > 1 else ''})"]
     lines.append(table_text)
     if omitted:
@@ -368,10 +370,9 @@ examples:
 """,
     )
     p.add_argument(
-        "lineitem",
-        nargs="?",
-        default=None,
-        help="Benchmark story name, e.g. regexp-octane (omit to run full suite)",
+        "lineitems",
+        nargs="*",
+        help="Benchmark story names, e.g. regexp-octane chai-wtb (omit to run full suite)",
     )
     p.add_argument(
         "-b",
@@ -418,6 +419,7 @@ examples:
         help="Record a perf trace and upload via pprof (single variant)",
     )
     args = p.parse_args(argv or None)
+    lineitems = args.lineitems or None  # empty list → None (full suite)
 
     cfg = cfg_module.load()
     v8_out = cfg.v8_out
@@ -441,7 +443,7 @@ examples:
         result = run_perf(
             v,
             suite_dir,
-            args.lineitem,
+            lineitems,
             v8_out,
             cfg.perf_script,
             upload=args.perf_upload,
@@ -454,7 +456,7 @@ examples:
         if len(variants) != 1:
             sys.exit("error: --gdb/--rr requires exactly one build")
         v = variants[0]
-        cmd = v.cmd(v.d8(v8_out), suite_dir, args.lineitem)
+        cmd = v.cmd(v.d8(v8_out), suite_dir, lineitems)
         cmd = (["gdb", "--args"] if args.gdb else ["rr", "record"]) + cmd
         subprocess.run(cmd, cwd=suite_dir)
         return
@@ -462,7 +464,7 @@ examples:
     # --- Single variant, single run: pure passthrough ---
     if args.runs == 1 and len(variants) == 1:
         v = variants[0]
-        subprocess.run(v.cmd(v.d8(v8_out), suite_dir, args.lineitem), cwd=suite_dir)
+        subprocess.run(v.cmd(v.d8(v8_out), suite_dir, lineitems), cwd=suite_dir)
         return
 
     # --- Multi-run / multi-variant: capture, parse, print table ---
@@ -498,7 +500,7 @@ examples:
             r = run_variant(
                 v,
                 suite_dir,
-                args.lineitem,
+                lineitems,
                 args.runs,
                 js3,
                 v8_out,
@@ -517,7 +519,7 @@ examples:
         progress.stop()
     print(
         format_table(
-            args.lineitem,
+            lineitems,
             suite,
             args.runs,
             variants,

@@ -435,7 +435,7 @@ def run_d8(
 
 @mcp.tool()
 def jsb_run_bench(
-    lineitem: str | None = None,
+    lineitems: list[str] | None = None,
     builds: list[str] = [],
     runs: int = 5,
     suite: str = "js3",
@@ -445,8 +445,8 @@ def jsb_run_bench(
 ) -> CallToolResult:
     """Run a JetStream2/3 story with one or more JS shell builds and return scores.
 
-    lineitem: benchmark story name, e.g. "regexp-octane", "chai-wtb".
-              Omit to run the full suite and show all line items.
+    lineitems: benchmark story names, e.g. ["regexp-octane", "chai-wtb"].
+               Omit to run the full suite.
     builds: list of "build[:flags]" specs under v8_out, or full paths
             to any JS shell binary (d8, jsc, etc.), e.g.:
               ["release-main", "release-lto:--turbolev-future",
@@ -482,7 +482,7 @@ def jsb_run_bench(
             jsb_module.run_perf(
                 variants[0],
                 suite_dir,
-                lineitem,
+                lineitems,
                 cfg.v8_out,
                 cfg.perf_script,
                 upload=perf_upload,
@@ -490,13 +490,13 @@ def jsb_run_bench(
         )
 
     results = [
-        jsb_module.run_variant(v, suite_dir, lineitem, runs, js3, cfg.v8_out)
+        jsb_module.run_variant(v, suite_dir, lineitems, runs, js3, cfg.v8_out)
         for v in variants
     ]
 
     return _text_result(
         jsb_module.format_table(
-            lineitem, suite_label, runs, variants, results, show_all=show_all
+            lineitems, suite_label, runs, variants, results, show_all=show_all
         )
     )
 
