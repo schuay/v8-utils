@@ -66,9 +66,12 @@ class Variant:
             return self._d8_path
         return v8_out / self.build / "d8"
 
-    def cmd(self, d8: Path, suite_dir: Path, bench: str) -> list[str]:
+    def cmd(self, d8: Path, suite_dir: Path, lineitem: str | None = None) -> list[str]:
         flags = self.flags.split() if self.flags else []
-        return [str(d8)] + flags + [str(suite_dir / "cli.js"), "--", bench]
+        cmd = [str(d8)] + flags + [str(suite_dir / "cli.js")]
+        if lineitem:
+            cmd += ["--", lineitem]
+        return cmd
 
 
 # ---------- Output parsing ----------
@@ -81,41 +84,45 @@ _JS2_SCORE = re.compile(r"^\S+\s+([\w-]+-Score):\s+([\d.]+)\s*$")
 _JS3_SCORE = re.compile(r"^\S+\s+([\w-]*Score)\s+([\d.]+)\s+pts\s*$")
 
 
-def parse_js2(output: str) -> dict[str, float]:
+def parse_js2(output: str, full_names: bool = False) -> dict[str, float]:
     scores: dict[str, float] = {}
     for line in output.splitlines():
         if m := _JS2_SCORE.match(line):
-            scores[m.group(1)] = float(m.group(2))
+            key = f"{line.split()[0]}/{m.group(1)}" if full_names else m.group(1)
+            scores[key] = float(m.group(2))
     return scores
 
 
-def parse_js3(output: str) -> dict[str, float]:
+def parse_js3(output: str, full_names: bool = False) -> dict[str, float]:
     scores: dict[str, float] = {}
     for line in output.splitlines():
         # Skip "Overall *" lines — they duplicate per-bench scores
         if line.startswith("Overall"):
             continue
         if m := _JS3_SCORE.match(line):
-            scores[m.group(1)] = float(m.group(2))
+            key = f"{line.split()[0]}/{m.group(1)}" if full_names else m.group(1)
+            scores[key] = float(m.group(2))
     return scores
 
 
 # ---------- Running ----------
 
 
-def _run_captured(cmd: list[str], cwd: Path, js3: bool) -> dict[str, float]:
+def _run_captured(
+    cmd: list[str], cwd: Path, js3: bool, full_names: bool = False
+) -> dict[str, float]:
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
         output = (result.stdout + result.stderr).strip()
         raise RuntimeError(f"d8 exited with code {result.returncode}\n{output}")
     out = result.stdout + result.stderr
-    return parse_js3(out) if js3 else parse_js2(out)
+    return parse_js3(out, full_names) if js3 else parse_js2(out, full_names)
 
 
 def run_variant(
     variant: Variant,
     suite_dir: Path,
-    bench: str,
+    lineitem: str | None,
     n: int,
     js3: bool,
     v8_out: Path,
@@ -123,12 +130,13 @@ def run_variant(
 ) -> dict[str, list[float]]:
     """Run one variant N times. Returns metric → list of values."""
     d8 = variant.d8(v8_out)
-    cmd = variant.cmd(d8, suite_dir, bench)
+    cmd = variant.cmd(d8, suite_dir, lineitem)
+    full_names = lineitem is None
     all_scores: dict[str, list[float]] = {}
     if progress:
         print(f"{variant.label}: ", end="", flush=True, file=sys.stderr)
     for _ in range(n):
-        scores = _run_captured(cmd, suite_dir, js3)
+        scores = _run_captured(cmd, suite_dir, js3, full_names=full_names)
         for metric, val in scores.items():
             all_scores.setdefault(metric, []).append(val)
         if progress:
@@ -141,7 +149,7 @@ def run_variant(
 def run_perf(
     variant: Variant,
     suite_dir: Path,
-    bench: str,
+    lineitem: str | None,
     v8_out: Path,
     perf_script: Path,
     upload: bool = False,
@@ -157,8 +165,10 @@ def run_perf(
         + extra
         + [str(variant.d8(v8_out))]
         + (variant.flags.split() if variant.flags else [])
-        + [str(suite_dir / "cli.js"), "--", bench]
+        + [str(suite_dir / "cli.js")]
     )
+    if lineitem:
+        cmd += ["--", lineitem]
     r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
     output = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
@@ -213,7 +223,7 @@ def _fmt_delta(base: list[float], exp: list[float]) -> tuple[str, float | None, 
 
 
 def format_table(
-    bench: str,
+    lineitem: str | None,
     suite: str,
     n: int,
     variants: list[Variant],
@@ -233,7 +243,8 @@ def format_table(
     pcol = 8
     ccol = 12
 
-    lines = [f"\n{bench}  ({suite}, {n} run{'s' if n > 1 else ''})\n"]
+    title = lineitem or "full suite"
+    lines = [f"\n{title}  ({suite}, {n} run{'s' if n > 1 else ''})\n"]
 
     hdr = f"{'Metric':<{mcol}}" + "".join(f"{l:>{vcol}}" for l in labels)
     if has_delta:
@@ -327,7 +338,12 @@ examples:
   jsb regexp-octane -b ~/v8-alt/out/release/d8        # full d8 path
 """,
     )
-    p.add_argument("bench", help="Benchmark story name, e.g. regexp-octane")
+    p.add_argument(
+        "lineitem",
+        nargs="?",
+        default=None,
+        help="Benchmark story name, e.g. regexp-octane (omit to run full suite)",
+    )
     p.add_argument(
         "-b",
         "--build",
@@ -389,7 +405,12 @@ examples:
             sys.exit("error: --perf/--perf-upload requires exactly one build")
         v = variants[0]
         result = run_perf(
-            v, suite_dir, args.bench, v8_out, cfg.perf_script, upload=args.perf_upload
+            v,
+            suite_dir,
+            args.lineitem,
+            v8_out,
+            cfg.perf_script,
+            upload=args.perf_upload,
         )
         print(result)
         return
@@ -399,7 +420,7 @@ examples:
         if len(variants) != 1:
             sys.exit("error: --gdb/--rr requires exactly one build")
         v = variants[0]
-        cmd = v.cmd(v.d8(v8_out), suite_dir, args.bench)
+        cmd = v.cmd(v.d8(v8_out), suite_dir, args.lineitem)
         cmd = (["gdb", "--args"] if args.gdb else ["rr", "record"]) + cmd
         subprocess.run(cmd, cwd=suite_dir)
         return
@@ -407,19 +428,21 @@ examples:
     # --- Single variant, single run: pure passthrough ---
     if args.runs == 1 and len(variants) == 1:
         v = variants[0]
-        subprocess.run(v.cmd(v.d8(v8_out), suite_dir, args.bench), cwd=suite_dir)
+        subprocess.run(v.cmd(v.d8(v8_out), suite_dir, args.lineitem), cwd=suite_dir)
         return
 
     # --- Multi-run / multi-variant: capture, parse, print table ---
     try:
         results = [
-            run_variant(v, suite_dir, args.bench, args.runs, js3, v8_out, progress=True)
+            run_variant(
+                v, suite_dir, args.lineitem, args.runs, js3, v8_out, progress=True
+            )
             for v in variants
         ]
     except RuntimeError as e:
         print(file=sys.stderr)  # end progress line if interrupted mid-run
         sys.exit(f"error: {e}")
-    print(format_table(args.bench, suite, args.runs, variants, results))
+    print(format_table(args.lineitem, suite, args.runs, variants, results))
 
 
 if __name__ == "__main__":
