@@ -20,7 +20,8 @@ from platformdirs import user_data_dir
 
 _DB_PATH = Path(user_data_dir("v8-utils")) / "cache.db"
 _db: sqlite3.Connection | None = None
-_lock = threading.Lock()
+_init_lock = threading.Lock()
+_lock = threading.Lock()  # serializes all DB operations
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS jobs (
@@ -58,7 +59,7 @@ def get_db() -> sqlite3.Connection:
     """Return the module-level DB connection, creating it on first call."""
     global _db
     if _db is None:
-        with _lock:
+        with _init_lock:
             if _db is None:
                 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
                 _ensure_schema_version()
@@ -169,9 +170,12 @@ def _job_fields(job: dict) -> tuple:
 
 def get_job(job_id: str) -> dict | None:
     """Look up a single job by ID. Returns the raw API dict or None."""
-    row = (
-        get_db().execute("SELECT data FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
-    )
+    with _lock:
+        row = (
+            get_db()
+            .execute("SELECT data FROM jobs WHERE job_id = ?", (job_id,))
+            .fetchone()
+        )
     return json.loads(row[0]) if row else None
 
 
@@ -234,7 +238,8 @@ def query_jobs(
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
-    rows = get_db().execute(sql, params).fetchall()
+    with _lock:
+        rows = get_db().execute(sql, params).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 
@@ -246,14 +251,15 @@ def get_results(job_id: str, source: str = "histogram") -> list[dict] | None:
 
     source: "histogram" (default pivot_results) or "cas" (pivot_results_cas).
     """
-    row = (
-        get_db()
-        .execute(
-            "SELECT data FROM results WHERE job_id = ? AND source = ?",
-            (job_id, source),
+    with _lock:
+        row = (
+            get_db()
+            .execute(
+                "SELECT data FROM results WHERE job_id = ? AND source = ?",
+                (job_id, source),
+            )
+            .fetchone()
         )
-        .fetchone()
-    )
     return json.loads(row[0]) if row else None
 
 
@@ -272,11 +278,12 @@ def put_results(job_id: str, rows: list[dict], source: str = "histogram") -> Non
 
 def get_range(user: str) -> tuple[str | None, str | None]:
     """Return (ceiling, floor) for a user, or (None, None) if uncached."""
-    row = (
-        get_db()
-        .execute("SELECT ceiling, floor FROM watermarks WHERE user = ?", (user,))
-        .fetchone()
-    )
+    with _lock:
+        row = (
+            get_db()
+            .execute("SELECT ceiling, floor FROM watermarks WHERE user = ?", (user,))
+            .fetchone()
+        )
     return (row[0], row[1]) if row else (None, None)
 
 
