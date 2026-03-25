@@ -206,39 +206,59 @@ class TestFormatTable:
         assert "bench" in table
         assert "JS3" in table
         assert "Score" in table
-        # No delta columns for single variant
-        assert "delta" not in table
+        # No chg% columns for single variant
+        assert "chg%" not in table
 
-    def test_two_variants_has_delta(self):
+    def test_two_variants_has_comparison(self):
         vs = [Variant(build="base"), Variant(build="exp")]
         results = [{"Score": [100.0, 102.0]}, {"Score": [110.0, 112.0]}]
-        table = format_table("bench", "JS3", 2, vs, results)
-        assert "delta" in table
+        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        assert "chg%" in table
         assert "confidence" in table
-        assert "p" in table
 
     def test_metric_ordering(self):
         vs = [Variant(build="rel")]
         results = [{"Zzz-Score": [1.0], "Score": [2.0], "First-Score": [3.0]}]
         table = format_table("bench", "JS3", 1, vs, results)
         lines = table.strip().splitlines()
-        metric_lines = [l for l in lines if "Score" in l and "Metric" not in l]
-        # Score should come before First-Score, both before Zzz-Score
+        metric_lines = [l for l in lines if "Score" in l and "metric" not in l.lower()]
         names = [l.split()[0] for l in metric_lines]
         assert names.index("Score") < names.index("First-Score")
         assert names.index("First-Score") < names.index("Zzz-Score")
 
-    def test_footer_present_with_multiple_runs(self):
+    def test_significance_filtering(self):
         vs = [Variant(build="a"), Variant(build="b")]
-        results = [{"Score": [100.0, 102.0]}, {"Score": [110.0, 112.0]}]
-        table = format_table("bench", "JS3", 2, vs, results)
-        assert "Welch's t-test" in table
+        # Clearly different values → significant
+        results = [
+            {"Sig": [100.0, 101.0, 100.5], "Nonsig": [100.0, 100.1, 99.9]},
+            {"Sig": [200.0, 201.0, 200.5], "Nonsig": [100.0, 100.2, 99.8]},
+        ]
+        table = format_table("bench", "JS3", 3, vs, results, show_all=False)
+        assert "Sig" in table
+        assert "non-significant" in table
+        assert "--show-all" in table
 
-    def test_no_footer_single_run(self):
+    def test_show_all(self):
         vs = [Variant(build="a"), Variant(build="b")]
-        results = [{"Score": [100.0]}, {"Score": [110.0]}]
-        table = format_table("bench", "JS3", 1, vs, results)
-        assert "Welch's t-test" not in table
+        results = [
+            {"Sig": [100.0, 101.0], "Nonsig": [100.0, 100.0]},
+            {"Sig": [200.0, 201.0], "Nonsig": [100.0, 100.0]},
+        ]
+        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        assert "Nonsig" in table
+        assert "omitted" not in table
+
+    def test_three_variants(self):
+        vs = [Variant(build="a"), Variant(build="b"), Variant(build="c")]
+        results = [
+            {"Score": [100.0, 102.0]},
+            {"Score": [110.0, 112.0]},
+            {"Score": [120.0, 122.0]},
+        ]
+        table = format_table("bench", "JS3", 2, vs, results, show_all=True)
+        assert "a" in table
+        assert "b" in table
+        assert "c" in table
 
 
 # ══════════════════════════════════════════════════════════════════════════════

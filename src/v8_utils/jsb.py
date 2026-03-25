@@ -19,10 +19,14 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, stdev
 
+from rich import box
+from rich.console import Console
+from rich.table import Table
 from scipy.stats import ttest_ind
 
 from . import config as cfg_module
@@ -126,23 +130,22 @@ def run_variant(
     n: int,
     js3: bool,
     v8_out: Path,
-    progress: bool = False,
+    on_run: Callable[[], None] | None = None,
 ) -> dict[str, list[float]]:
-    """Run one variant N times. Returns metric → list of values."""
+    """Run one variant N times. Returns metric → list of values.
+
+    on_run: called after each completed run (for progress updates).
+    """
     d8 = variant.d8(v8_out)
     cmd = variant.cmd(d8, suite_dir, lineitem)
     full_names = lineitem is None
     all_scores: dict[str, list[float]] = {}
-    if progress:
-        print(f"{variant.label}: ", end="", flush=True, file=sys.stderr)
     for _ in range(n):
         scores = _run_captured(cmd, suite_dir, js3, full_names=full_names)
         for metric, val in scores.items():
             all_scores.setdefault(metric, []).append(val)
-        if progress:
-            print(".", end="", flush=True, file=sys.stderr)
-    if progress:
-        print(file=sys.stderr)
+        if on_run:
+            on_run()
     return all_scores
 
 
@@ -228,6 +231,8 @@ def format_table(
     n: int,
     variants: list[Variant],
     results: list[dict[str, list[float]]],
+    show_all: bool = False,
+    ansi: bool = False,
 ) -> str:
     all_metrics: set[str] = set()
     for r in results:
@@ -235,39 +240,63 @@ def format_table(
     ordered = [m for m in _METRIC_ORDER if m in all_metrics]
     ordered += sorted(all_metrics - set(ordered))
 
-    labels = [v.label for v in variants]
-    mcol = max(16, max((len(m) for m in ordered), default=10) + 2)
-    vcol = max(18, max(len(l) for l in labels) + 2)
-    has_delta = len(variants) == 2
-    dcol = 10
-    pcol = 8
-    ccol = 12
+    has_comparison = len(variants) >= 2
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
+    table.add_column("metric")
+    table.add_column(variants[0].label, justify="right")
+    for v in variants[1:]:
+        table.add_column(v.label, justify="right")
+        table.add_column("chg%", justify="right")
+        table.add_column("p", justify="right")
+        table.add_column("confidence", justify="right")
+
+    omitted = 0
+    for metric in ordered:
+        base_vals = results[0].get(metric, [])
+        cells: list[str] = [metric, _fmt_stat(base_vals) if base_vals else "N/A"]
+        any_sig = False
+        for i in range(1, len(variants)):
+            exp_vals = results[i].get(metric, [])
+            cells.append(_fmt_stat(exp_vals) if exp_vals else "N/A")
+            if base_vals and exp_vals:
+                delta, p, conf = _fmt_delta(base_vals, exp_vals)
+                # JetStream: bigger is always better
+                if delta.startswith("+"):
+                    style = "green"
+                elif delta.startswith("-"):
+                    style = "red"
+                else:
+                    style = ""
+                cells.append(f"[{style}]{delta}[/]" if style else delta)
+                cells.append(f"{p:.4f}" if p is not None else "")
+                cells.append(conf)
+                if p is not None and p < 0.05:
+                    any_sig = True
+            else:
+                cells.extend(["", "", ""])
+        if not has_comparison or show_all or any_sig:
+            table.add_row(*cells)
+        else:
+            omitted += 1
+
+    console = Console(
+        no_color=not ansi, highlight=False, width=200, force_terminal=ansi
+    )
+    with console.capture() as capture:
+        console.print(table, end="")
+    table_text = capture.get()
 
     title = lineitem or "full suite"
-    lines = [f"\n{title}  ({suite}, {n} run{'s' if n > 1 else ''})\n"]
-
-    hdr = f"{'Metric':<{mcol}}" + "".join(f"{l:>{vcol}}" for l in labels)
-    if has_delta:
-        hdr += f"{'delta':>{dcol}}{'p':>{pcol}}{'confidence':>{ccol}}"
-    lines += [hdr, "-" * len(hdr)]
-
-    for metric in ordered:
-        row = f"{metric:<{mcol}}"
-        vals_list = [r.get(metric, []) for r in results]
-        for vals in vals_list:
-            row += f"{_fmt_stat(vals) if vals else 'N/A':>{vcol}}"
-        if has_delta and vals_list[0] and vals_list[1]:
-            delta, p, conf = _fmt_delta(vals_list[0], vals_list[1])
-            p_str = f"{p:.4f}" if p is not None else ""
-            row += f"{delta:>{dcol}}{p_str:>{pcol}}{conf:>{ccol}}"
-        lines.append(row)
-
-    if has_delta and n >= 2:
-        lines.append("")
+    lines = [f"{title}  ({suite}, {n} run{'s' if n > 1 else ''})"]
+    lines.append(table_text)
+    if omitted:
+        d, r = ("\033[2m", "\033[0m") if ansi else ("", "")
         lines.append(
-            "Welch's t-test: confidence high (p<0.01), medium (p<0.05), low (p≥0.05)"
+            f"{d}({omitted} non-significant result"
+            f"{'s' if omitted != 1 else ''} omitted"
+            f" — pass --show-all for all results){r}"
         )
-
     return "\n".join(lines)
 
 
@@ -362,6 +391,11 @@ examples:
         help="Number of runs per variant (default: 1)",
     )
     p.add_argument(
+        "--show-all",
+        action="store_true",
+        help="Show all metrics (default: hide non-significant when comparing)",
+    )
+    p.add_argument(
         "--js2", action="store_true", help="Use JetStream2 (default: JetStream3)"
     )
     p.add_argument(
@@ -432,17 +466,66 @@ examples:
         return
 
     # --- Multi-run / multi-variant: capture, parse, print table ---
+    from rich.progress import (
+        BarColumn,
+        MofNCompleteColumn,
+        Progress,
+        SpinnerColumn,
+        TextColumn,
+        TimeElapsedColumn,
+    )
+
+    total_runs = len(variants) * args.runs
+    progress = (
+        Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(bar_width=20),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=Console(stderr=True),
+            transient=True,
+        )
+        if sys.stderr.isatty()
+        else None
+    )
     try:
-        results = [
-            run_variant(
-                v, suite_dir, args.lineitem, args.runs, js3, v8_out, progress=True
+        if progress:
+            progress.start()
+        results = []
+        for v in variants:
+            task = progress.add_task(v.label, total=args.runs) if progress else None
+            r = run_variant(
+                v,
+                suite_dir,
+                args.lineitem,
+                args.runs,
+                js3,
+                v8_out,
+                on_run=(
+                    (lambda: progress.advance(task))
+                    if progress and task is not None
+                    else None
+                ),
             )
-            for v in variants
-        ]
+            results.append(r)
     except RuntimeError as e:
-        print(file=sys.stderr)  # end progress line if interrupted mid-run
+        if progress:
+            progress.stop()
         sys.exit(f"error: {e}")
-    print(format_table(args.lineitem, suite, args.runs, variants, results))
+    if progress:
+        progress.stop()
+    print(
+        format_table(
+            args.lineitem,
+            suite,
+            args.runs,
+            variants,
+            results,
+            show_all=args.show_all,
+            ansi=sys.stderr.isatty(),
+        )
+    )
 
 
 if __name__ == "__main__":
