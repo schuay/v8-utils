@@ -419,11 +419,14 @@ def annotate_read_around(
 
 # ── perf diff ─────────────────────────────────────────────────────────────────
 
-# Matches diff output lines with optional delta column:
-#   "    25.05%             libv8.so  [.] sym"   <- only in baseline
-#   "     5.00%    -1.20%  libv8.so  [.] sym"   <- changed
-#   "              +3.45%  libv8.so  [.] sym"   <- new in after
-_DIFF_RE = re.compile(r"^\s*([\d.]+%|)\s+([-+][\d.]+%|)\s+(\S+)\s+\[.\]\s+(.+)$")
+# Matches diff output lines with optional delta and optional DSO columns:
+#   "    25.05%             libv8.so  [.] sym"   <- only in baseline (with DSO)
+#   "     5.00%    -1.20%  libv8.so  [.] sym"   <- changed (with DSO)
+#   "     5.00%    -1.20%  [.] sym"              <- changed (no DSO, --sort=symbol)
+#   "              +3.45%  [.] sym"              <- new in after
+_DIFF_RE = re.compile(
+    r"^\s*([\d.]+%|)\s+([-+][\d.]+%|)\s+(?:(?!\[.\])(\S+)\s+)?\[.\]\s+(.+)$"
+)
 
 
 def diff(
@@ -455,7 +458,7 @@ def diff(
             continue
         baseline_str = m.group(1).rstrip("%")
         delta_str = m.group(2).rstrip("%")
-        dso_name = m.group(3)
+        dso_name = m.group(3) or ""
         sym = m.group(4).strip()
 
         # Normalize V8 JIT symbols: strip transient source location suffix
