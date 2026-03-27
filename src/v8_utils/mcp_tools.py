@@ -619,6 +619,19 @@ def _register_repo_resources():
 _register_repo_resources()
 
 
+def _repo_summary() -> str:
+    """One-line summary of configured repos for embedding in tool descriptions."""
+    cfg = config.load()
+    parts = []
+    for alias, entry in cfg.repos.items():
+        if entry.path.is_dir():
+            parts.append(f"{alias} ({entry.desc})" if entry.desc else alias)
+    return ", ".join(parts)
+
+
+_REPOS_LINE = _repo_summary()
+
+
 @mcp.tool()
 def repo_git_show(
     repo: str,
@@ -666,7 +679,21 @@ def repo_git_show(
     return _text_result(result)
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Search for a pattern in a related source repo using git grep.\n"
+        "\n"
+        f"Configured repos: {_REPOS_LINE}\n"
+        "\n"
+        "repo:    repo name (see list above)\n"
+        "pattern: regex pattern to search for\n"
+        'glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"\n'
+        "context: lines of context around each match (default: 0)\n"
+        "limit:   max matches to return (default: 100)\n"
+        "ref:     git ref to search in (e.g. commit hash, branch, tag).\n"
+        "         If omitted, searches the working tree."
+    )
+)
 def repo_git_grep(
     repo: str,
     pattern: str,
@@ -675,16 +702,6 @@ def repo_git_grep(
     limit: int = _MAX_GREP_MATCHES,
     ref: str | None = None,
 ) -> CallToolResult:
-    """Search for a pattern in a related source repo using git grep.
-
-    repo:    repo name from the repo:// MCP resources
-    pattern: regex pattern to search for
-    glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"
-    context: lines of context around each match (default: 0)
-    limit:   max matches to return (default: 100)
-    ref:     git ref to search in (e.g. commit hash, branch, tag).
-             If omitted, searches the working tree.
-    """
     root = _resolve_repo(repo)
     cmd = ["git", "grep", "-n", "--no-color", "-E"]
     if context > 0:
