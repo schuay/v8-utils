@@ -12,8 +12,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
+import logging
+
 import httpx
 from scipy.stats import false_discovery_control, mannwhitneyu
+
+_log = logging.getLogger("v8-utils")
 
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
 _GERRIT_BASE = "https://chromium-review.googlesource.com"
@@ -546,6 +550,19 @@ def fetch_histograms(job_id: str) -> tuple[list[dict], dict[str, Any]]:
     results_path = job.get("results_url")
     if not results_path:
         raise ValueError("Job has no results_url")
+
+    # WORKAROUND (2026-03-27): Pinpoint started returning /results2/<id> URLs
+    # instead of /api/results2-serve/<id>.  The /results2/ endpoint serves a
+    # JavaScript frontend app that loads histogram data dynamically — the raw
+    # HTML contains no embedded NDJSON in comments, so our parser finds nothing.
+    # The old /api/results2-serve/<id> endpoint still works and returns the
+    # full HTML page with histogram NDJSON embedded in <!-- … --> comments.
+    # Rewrite the URL so we keep hitting the data-serving endpoint.
+    # If Pinpoint ever removes /api/results2-serve, we'll need to parse the
+    # new frontend's data-loading API instead.
+    if results_path.startswith("/results2/"):
+        _log.info("rewriting %s → /api/results2-serve/…", results_path)
+        results_path = results_path.replace("/results2/", "/api/results2-serve/", 1)
 
     r = httpx.get(_PINPOINT_BASE + results_path, follow_redirects=True, timeout=60)
     r.raise_for_status()
