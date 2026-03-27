@@ -1394,6 +1394,7 @@ def _clean_asm_for_mca(raw: str) -> str:
 @mcp.tool()
 def llvm_mca(
     assembly: str,
+    arch: str = "x64",
     cpu: str | None = None,
     syntax: str = "intel",
     bottleneck: bool = True,
@@ -1404,10 +1405,13 @@ def llvm_mca(
     Simulates how the CPU pipeline would execute the given instructions and
     reports throughput, latency, bottlenecks, and port pressure.
 
-    assembly:    x86-64 assembly (as produced by V8 JIT / perf / GDB disassemble)
-    cpu:         CPU model for simulation (default: host CPU).
-                 Examples: skylake, znver3, alderlake, cortex-a76
-    syntax:      "intel" (default) or "att"; auto-detected from GDB/perf output
+    assembly:    assembly text (from V8 JIT / perf / GDB disassemble)
+    arch:        target architecture — "x64" or "arm64"
+    cpu:         CPU model for scheduling simulation.
+                 x64: skylake, znver3, alderlake, znver4, ...
+                 arm64: neoverse-n1, neoverse-v2, cortex-a76, cortex-x2, ...
+    syntax:      x64 only — "intel" (default) or "att"; auto-detected from
+                 GDB/perf output. Ignored for arm64.
     bottleneck:  include bottleneck analysis showing what limits throughput
     timeline:    include cycle-by-cycle pipeline timeline (verbose)
     """
@@ -1417,29 +1421,36 @@ def llvm_mca(
             "Error: llvm-mca not found. Install LLVM (e.g. pacman -S llvm)."
         )
 
+    is_arm64 = arch.lower() in ("arm64", "aarch64")
+
     src = _clean_asm_for_mca(assembly.strip())
-    att = syntax.lower() == "att"
 
-    # Auto-detect AT&T syntax from % register prefixes (e.g. GDB default output)
-    if not att and _re.search(r"%[re]?[abcd]x|%[re]?[sd]i|%[re]?[bs]p|%r\d+|%xmm", src):
-        att = True
-
-    # Prepend syntax directive if not already present
-    if ".intel_syntax" not in src and ".att_syntax" not in src:
-        if att:
-            src = ".att_syntax\n" + src
-        else:
-            src = ".intel_syntax noprefix\n" + src
-
-    # output-asm-variant: 0=AT&T, 1=Intel
-    output_variant = "0" if att else "1"
+    if is_arm64:
+        att = False
+    else:
+        att = syntax.lower() == "att"
+        # Auto-detect AT&T syntax from % register prefixes (e.g. GDB default output)
+        if not att and _re.search(
+            r"%[re]?[abcd]x|%[re]?[sd]i|%[re]?[bs]p|%r\d+|%xmm", src
+        ):
+            att = True
+        # Prepend syntax directive if not already present
+        if ".intel_syntax" not in src and ".att_syntax" not in src:
+            if att:
+                src = ".att_syntax\n" + src
+            else:
+                src = ".intel_syntax noprefix\n" + src
 
     cmd = [
         mca,
-        f"--output-asm-variant={output_variant}",
         "--noalias",
         "--skip-unsupported-instructions=any",
     ]
+    if is_arm64:
+        cmd += ["-march=aarch64", "-mtriple=aarch64-linux-gnu"]
+    else:
+        # output-asm-variant: 0=AT&T, 1=Intel
+        cmd.append(f"--output-asm-variant={'0' if att else '1'}")
     if cpu:
         cmd.append(f"--mcpu={cpu}")
     if bottleneck:
