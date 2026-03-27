@@ -242,7 +242,11 @@ def fetch_job(job_id: str) -> dict[str, Any]:
 
     cached = pinpoint_cache.get_job(job_id)
     if cached and cached.get("status") in _TERMINAL_STATES:
-        return cached
+        # /results2/ is a transient results_url while Pinpoint is still
+        # generating the full results HTML; re-fetch to pick up the final URL.
+        results_url = cached.get("results_url") or ""
+        if not results_url.startswith("/results2/"):
+            return cached
     r = httpx.get(
         f"{_PINPOINT_BASE}/api/job/{job_id}", follow_redirects=True, timeout=30
     )
