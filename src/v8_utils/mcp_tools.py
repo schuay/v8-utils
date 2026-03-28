@@ -838,10 +838,11 @@ def gerrit_cq(
     patchset: int,
     log_lines: int = 50,
 ) -> CallToolResult:
-    """Check CQ/tryjob results for a Gerrit CL patchset.
+    """Show which CQ bots and tests failed for a Gerrit CL.
 
-    Shows a pass/fail summary of all tryjobs and, for failures, the failing
-    step name and tail of its log output.
+    Use this when a CL has failing tryjobs/tests and you need to see what
+    broke. Returns a bot pass/fail summary plus failure details: failed test
+    names, error messages, and stack traces.
 
     change:    CL number or Gerrit URL (e.g. "7706944" or full URL)
     patchset:  patchset number
