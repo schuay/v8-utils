@@ -205,7 +205,7 @@ def _format_job_list(jobs: list[dict]) -> str:
 
 @mcp.tool()
 def pinpoint_show_results(
-    job_url: str = "",
+    job_urls: str = "",
     show_all: bool = False,
     use_cas: bool = False,
     recent: int | None = None,
@@ -221,14 +221,15 @@ def pinpoint_show_results(
     (Mann-Whitney U, α=0.01), direction (↑improved/↓regressed).
     Sorted by %change descending.
 
-    job_url:   space-separated Pinpoint job URL(s) or job ID(s)
+    job_urls:  one or more Pinpoint job URLs or IDs, space-separated
+               (e.g. "14cc0d73090000 12fd3dd7090000")
     show_all:  if False (default), only show statistically significant results.
     use_cas:   if True, fetch raw per-run values from CAS isolates instead of
                the histogram HTML. Slower but surfaces richer sub-metrics for
                JetStream (Score, First, Average, Worst4 per story).
                Requires: gcloud auth application-default login
     recent:    if set, show results for the N most recent completed jobs
-               for the current user. Can be combined with job_url.
+               for the current user. Can be combined with job_urls.
     patch:     filter by Gerrit CL — any URL form, change ID, or crrev.
                "auto" detects from current branch; "none" clears the filter.
     status:    filter by status (in addition to the default Completed filter)
@@ -240,8 +241,8 @@ def pinpoint_show_results(
     """
     patch = resolve_patch_filter(patch)
     job_ids: list[str] = []
-    if job_url:
-        job_ids.extend(pinpoint.job_id_from_url(u) for u in job_url.split())
+    if job_urls:
+        job_ids.extend(pinpoint.job_id_from_url(u) for u in job_urls.split())
 
     filters = ["status=Completed"]
     if patch:
@@ -252,7 +253,7 @@ def pinpoint_show_results(
         filters.append(f"benchmark={benchmark}")
     if bot:
         filters.append(f"bot={bot}")
-    has_filters = len(filters) > 1 or recent
+    has_filters = len(filters) > 1 or recent or since
 
     if recent or has_filters:
         since_str = since or ("one month ago" if has_filters else None)
@@ -263,7 +264,7 @@ def pinpoint_show_results(
 
     if not job_ids:
         return _text_result(
-            "Provide a job_url, use recent=N, or pass filter flags (patch, benchmark, bot)."
+            "Provide job_urls, use recent=N, or pass filter flags (patch, benchmark, bot)."
         )
 
     paired = _fetch_job_details_sorted(job_ids)
