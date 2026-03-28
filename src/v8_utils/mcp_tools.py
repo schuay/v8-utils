@@ -713,55 +713,60 @@ def _summarize_log(full_log: str, tail: int) -> tuple[str, bool]:
     return "\n".join(lines), False
 
 
-def _bb_fetch_failure_details(failed_builds: list[dict], log_lines: int) -> list[dict]:
-    """Fetch failed step names and log tails for each failed build."""
-    import json
+def _bb_leaf_failures(build: dict) -> list[str]:
+    """Return leaf failed step names from a build (which already has steps)."""
+    failed = [s for s in build.get("steps", []) if s.get("status") == "FAILURE"]
+    names = {s["name"] for s in failed}
+    return [
+        s["name"]
+        for s in failed
+        if not any(o != s["name"] and o.startswith(s["name"] + "|") for o in names)
+    ]
 
+
+def _bb_fetch_failure_logs(failed_builds: list[dict], log_lines: int) -> list[dict]:
+    """Fetch log tails for failed steps across all builds, in parallel.
+
+    Expects builds to already contain steps (from bb ls -steps).
+    """
     if not failed_builds:
         return []
 
-    def fetch_one(build: dict) -> dict:
+    # Build the list of (build, step_name) pairs to fetch
+    work: list[tuple[dict, str]] = []
+    for build in failed_builds:
+        for step_name in _bb_leaf_failures(build):
+            work.append((build, step_name))
+
+    def fetch_log(item: tuple[dict, str]) -> tuple[dict, str, dict]:
+        build, step_name = item
         build_id = str(build.get("id", ""))
-        builder = _bb_builder_name(build)
-        result: dict = {"builder": builder, "build_id": build_id, "steps": []}
-
+        step_info: dict = {"name": step_name, "log": None, "log_summarized": False}
         try:
-            r = _bb_run(["get", build_id, "-steps", "-json"])
-            data = json.loads(r.stdout)
-        except (ValueError, json.JSONDecodeError) as e:
-            result["error"] = str(e)
-            return result
+            lr = _bb_run(["log", build_id, step_name, "stdout"], timeout=30)
+            text, matched = _summarize_log(lr.stdout, log_lines)
+            step_info["log"] = text
+            step_info["log_summarized"] = matched
+        except (ValueError, subprocess.TimeoutExpired):
+            step_info["log"] = "(log fetch failed or timed out)"
+        return (build, step_name, step_info)
 
-        failed_steps = [
-            s for s in data.get("steps", []) if s.get("status") == "FAILURE"
-        ]
-        # Filter to leaf steps only (skip parents whose children also failed)
-        failed_names = {s["name"] for s in failed_steps}
-        leaf_steps = [
-            s
-            for s in failed_steps
-            if not any(
-                other != s["name"] and other.startswith(s["name"] + "|")
-                for other in failed_names
-            )
-        ]
+    fns = [lambda w=w: fetch_log(w) for w in work]
+    results = _run_concurrent(fns)
 
-        for step in leaf_steps:
-            step_name = step.get("name", "unknown")
-            step_info: dict = {"name": step_name, "log": None}
-            try:
-                lr = _bb_run(["log", build_id, step_name, "stdout"], timeout=30)
-                text, matched = _summarize_log(lr.stdout, log_lines)
-                step_info["log"] = text
-                step_info["log_summarized"] = matched
-            except (ValueError, subprocess.TimeoutExpired):
-                step_info["log"] = "(log fetch failed or timed out)"
-            result["steps"].append(step_info)
+    # Group results back by build
+    by_build: dict[str, dict] = {}
+    for build, _step_name, step_info in results:
+        build_id = str(build.get("id", ""))
+        if build_id not in by_build:
+            by_build[build_id] = {
+                "builder": _bb_builder_name(build),
+                "build_id": build_id,
+                "steps": [],
+            }
+        by_build[build_id]["steps"].append(step_info)
 
-        return result
-
-    fns = [lambda b=b: fetch_one(b) for b in failed_builds]
-    return _run_concurrent(fns)
+    return list(by_build.values())
 
 
 def _format_cq_output(
@@ -857,7 +862,7 @@ def gerrit_cq(
     cl_spec = f"chromium-review.googlesource.com/c/v8/v8/+/{cl_number}/{patchset}"
 
     try:
-        r = _bb_run(["ls", "-cl", cl_spec, "-json"])
+        r = _bb_run(["ls", "-cl", cl_spec, "-json", "-steps"])
     except ValueError as e:
         return _text_result(f"Error: {e}")
 
@@ -866,7 +871,7 @@ def gerrit_cq(
         return _text_result(f"No builds found for CL {cl_number} patchset {patchset}.")
 
     cats = _bb_categorize(builds)
-    failure_details = _bb_fetch_failure_details(cats["FAILURE"], log_lines)
+    failure_details = _bb_fetch_failure_logs(cats["FAILURE"], log_lines)
     return _text_result(_format_cq_output(cl_number, patchset, cats, failure_details))
 
 
