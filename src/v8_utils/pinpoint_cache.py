@@ -5,12 +5,18 @@ repeated queries avoid re-fetching terminal (Completed/Failed/Cancelled)
 jobs from the Pinpoint API.
 
 Database location: ~/.local/share/v8-utils/cache.db
+
+Each thread gets its own SQLite connection (via threading.local) to avoid
+corruption from concurrent access.  WAL mode handles reader/writer
+serialization at the database level.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
+import sys
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,9 +25,9 @@ from urllib.parse import urlparse
 from platformdirs import user_data_dir
 
 _DB_PATH = Path(user_data_dir("v8-utils")) / "cache.db"
-_db: sqlite3.Connection | None = None
+_local = threading.local()
 _init_lock = threading.Lock()
-_lock = threading.Lock()  # serializes all DB operations
+_schema_ready = False
 
 _SCHEMA = """\
 CREATE TABLE IF NOT EXISTS jobs (
@@ -56,21 +62,73 @@ _SCHEMA_VERSION = 2  # bump when schema changes to clear stale caches
 
 
 def get_db() -> sqlite3.Connection:
-    """Return the module-level DB connection, creating it on first call."""
-    global _db
-    if _db is None:
+    """Return a per-thread DB connection, creating it on first call per thread."""
+    global _schema_ready
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        return conn
+    # One-time schema setup (first thread wins)
+    if not _schema_ready:
         with _init_lock:
-            if _db is None:
+            if not _schema_ready:
                 _DB_PATH.parent.mkdir(parents=True, exist_ok=True)
                 _ensure_schema_version()
-                conn = sqlite3.connect(
-                    str(_DB_PATH), timeout=10, check_same_thread=False
-                )
-                conn.execute("PRAGMA journal_mode=WAL")
-                conn.executescript(_SCHEMA)
-                conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
-                _db = conn
-    return _db
+                init_conn = sqlite3.connect(str(_DB_PATH), timeout=10)
+                init_conn.execute("PRAGMA journal_mode=WAL")
+                init_conn.executescript(_SCHEMA)
+                init_conn.execute(f"PRAGMA user_version={_SCHEMA_VERSION}")
+                init_conn.close()
+                _schema_ready = True
+    conn = sqlite3.connect(str(_DB_PATH), timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    _local.conn = conn
+    return conn
+
+
+def close_db() -> None:
+    """Close the current thread's connection, if any."""
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        conn.close()
+        _local.conn = None
+
+
+def _handle_corruption() -> None:
+    """Delete the corrupt DB and reset state for recreation."""
+    global _schema_ready
+    print(
+        f"Warning: cache database is corrupt — deleting and recreating.\n"
+        f"  If this recurs, manually remove: {_DB_PATH}",
+        file=sys.stderr,
+    )
+    # Close this thread's connection
+    conn: sqlite3.Connection | None = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+    with _init_lock:
+        _DB_PATH.unlink(missing_ok=True)
+        # Also remove WAL/SHM sidecar files
+        _DB_PATH.with_suffix(".db-wal").unlink(missing_ok=True)
+        _DB_PATH.with_suffix(".db-shm").unlink(missing_ok=True)
+        _schema_ready = False
+
+
+def _with_retry(fn):
+    """Retry once after corruption recovery."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except sqlite3.DatabaseError:
+            _handle_corruption()
+            return fn(*args, **kwargs)
+
+    return wrapper
 
 
 def _ensure_schema_version() -> None:
@@ -168,38 +226,38 @@ def _job_fields(job: dict) -> tuple:
     )
 
 
+@_with_retry
 def get_job(job_id: str) -> dict | None:
     """Look up a single job by ID. Returns the raw API dict or None."""
-    with _lock:
-        row = (
-            get_db()
-            .execute("SELECT data FROM jobs WHERE job_id = ?", (job_id,))
-            .fetchone()
-        )
+    row = (
+        get_db().execute("SELECT data FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+    )
     return json.loads(row[0]) if row else None
 
 
+@_with_retry
 def put_job(job: dict) -> None:
     """Insert or update a single job."""
-    with _lock:
-        get_db().execute(
-            "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            _job_fields(job),
-        )
-        get_db().commit()
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        _job_fields(job),
+    )
+    db.commit()
 
 
+@_with_retry
 def put_jobs(jobs: list[dict]) -> None:
     """Bulk insert/update jobs."""
-    with _lock:
-        db = get_db()
-        db.executemany(
-            "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            [_job_fields(j) for j in jobs if j.get("job_id")],
-        )
-        db.commit()
+    db = get_db()
+    db.executemany(
+        "INSERT OR REPLACE INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [_job_fields(j) for j in jobs if j.get("job_id")],
+    )
+    db.commit()
 
 
+@_with_retry
 def query_jobs(
     *,
     users: list[str] | None = None,
@@ -238,86 +296,87 @@ def query_jobs(
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
-    with _lock:
-        rows = get_db().execute(sql, params).fetchall()
+    rows = get_db().execute(sql, params).fetchall()
     return [json.loads(r[0]) for r in rows]
 
 
 # ── Results ───────────────────────────────────────────────────────────────────
 
 
+@_with_retry
 def get_results(job_id: str, source: str = "histogram") -> list[dict] | None:
     """Look up cached pivot_results for a job. Returns None on miss.
 
     source: "histogram" (default pivot_results) or "cas" (pivot_results_cas).
     """
-    with _lock:
-        row = (
-            get_db()
-            .execute(
-                "SELECT data FROM results WHERE job_id = ? AND source = ?",
-                (job_id, source),
-            )
-            .fetchone()
+    row = (
+        get_db()
+        .execute(
+            "SELECT data FROM results WHERE job_id = ? AND source = ?",
+            (job_id, source),
         )
+        .fetchone()
+    )
     return json.loads(row[0]) if row else None
 
 
+@_with_retry
 def put_results(job_id: str, rows: list[dict], source: str = "histogram") -> None:
     """Cache pivot_results rows for a completed job."""
-    with _lock:
-        get_db().execute(
-            "INSERT OR REPLACE INTO results VALUES (?, ?, ?)",
-            (job_id, source, json.dumps(rows)),
-        )
-        get_db().commit()
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO results VALUES (?, ?, ?)",
+        (job_id, source, json.dumps(rows)),
+    )
+    db.commit()
 
 
 # ── Watermarks ────────────────────────────────────────────────────────────────
 
 
+@_with_retry
 def get_range(user: str) -> tuple[str | None, str | None]:
     """Return (ceiling, floor) for a user, or (None, None) if uncached."""
-    with _lock:
-        row = (
-            get_db()
-            .execute("SELECT ceiling, floor FROM watermarks WHERE user = ?", (user,))
-            .fetchone()
-        )
+    row = (
+        get_db()
+        .execute("SELECT ceiling, floor FROM watermarks WHERE user = ?", (user,))
+        .fetchone()
+    )
     return (row[0], row[1]) if row else (None, None)
 
 
+@_with_retry
 def set_range(user: str, ceiling: str, floor: str) -> None:
     """Update the cached [floor, ceiling] range for a user."""
-    with _lock:
-        get_db().execute(
-            "INSERT OR REPLACE INTO watermarks VALUES (?, ?, ?)",
-            (user, ceiling, floor),
-        )
-        get_db().commit()
+    db = get_db()
+    db.execute(
+        "INSERT OR REPLACE INTO watermarks VALUES (?, ?, ?)",
+        (user, ceiling, floor),
+    )
+    db.commit()
 
 
 # ── Maintenance ───────────────────────────────────────────────────────────────
 
 
+@_with_retry
 def prune(days: int = 90) -> None:
     """Remove jobs and results older than `days`, updating floor accordingly."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    with _lock:
-        db = get_db()
-        db.execute(
-            "DELETE FROM results WHERE job_id IN "
-            "(SELECT job_id FROM jobs WHERE created < ?)",
-            (cutoff,),
-        )
-        db.execute("DELETE FROM jobs WHERE created < ?", (cutoff,))
-        # Remove watermarks for users with no remaining jobs
-        db.execute(
-            "DELETE FROM watermarks WHERE user NOT IN (SELECT DISTINCT user FROM jobs)"
-        )
-        # Update floor to oldest remaining job per user
-        db.execute(
-            "UPDATE watermarks SET floor = "
-            "(SELECT MIN(created) FROM jobs WHERE jobs.user = watermarks.user)"
-        )
-        db.commit()
+    db = get_db()
+    db.execute(
+        "DELETE FROM results WHERE job_id IN "
+        "(SELECT job_id FROM jobs WHERE created < ?)",
+        (cutoff,),
+    )
+    db.execute("DELETE FROM jobs WHERE created < ?", (cutoff,))
+    # Remove watermarks for users with no remaining jobs
+    db.execute(
+        "DELETE FROM watermarks WHERE user NOT IN (SELECT DISTINCT user FROM jobs)"
+    )
+    # Update floor to oldest remaining job per user
+    db.execute(
+        "UPDATE watermarks SET floor = "
+        "(SELECT MIN(created) FROM jobs WHERE jobs.user = watermarks.user)"
+    )
+    db.commit()
