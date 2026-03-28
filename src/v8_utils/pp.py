@@ -338,7 +338,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     job_urls = list(args.job_urls)
 
     filters = _build_filters(args, extra=["status=Completed"])
-    has_filters = len(filters) > 1 or args.recent
+    has_filters = len(filters) > 1 or args.recent or args.since
 
     progress = _make_progress()
 
