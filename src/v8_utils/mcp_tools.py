@@ -58,13 +58,13 @@ def _text_result(text: str) -> CallToolResult:
 
 
 @mcp.tool()
-def pinpoint_show_job(job_url: str) -> CallToolResult:
+def pinpoint_show_job(job_urls: str) -> CallToolResult:
     """Fetch and display key information about one or more Pinpoint jobs.
 
-    job_url: space-separated Pinpoint job URL(s) or job ID(s), e.g.
-             https://pinpoint-dot-chromeperf.appspot.com/job/12d17bdff10000
+    job_urls: one or more Pinpoint job URLs or IDs, space-separated
+              (e.g. "14cc0d73090000 12fd3dd7090000")
     """
-    urls = job_url.split()
+    urls = job_urls.split()
     if not urls:
         return _text_result("No job URLs provided.")
 
