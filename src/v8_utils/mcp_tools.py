@@ -643,30 +643,71 @@ def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
     return cats
 
 
-_LOG_MARKERS = ["Failed tests:", "FAILURES", "FAILED TEST", "not ok ", "error:"]
+_SUMMARY_MARKERS = ["Failed tests:", "FAILURES", "FAILED TEST"]
 
 
 def _summarize_log(full_log: str, tail: int) -> tuple[str, bool]:
-    """Extract the meaningful failure portion from a build log.
+    """Extract failure details from a build log.
 
-    Looks for common failure summary markers near the end and returns
-    from that point.  Falls back to the last `tail` lines.
+    Strategy:
+    1. Extract "not ok" blocks (TAP test failures) with their indented
+       detail lines (stack traces, error messages).
+    2. Extract trailing summary sections ("Failed tests:", etc.)
+    3. For non-TAP logs, extract lines containing "error:" or "FAILED".
+    4. Fall back to the last `tail` lines.
 
-    Returns (text, matched) where matched indicates a marker was found.
+    Returns (text, matched) where matched indicates structured failures
+    were found (vs plain tail).
     """
     lines = full_log.splitlines()
+    sections: list[str] = []
 
-    # Scan backwards for a failure marker
+    # 1. Extract "not ok" blocks with their indented details
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("not ok ") or lines[i].startswith("  not ok "):
+            block = [lines[i]]
+            i += 1
+            # Collect indented continuation lines (TAP YAML block)
+            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == "..."):
+                block.append(lines[i])
+                if lines[i].strip() == "...":
+                    i += 1
+                    break
+                i += 1
+            sections.append("\n".join(block))
+        else:
+            i += 1
+
+    # 2. Extract trailing summary (e.g. "Failed tests:" at end of log)
     for i in range(len(lines) - 1, max(len(lines) - tail - 1, -1), -1):
-        low = lines[i].lower().strip()
-        for m in _LOG_MARKERS:
-            if m.lower() in low:
-                section = lines[i:]
-                if len(section) > tail:
-                    section = section[:tail]
-                return "\n".join(section), True
+        stripped = lines[i].strip()
+        for m in _SUMMARY_MARKERS:
+            if stripped.startswith(m):
+                sections.append("\n".join(lines[i:]))
+                break
 
-    # Fallback: last tail lines
+    if sections:
+        result = "\n\n".join(sections)
+        # Cap total output
+        result_lines = result.splitlines()
+        if len(result_lines) > tail:
+            result_lines = result_lines[:tail]
+            result_lines.append(f"  ... (truncated to {tail} lines)")
+        return "\n".join(result_lines), True
+
+    # 3. For non-TAP logs: grab lines with error-like patterns
+    error_lines = [
+        l
+        for l in lines
+        if _re.search(r"\berror[:\[]\b|FAILED|fatal:", l, _re.IGNORECASE)
+    ]
+    if error_lines:
+        if len(error_lines) > tail:
+            error_lines = error_lines[-tail:]
+        return "\n".join(error_lines), True
+
+    # 4. Fallback: last tail lines
     if len(lines) > tail:
         lines = lines[-tail:]
     return "\n".join(lines), False
