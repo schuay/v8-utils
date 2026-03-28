@@ -581,6 +581,254 @@ def gerrit_fetch(
     return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
 
+# ── CQ / Buildbucket tools ──────────────────────────────────────────────────
+
+
+def _bb_run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
+    """Run a bb CLI command, raising ValueError on missing binary or auth."""
+    bb = shutil.which("bb")
+    if bb is None:
+        raise ValueError(
+            "bb (Buildbucket CLI) not found. "
+            "Install depot_tools and ensure it is on PATH."
+        )
+    r = subprocess.run([bb, *args], capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        stderr = r.stderr.strip()
+        if "Login required" in stderr or "not logged in" in stderr:
+            raise ValueError(f"bb auth required: run 'bb auth-login'.\n{stderr}")
+        if stderr:
+            raise ValueError(f"bb {args[0]} failed: {stderr}")
+    return r
+
+
+def _parse_bb_jsonl(stdout: str) -> list[dict]:
+    """Parse bb JSONL output (one JSON object per line)."""
+    import json
+
+    builds = []
+    for line in stdout.strip().splitlines():
+        line = line.strip()
+        if line:
+            try:
+                builds.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return builds
+
+
+def _bb_builder_name(build: dict) -> str:
+    """Extract 'project/bucket/builder' from a build dict."""
+    b = build.get("builder", {})
+    return "/".join(
+        p for p in [b.get("project"), b.get("bucket"), b.get("builder")] if p
+    )
+
+
+def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
+    """Group builds by status category."""
+    cats: dict[str, list[dict]] = {
+        "SUCCESS": [],
+        "FAILURE": [],
+        "INFRA_FAILURE": [],
+        "RUNNING": [],
+        "CANCELED": [],
+    }
+    for b in builds:
+        status = b.get("status", "")
+        if status in ("STARTED", "SCHEDULED"):
+            cats["RUNNING"].append(b)
+        elif status in cats:
+            cats[status].append(b)
+    return cats
+
+
+_LOG_MARKERS = ["Failed tests:", "FAILURES", "FAILED TEST", "not ok ", "error:"]
+
+
+def _summarize_log(full_log: str, tail: int) -> tuple[str, bool]:
+    """Extract the meaningful failure portion from a build log.
+
+    Looks for common failure summary markers near the end and returns
+    from that point.  Falls back to the last `tail` lines.
+
+    Returns (text, matched) where matched indicates a marker was found.
+    """
+    lines = full_log.splitlines()
+
+    # Scan backwards for a failure marker
+    for i in range(len(lines) - 1, max(len(lines) - tail - 1, -1), -1):
+        low = lines[i].lower().strip()
+        for m in _LOG_MARKERS:
+            if m.lower() in low:
+                section = lines[i:]
+                if len(section) > tail:
+                    section = section[:tail]
+                return "\n".join(section), True
+
+    # Fallback: last tail lines
+    if len(lines) > tail:
+        lines = lines[-tail:]
+    return "\n".join(lines), False
+
+
+def _bb_fetch_failure_details(failed_builds: list[dict], log_lines: int) -> list[dict]:
+    """Fetch failed step names and log tails for each failed build."""
+    import json
+
+    if not failed_builds:
+        return []
+
+    def fetch_one(build: dict) -> dict:
+        build_id = str(build.get("id", ""))
+        builder = _bb_builder_name(build)
+        result: dict = {"builder": builder, "build_id": build_id, "steps": []}
+
+        try:
+            r = _bb_run(["get", build_id, "-steps", "-json"])
+            data = json.loads(r.stdout)
+        except (ValueError, json.JSONDecodeError) as e:
+            result["error"] = str(e)
+            return result
+
+        failed_steps = [
+            s for s in data.get("steps", []) if s.get("status") == "FAILURE"
+        ]
+        # Filter to leaf steps only (skip parents whose children also failed)
+        failed_names = {s["name"] for s in failed_steps}
+        leaf_steps = [
+            s
+            for s in failed_steps
+            if not any(
+                other != s["name"] and other.startswith(s["name"] + "|")
+                for other in failed_names
+            )
+        ]
+
+        for step in leaf_steps:
+            step_name = step.get("name", "unknown")
+            step_info: dict = {"name": step_name, "log": None}
+            try:
+                lr = _bb_run(["log", build_id, step_name, "stdout"], timeout=30)
+                text, matched = _summarize_log(lr.stdout, log_lines)
+                step_info["log"] = text
+                step_info["log_summarized"] = matched
+            except (ValueError, subprocess.TimeoutExpired):
+                step_info["log"] = "(log fetch failed or timed out)"
+            result["steps"].append(step_info)
+
+        return result
+
+    fns = [lambda b=b: fetch_one(b) for b in failed_builds]
+    return _run_concurrent(fns)
+
+
+def _format_cq_output(
+    cl_number: str,
+    patchset: int,
+    cats: dict[str, list[dict]],
+    failure_details: list[dict],
+) -> str:
+    """Format CQ results into readable text."""
+    n_pass = len(cats["SUCCESS"])
+    n_fail = len(cats["FAILURE"])
+    n_infra = len(cats["INFRA_FAILURE"])
+    n_run = len(cats["RUNNING"])
+    n_cancel = len(cats["CANCELED"])
+    total = n_pass + n_fail + n_infra + n_run + n_cancel
+
+    parts = []
+    if n_pass:
+        parts.append(f"{n_pass} passed")
+    if n_fail:
+        parts.append(f"{n_fail} failed")
+    if n_infra:
+        parts.append(f"{n_infra} infra failures")
+    extra = ""
+    if n_run:
+        extra += f"; {n_run} running"
+    if n_cancel:
+        extra += f"; {n_cancel} canceled"
+
+    lines = [
+        f"CQ results for {cl_number}/{patchset}",
+        "",
+        f"Summary: {', '.join(parts)} (of {total} builds{extra})",
+    ]
+
+    if cats["RUNNING"]:
+        lines.append("")
+        names = [_bb_builder_name(b) for b in cats["RUNNING"]]
+        lines.append(f"Running: {', '.join(names)}")
+
+    for b in cats["INFRA_FAILURE"]:
+        lines.append("")
+        lines.append(f"INFRA_FAILURE: {_bb_builder_name(b)}")
+        sm = b.get("summaryMarkdown", "")
+        if sm:
+            lines.append(f"  {sm[:300]}")
+
+    for detail in failure_details:
+        lines.append("")
+        lines.append(f"FAILED: {detail['builder']}")
+        if detail.get("error"):
+            lines.append(f"  Error: {detail['error']}")
+            continue
+        lines.append(f"  Build: {detail['build_id']}")
+        for step in detail["steps"]:
+            lines.append(f"  Step: {step['name']}")
+            if step.get("log"):
+                if not step.get("log_summarized"):
+                    lines.append("  (log tail; best-effort extract)")
+                lines.append("")
+                lines.append(step["log"])
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def gerrit_cq(
+    change: str,
+    patchset: int,
+    log_lines: int = 50,
+) -> CallToolResult:
+    """Check CQ/tryjob results for a Gerrit CL patchset.
+
+    Shows a pass/fail summary of all tryjobs and, for failures, the failing
+    step name and tail of its log output.
+
+    change:    CL number or Gerrit URL (e.g. "7706944" or full URL)
+    patchset:  patchset number
+    log_lines: lines of failure log to include per failed step (default 50)
+    """
+    from .pinpoint_cache import parse_patch_fields
+
+    # Parse CL number from URL or bare number
+    _, cl_number, _ = parse_patch_fields(change)
+    if not cl_number:
+        # Try bare number
+        stripped = change.strip().split("/")[0]
+        if stripped.isdigit():
+            cl_number = stripped
+        else:
+            return _text_result(f"Error: cannot parse CL number from {change!r}")
+
+    cl_spec = f"chromium-review.googlesource.com/c/v8/v8/+/{cl_number}/{patchset}"
+
+    try:
+        r = _bb_run(["ls", "-cl", cl_spec, "-json"])
+    except ValueError as e:
+        return _text_result(f"Error: {e}")
+
+    builds = _parse_bb_jsonl(r.stdout)
+    if not builds:
+        return _text_result(f"No builds found for CL {cl_number} patchset {patchset}.")
+
+    cats = _bb_categorize(builds)
+    failure_details = _bb_fetch_failure_details(cats["FAILURE"], log_lines)
+    return _text_result(_format_cq_output(cl_number, patchset, cats, failure_details))
+
+
 # ── repo tools ───────────────────────────────────────────────────────────────
 
 _MAX_READ_LINES = 2000
