@@ -845,7 +845,6 @@ def _clean_log(text: str) -> str:
 
 def _format_cq_builder_detail(
     build: dict,
-    log_lines: int,
 ) -> str:
     """Fetch and format failure logs for a single builder."""
     builder = _bb_short_name(build)
@@ -873,13 +872,7 @@ def _format_cq_builder_detail(
         if raw_log is None:
             lines.append("(log fetch failed or timed out)")
         else:
-            cleaned = _clean_log(raw_log)
-            # Respect log_lines limit
-            cleaned_lines = cleaned.splitlines()
-            if len(cleaned_lines) > log_lines:
-                cleaned_lines = cleaned_lines[-log_lines:]
-                lines.append(f"(showing last {log_lines} lines)")
-            lines.append("\n".join(cleaned_lines))
+            lines.append(_clean_log(raw_log))
         lines.append("")
 
     return "\n".join(lines)
@@ -890,7 +883,8 @@ def gerrit_cq(
     change: str,
     patchset: int,
     builder: str = "",
-    log_lines: int = 200,
+    offset: int = 0,
+    limit: int = 200,
 ) -> CallToolResult:
     """Show CQ bot results for a Gerrit CL.
 
@@ -900,7 +894,8 @@ def gerrit_cq(
     change:    CL number or Gerrit URL (e.g. "7706944" or full URL)
     patchset:  patchset number
     builder:   builder name to zoom into (substring match, e.g. "linux64_rel")
-    log_lines: max log lines per failed step when zooming in (default 200)
+    offset:    line offset into builder detail output (default 0)
+    limit:     max lines to return for builder detail (default 200)
     """
     from .pinpoint_cache import parse_patch_fields
 
@@ -947,7 +942,17 @@ def gerrit_cq(
             f"Be more specific."
         )
 
-    return _text_result(_format_cq_builder_detail(matches[0], log_lines))
+    full = _format_cq_builder_detail(matches[0])
+    lines = full.splitlines()
+    total = len(lines)
+    selected = lines[offset : offset + limit]
+    result = "\n".join(selected)
+    if total > offset + limit:
+        result += (
+            f"\n(showing lines {offset + 1}–{offset + len(selected)}"
+            f" of {total}; use offset/limit to paginate)"
+        )
+    return _text_result(result)
 
 
 # ── repo tools ───────────────────────────────────────────────────────────────
