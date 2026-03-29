@@ -407,6 +407,9 @@ def run_d8(
 
     For benchmarking, use the jsb_run_bench tool instead.
 
+    Note: d8 prints trace output (--trace-turbo, --print-code, etc.) to
+    stdout, not stderr. Use stdout_file to capture traces to a file.
+
     args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
     build:       build directory name under repos["v8"]/out (default: config default_build)
     cwd:         working directory for d8 (default: repos["v8"])
