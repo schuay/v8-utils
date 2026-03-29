@@ -1042,15 +1042,18 @@ def repo_git_show(
     repo: str,
     path: str,
     offset: int = 0,
-    limit: int = _MAX_READ_LINES,
+    limit: int = 100,
     ref: str | None = None,
 ) -> CallToolResult:
-    """Read a file from a related source repo (git show / working tree).
+    """Read lines from a file in a related source repo.
+
+    Returns at most `limit` lines starting at `offset`. Use repo_git_grep
+    to find the right offset first, then read a targeted range.
 
     repo:   repo name from the repo:// MCP resources
     path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
     offset: 0-based line offset to start reading from (default: 0)
-    limit:  max lines to return (default: 2000)
+    limit:  max lines to return (default: 100)
     ref:    git ref to read from (e.g. commit hash, branch, tag).
             If omitted, reads from the working tree.
     """
