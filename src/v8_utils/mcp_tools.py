@@ -2202,15 +2202,17 @@ def worktree(
         raise ValueError(f"'name' is required for action={action!r}")
 
     if action == "create":
-        wt_path = worktree_mod.create(repo, name, branch, upstream=upstream)
+        result = worktree_mod.create(repo, name, branch, upstream=upstream)
+        wt_path = result["path"]
+        builds = "\n".join(result["builds"])
         return _text_result(
             f"Worktree created at {wt_path}\n"
             f"\n"
+            f"Build directories:\n{builds}\n"
+            f"\n"
             f"All commands must use this absolute path, e.g.:\n"
             f"  git -C {wt_path} status\n"
-            f"\n"
-            f"Build directories are NOT shared — use gm.py to set them up:\n"
-            f"  cd {wt_path} && python3 tools/dev/gm.py x64.release.d8\n"
+            f"  cd {wt_path} && autoninja -C out/x64.release d8\n"
         )
 
     if action == "remove":

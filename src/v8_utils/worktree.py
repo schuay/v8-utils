@@ -92,16 +92,36 @@ def _validate_name(name: str) -> None:
         )
 
 
+_DEFAULT_BUILDS = ["x64.optdebug", "x64.release"]
+
+
+def _setup_builds(wt_path: Path, builds: list[str]) -> list[str]:
+    """Run gm.py gn_args for each build config. Returns status lines."""
+    gm = wt_path / "tools" / "dev" / "gm.py"
+    if not gm.exists():
+        return [f"(gm.py not found, skipping build setup)"]
+    results = []
+    for build in builds:
+        try:
+            _run(["python3", str(gm), f"{build}.gn_args"], cwd=wt_path)
+            results.append(f"  out/{build.replace('.', '.')}: ok")
+        except subprocess.CalledProcessError as e:
+            results.append(
+                f"  out/{build.replace('.', '.')}: FAILED ({e.stderr.strip()[:80]})"
+            )
+    return results
+
+
 def create(
     repo: Path,
     name: str,
     branch: str | None = None,
     upstream: str = "main",
-) -> Path:
+) -> dict:
     """Create a worktree as a sibling of the main checkout, symlink gclient deps.
 
     upstream: base branch/ref for the new branch (default "main").
-    Returns the absolute path to the new worktree.
+    Returns {path, builds} with the worktree path and build setup results.
     """
     _validate_name(name)
     main = _find_main_worktree(repo)
@@ -131,7 +151,10 @@ def create(
         rel = Path(src).resolve().relative_to(dst.parent.resolve(), walk_up=True)
         dst.symlink_to(rel)
 
-    return wt_path
+    # Set up default build directories.
+    build_results = _setup_builds(wt_path, _DEFAULT_BUILDS)
+
+    return {"path": wt_path, "builds": build_results}
 
 
 def _remove_external_symlinks(wt_path: Path) -> None:
