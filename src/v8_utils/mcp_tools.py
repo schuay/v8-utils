@@ -1484,8 +1484,8 @@ def perf_tma(
 
 @mcp.tool()
 def perf_diff(
-    perf_before: str,
-    perf_after: str,
+    baseline: str,
+    experiment: str,
     dso: str | None = None,
     n: int = 30,
 ) -> CallToolResult:
@@ -1494,12 +1494,12 @@ def perf_diff(
     Returns the top N symbols sorted by |delta_pct|, so the biggest
     changes appear first regardless of direction.
 
-    perf_before: path to baseline perf.data
-    perf_after:  path to experiment perf.data
-    dso:         restrict to a specific shared object
-    n:           number of symbols to return (default 30)
+    baseline:   path to the baseline perf.data
+    experiment: path to the experiment perf.data
+    dso:        restrict to a specific shared object
+    n:          number of symbols to return (default 30)
     """
-    rows = perf_tools.diff(perf_before, perf_after, dso=dso, n=n)
+    rows = perf_tools.diff(baseline, experiment, dso=dso, n=n)
     if not rows:
         return _text_result("No symbol differences found.")
     lines = [f"{'delta':>8}  {'base%':>6}  {'after%':>7}  {'dso':<20}  symbol"]
