@@ -2165,6 +2165,7 @@ def worktree(
     action: str,
     name: str | None = None,
     branch: str | None = None,
+    upstream: str = "main",
 ) -> CallToolResult:
     """Manage V8 git worktrees with automatic gclient dependency symlinking.
 
@@ -2173,11 +2174,12 @@ def worktree(
     third_party/*, etc.) are symlinked from the main checkout — no gclient sync
     needed. To update shared deps, run gclient sync in the main checkout.
 
-    action: "create", "remove", or "list"
-    name:   worktree directory name (required for create/remove)
-    branch: branch to check out (create only, optional).
-            If it exists, checks it out. Otherwise creates a new branch off main.
-            Defaults to the worktree name.
+    action:   "create", "remove", or "list"
+    name:     worktree directory name (required for create/remove)
+    branch:   branch to check out (create only, optional).
+              If it exists, checks it out. Otherwise creates a new branch.
+              Defaults to the worktree name.
+    upstream: base branch/ref for the new branch (default "main")
     """
     repo = _resolve_repo("v8")
 
@@ -2197,7 +2199,7 @@ def worktree(
         raise ValueError(f"'name' is required for action={action!r}")
 
     if action == "create":
-        wt_path = worktree_mod.create(repo, name, branch)
+        wt_path = worktree_mod.create(repo, name, branch, upstream=upstream)
         return _text_result(f"Worktree created at {wt_path}")
 
     if action == "remove":

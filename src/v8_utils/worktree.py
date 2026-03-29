@@ -92,9 +92,15 @@ def _validate_name(name: str) -> None:
         )
 
 
-def create(repo: Path, name: str, branch: str | None = None) -> Path:
+def create(
+    repo: Path,
+    name: str,
+    branch: str | None = None,
+    upstream: str = "main",
+) -> Path:
     """Create a worktree as a sibling of the main checkout, symlink gclient deps.
 
+    upstream: base branch/ref for the new branch (default "main").
     Returns the absolute path to the new worktree.
     """
     _validate_name(name)
@@ -111,7 +117,7 @@ def create(repo: Path, name: str, branch: str | None = None) -> Path:
         cmd += [str(wt_path), branch]
     else:
         # -b creates a new branch; use explicit name or default to worktree name.
-        cmd += ["-b", branch or name, str(wt_path), "main"]
+        cmd += ["-b", branch or name, str(wt_path), upstream]
     _run(cmd, cwd=main)
 
     # Symlink gclient-managed deps.
