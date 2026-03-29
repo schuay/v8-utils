@@ -2200,7 +2200,13 @@ def worktree(
 
     if action == "create":
         wt_path = worktree_mod.create(repo, name, branch, upstream=upstream)
-        return _text_result(f"Worktree created at {wt_path}")
+        return _text_result(
+            f"Worktree created at {wt_path}\n"
+            f"\n"
+            f"All commands must use this absolute path, e.g.:\n"
+            f"  git -C {wt_path} status\n"
+            f"  cd {wt_path} && autoninja -C out/x64.release\n"
+        )
 
     if action == "remove":
         worktree_mod.remove(repo, name)
