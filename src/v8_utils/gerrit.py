@@ -223,6 +223,7 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             for d in ds:
                 d["_file"] = filepath
                 d["_draft"] = True
+                d.setdefault("author", {"email": "me"})
                 by_id[d["id"]] = d
 
     # Root comments only; build thread for each
