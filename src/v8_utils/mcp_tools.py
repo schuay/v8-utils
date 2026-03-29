@@ -643,76 +643,6 @@ def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
     return cats
 
 
-_SUMMARY_MARKERS = ["Failed tests:", "FAILURES", "FAILED TEST"]
-
-
-def _summarize_log(full_log: str, tail: int) -> tuple[str, bool]:
-    """Extract failure details from a build log.
-
-    Strategy:
-    1. Extract "not ok" blocks (TAP test failures) with their indented
-       detail lines (stack traces, error messages).
-    2. Extract trailing summary sections ("Failed tests:", etc.)
-    3. For non-TAP logs, extract lines containing "error:" or "FAILED".
-    4. Fall back to the last `tail` lines.
-
-    Returns (text, matched) where matched indicates structured failures
-    were found (vs plain tail).
-    """
-    lines = full_log.splitlines()
-    sections: list[str] = []
-
-    # 1. Extract "not ok" blocks with their indented details
-    i = 0
-    while i < len(lines):
-        if lines[i].startswith("not ok ") or lines[i].startswith("  not ok "):
-            block = [lines[i]]
-            i += 1
-            # Collect indented continuation lines (TAP YAML block)
-            while i < len(lines) and (lines[i].startswith("  ") or lines[i] == "..."):
-                block.append(lines[i])
-                if lines[i].strip() == "...":
-                    i += 1
-                    break
-                i += 1
-            sections.append("\n".join(block))
-        else:
-            i += 1
-
-    # 2. Extract trailing summary (e.g. "Failed tests:" at end of log)
-    for i in range(len(lines) - 1, max(len(lines) - tail - 1, -1), -1):
-        stripped = lines[i].strip()
-        for m in _SUMMARY_MARKERS:
-            if stripped.startswith(m):
-                sections.append("\n".join(lines[i:]))
-                break
-
-    if sections:
-        result = "\n\n".join(sections)
-        # Cap total output
-        result_lines = result.splitlines()
-        if len(result_lines) > tail:
-            result_lines = result_lines[:tail]
-            result_lines.append(f"  ... (truncated to {tail} lines)")
-        return "\n".join(result_lines), True
-
-    # 3. For non-TAP logs: grab lines with error-like patterns
-    error_lines = [
-        l
-        for l in lines
-        if _re.search(r"\berror[:\[]\b|FAILED|fatal:", l, _re.IGNORECASE)
-    ]
-    if error_lines:
-        if len(error_lines) > tail:
-            error_lines = error_lines[-tail:]
-        return "\n".join(error_lines), True
-
-    # 4. Fallback: last tail lines
-    if len(lines) > tail:
-        lines = lines[-tail:]
-    return "\n".join(lines), False
-
-
 def _bb_leaf_failures(build: dict) -> list[str]:
     """Return leaf failed step names from a build (which already has steps)."""
     failed = [s for s in build.get("steps", []) if s.get("status") == "FAILURE"]
@@ -724,58 +654,12 @@ def _bb_leaf_failures(build: dict) -> list[str]:
     ]
 
 
-def _bb_fetch_failure_logs(failed_builds: list[dict], log_lines: int) -> list[dict]:
-    """Fetch log tails for failed steps across all builds, in parallel.
-
-    Expects builds to already contain steps (from bb ls -steps).
-    """
-    if not failed_builds:
-        return []
-
-    # Build the list of (build, step_name) pairs to fetch
-    work: list[tuple[dict, str]] = []
-    for build in failed_builds:
-        for step_name in _bb_leaf_failures(build):
-            work.append((build, step_name))
-
-    def fetch_log(item: tuple[dict, str]) -> tuple[dict, str, dict]:
-        build, step_name = item
-        build_id = str(build.get("id", ""))
-        step_info: dict = {"name": step_name, "log": None, "log_summarized": False}
-        try:
-            lr = _bb_run(["log", build_id, step_name, "stdout"], timeout=30)
-            text, matched = _summarize_log(lr.stdout, log_lines)
-            step_info["log"] = text
-            step_info["log_summarized"] = matched
-        except (ValueError, subprocess.TimeoutExpired):
-            step_info["log"] = "(log fetch failed or timed out)"
-        return (build, step_name, step_info)
-
-    fns = [lambda w=w: fetch_log(w) for w in work]
-    results = _run_concurrent(fns)
-
-    # Group results back by build
-    by_build: dict[str, dict] = {}
-    for build, _step_name, step_info in results:
-        build_id = str(build.get("id", ""))
-        if build_id not in by_build:
-            by_build[build_id] = {
-                "builder": _bb_builder_name(build),
-                "build_id": build_id,
-                "steps": [],
-            }
-        by_build[build_id]["steps"].append(step_info)
-
-    return list(by_build.values())
-
-
-def _format_cq_output(
+def _format_cq_overview(
     cl_number: str,
     patchset: int,
     cats: dict[str, list[dict]],
-    failure_details: list[dict],
 ) -> str:
-    """Format CQ results into readable text."""
+    """Format CQ results as a compact overview (no logs)."""
     n_pass = len(cats["SUCCESS"])
     n_fail = len(cats["FAILURE"])
     n_infra = len(cats["INFRA_FAILURE"])
@@ -804,30 +688,122 @@ def _format_cq_output(
 
     if cats["RUNNING"]:
         lines.append("")
-        names = [_bb_builder_name(b) for b in cats["RUNNING"]]
-        lines.append(f"Running: {', '.join(names)}")
+        lines.append("RUNNING:")
+        for b in cats["RUNNING"]:
+            lines.append(f"  {_bb_short_name(b)}")
 
-    for b in cats["INFRA_FAILURE"]:
+    if cats["INFRA_FAILURE"]:
         lines.append("")
-        lines.append(f"INFRA_FAILURE: {_bb_builder_name(b)}")
-        sm = b.get("summaryMarkdown", "")
-        if sm:
-            lines.append(f"  {sm[:300]}")
+        lines.append("INFRA_FAILURE:")
+        for b in cats["INFRA_FAILURE"]:
+            sm = b.get("summaryMarkdown", "")
+            detail = f"  ({sm[:200]})" if sm else ""
+            lines.append(f"  {_bb_short_name(b)}{detail}")
 
-    for detail in failure_details:
+    if cats["FAILURE"]:
         lines.append("")
-        lines.append(f"FAILED: {detail['builder']}")
-        if detail.get("error"):
-            lines.append(f"  Error: {detail['error']}")
-            continue
-        lines.append(f"  Build: {detail['build_id']}")
-        for step in detail["steps"]:
-            lines.append(f"  Step: {step['name']}")
-            if step.get("log"):
-                if not step.get("log_summarized"):
-                    lines.append("  (log tail; best-effort extract)")
-                lines.append("")
-                lines.append(step["log"])
+        lines.append("FAILED:")
+        for b in cats["FAILURE"]:
+            step_names = _bb_leaf_failures(b)
+            if step_names:
+                steps_str = ", ".join(step_names[:3])
+                if len(step_names) > 3:
+                    steps_str += f", +{len(step_names) - 3} more"
+                lines.append(f"  {_bb_short_name(b)}  ({steps_str})")
+            else:
+                lines.append(f"  {_bb_short_name(b)}")
+
+    if n_pass:
+        lines.append("")
+        lines.append(f"{n_pass} passed (not shown)")
+
+    lines.append("")
+    lines.append("Use builder=<name> to zoom into a specific bot's failure logs.")
+
+    return "\n".join(lines)
+
+
+def _bb_short_name(build: dict) -> str:
+    """Extract just the builder name (without project/bucket prefix)."""
+    return build.get("builder", {}).get("builder", _bb_builder_name(build))
+
+
+def _dedup_lines(text: str) -> str:
+    """Collapse consecutive duplicate lines, showing count."""
+    lines = text.splitlines()
+    if not lines:
+        return text
+    out: list[str] = []
+    prev = lines[0]
+    count = 1
+    for line in lines[1:]:
+        if line == prev:
+            count += 1
+        else:
+            out.append(prev if count == 1 else f"{prev}  (x{count})")
+            prev = line
+            count = 1
+    out.append(prev if count == 1 else f"{prev}  (x{count})")
+    return "\n".join(out)
+
+
+_RE_INFRA_LOG = _re.compile(r"^\[?[DIW]\d{4}-\d{2}-\d{2}T|^I\d{4} |^INFO:|^\s*$")
+
+
+def _strip_trailing_infra(lines: list[str]) -> list[str]:
+    """Remove trailing infrastructure log lines (swarming, CAS, etc.)."""
+    # Walk backwards, dropping infra log lines
+    i = len(lines)
+    while i > 0 and _RE_INFRA_LOG.match(lines[i - 1]):
+        i -= 1
+    return lines[:i] if i < len(lines) else lines
+
+
+def _clean_log(text: str) -> str:
+    """Light cleanup of a build log: dedup lines, strip PASS/infra noise."""
+    lines = [l for l in text.splitlines() if not l.rstrip().endswith(": PASS")]
+    lines = _strip_trailing_infra(lines)
+    return _dedup_lines("\n".join(lines))
+
+
+def _format_cq_builder_detail(
+    build: dict,
+    log_lines: int,
+) -> str:
+    """Fetch and format failure logs for a single builder."""
+    builder = _bb_short_name(build)
+    build_id = str(build.get("id", ""))
+    step_names = _bb_leaf_failures(build)
+
+    lines = [f"Failure details for {builder} (build {build_id})", ""]
+
+    if not step_names:
+        lines.append("(no failed steps found)")
+        return "\n".join(lines)
+
+    def fetch_log(step_name: str) -> tuple[str, str | None]:
+        try:
+            lr = _bb_run(["log", build_id, step_name, "stdout"], timeout=30)
+            return step_name, lr.stdout
+        except (ValueError, subprocess.TimeoutExpired):
+            return step_name, None
+
+    fns = [lambda s=s: fetch_log(s) for s in step_names]
+    results = _run_concurrent(fns)
+
+    for step_name, raw_log in results:
+        lines.append(f"── {step_name} ──")
+        if raw_log is None:
+            lines.append("(log fetch failed or timed out)")
+        else:
+            cleaned = _clean_log(raw_log)
+            # Respect log_lines limit
+            cleaned_lines = cleaned.splitlines()
+            if len(cleaned_lines) > log_lines:
+                cleaned_lines = cleaned_lines[-log_lines:]
+                lines.append(f"(showing last {log_lines} lines)")
+            lines.append("\n".join(cleaned_lines))
+        lines.append("")
 
     return "\n".join(lines)
 
@@ -836,17 +812,18 @@ def _format_cq_output(
 def gerrit_cq(
     change: str,
     patchset: int,
-    log_lines: int = 50,
+    builder: str = "",
+    log_lines: int = 200,
 ) -> CallToolResult:
-    """Show which CQ bots and tests failed for a Gerrit CL.
+    """Show CQ bot results for a Gerrit CL.
 
-    Use this when a CL has failing tryjobs/tests and you need to see what
-    broke. Returns a bot pass/fail summary plus failure details: failed test
-    names, error messages, and stack traces.
+    Without builder: returns a compact overview of which bots passed/failed.
+    With builder: zooms into that bot's failure logs (with backtraces).
 
     change:    CL number or Gerrit URL (e.g. "7706944" or full URL)
     patchset:  patchset number
-    log_lines: lines of failure log to include per failed step (default 50)
+    builder:   builder name to zoom into (substring match, e.g. "linux64_rel")
+    log_lines: max log lines per failed step when zooming in (default 200)
     """
     from .pinpoint_cache import parse_patch_fields
 
@@ -872,8 +849,28 @@ def gerrit_cq(
         return _text_result(f"No builds found for CL {cl_number} patchset {patchset}.")
 
     cats = _bb_categorize(builds)
-    failure_details = _bb_fetch_failure_logs(cats["FAILURE"], log_lines)
-    return _text_result(_format_cq_output(cl_number, patchset, cats, failure_details))
+
+    if not builder:
+        return _text_result(_format_cq_overview(cl_number, patchset, cats))
+
+    # Zoom into a specific builder
+    matches = [
+        b for b in cats["FAILURE"] if builder.lower() in _bb_builder_name(b).lower()
+    ]
+    if not matches:
+        all_failed = [_bb_short_name(b) for b in cats["FAILURE"]]
+        return _text_result(
+            f"No failed builder matching {builder!r}.\n"
+            f"Failed builders: {', '.join(all_failed) or '(none)'}"
+        )
+    if len(matches) > 1:
+        names = [_bb_short_name(b) for b in matches]
+        return _text_result(
+            f"Multiple builders match {builder!r}: {', '.join(names)}\n"
+            f"Be more specific."
+        )
+
+    return _text_result(_format_cq_builder_detail(matches[0], log_lines))
 
 
 # ── repo tools ───────────────────────────────────────────────────────────────
