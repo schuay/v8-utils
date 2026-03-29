@@ -124,12 +124,24 @@ def _compact_change(change: dict) -> dict:
     }
 
 
+def _resolve_self(query: str) -> str:
+    """Replace 'self' in query operators with the configured user email."""
+    from . import config
+
+    cfg = config.load()
+    if not cfg.user:
+        return query
+    # Replace owner:self, reviewer:self, etc. with the actual email
+    return re.sub(r"\bself\b", cfg.user, query)
+
+
 def list_cls(query: str, limit: int = 25) -> list[dict]:
     """Query Gerrit CLs and return compact change info.
 
     query: Gerrit search query (e.g. "owner:self status:open project:v8/v8")
     limit: max results (default 25)
     """
+    query = _resolve_self(query)
     params = f"?q={quote(query, safe=':+')}&n={limit}&o=LABELS&o=DETAILED_ACCOUNTS"
     changes: list = _get(_GERRIT_HOST, f"/changes/{params}")
     return [_compact_change(c) for c in changes]

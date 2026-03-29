@@ -589,12 +589,12 @@ def gerrit_list_cls(query: str, limit: int = 25) -> CallToolResult:
     owner, labels (Code-Review, Commit-Queue scores), reviewers, and
     attention set.
 
-    Note: use explicit emails, not "self" (no Gerrit auth configured).
+    "self" in queries is resolved to the configured user email.
 
     query: Gerrit search query, e.g.:
-      "owner:user@chromium.org status:open project:v8/v8"
-      "reviewer:user@chromium.org -owner:user@chromium.org status:open"
-      "owner:user@chromium.org status:merged after:2026-03-01"
+      "owner:self status:open project:v8/v8"
+      "reviewer:self -owner:self status:open project:v8/v8"
+      "owner:self status:merged after:2026-03-01"
       "hashtag:compiler project:v8/v8 status:open"
     limit: max results (default 25)
     """
