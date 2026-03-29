@@ -14,6 +14,7 @@ from . import gerrit as gerrit_tools
 from . import jsb as jsb_module
 from . import perf as perf_tools
 from . import pinpoint
+from . import worktree as worktree_mod
 from .tools import (
     _fetch_job_detail,
     _fetch_job_details_sorted,
@@ -2154,3 +2155,53 @@ def godbolt_list_compilers(
         return _text_result("No compilers matched the filter.")
 
     return _text_result("\n".join(lines))
+
+
+# ── Worktree management ─────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def worktree(
+    action: str,
+    name: str | None = None,
+    branch: str | None = None,
+) -> CallToolResult:
+    """Manage V8 git worktrees with automatic gclient dependency symlinking.
+
+    Worktrees are created as siblings of the main V8 checkout (e.g. name="foo"
+    creates ~/src/v8/foo). gclient-managed dependencies (build/, buildtools/,
+    third_party/*, etc.) are symlinked from the main checkout — no gclient sync
+    needed. To update shared deps, run gclient sync in the main checkout.
+
+    action: "create", "remove", or "list"
+    name:   worktree directory name (required for create/remove)
+    branch: branch to check out (create only, optional).
+            If it exists, checks it out. Otherwise creates a new branch off main.
+            Defaults to the worktree name.
+    """
+    repo = _resolve_repo("v8")
+
+    if action == "list":
+        wts = worktree_mod.list_worktrees(repo)
+        if not wts:
+            return _text_result("No worktrees found.")
+        lines = [f"{'path':<50} {'branch':<30} {'head'}"]
+        lines.append("-" * len(lines[0]))
+        for wt in wts:
+            lines.append(
+                f"{wt['path']:<50} {wt.get('branch', ''):<30} {wt.get('head', '')}"
+            )
+        return _text_result("\n".join(lines))
+
+    if not name:
+        raise ValueError(f"'name' is required for action={action!r}")
+
+    if action == "create":
+        wt_path = worktree_mod.create(repo, name, branch)
+        return _text_result(f"Worktree created at {wt_path}")
+
+    if action == "remove":
+        worktree_mod.remove(repo, name)
+        return _text_result(f"Worktree '{name}' removed.")
+
+    raise ValueError(f"Unknown action {action!r}. Use 'create', 'remove', or 'list'.")
