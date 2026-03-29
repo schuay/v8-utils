@@ -57,6 +57,41 @@ def _text_result(text: str) -> CallToolResult:
     )
 
 
+def _paginate(lines: list[str], offset: int, limit: int) -> tuple[list[str], int, int]:
+    """Apply offset/limit pagination to a list of lines.
+
+    offset: 0-based line offset. Negative values count from the end
+            (e.g. -100 means last 100 lines).
+    limit:  max lines to return.
+
+    Returns (selected_lines, resolved_offset, total).
+    """
+    total = len(lines)
+    if offset < 0:
+        offset = max(total + offset, 0)
+    selected = lines[offset : offset + limit]
+    return selected, offset, total
+
+
+def _paginate_result(
+    lines: list[str], offset: int, limit: int, *, numbered: bool = False
+) -> str:
+    """Paginate lines and format with optional line numbers and truncation msg."""
+    selected, offset, total = _paginate(lines, offset, limit)
+    if numbered:
+        result = "\n".join(
+            f"{i + offset + 1:6}\t{line}" for i, line in enumerate(selected)
+        )
+    else:
+        result = "\n".join(selected)
+    if offset + limit < total:
+        result += (
+            f"\n(showing lines {offset + 1}\u2013{offset + len(selected)}"
+            f" of {total}; use offset/limit to paginate)"
+        )
+    return result
+
+
 @mcp.tool()
 def pinpoint_show_job(job_urls: str) -> CallToolResult:
     """Fetch and display key information about one or more Pinpoint jobs.
@@ -943,16 +978,7 @@ def gerrit_cq(
         )
 
     full = _format_cq_builder_detail(matches[0])
-    lines = full.splitlines()
-    total = len(lines)
-    selected = lines[offset : offset + limit]
-    result = "\n".join(selected)
-    if total > offset + limit:
-        result += (
-            f"\n(showing lines {offset + 1}–{offset + len(selected)}"
-            f" of {total}; use offset/limit to paginate)"
-        )
-    return _text_result(result)
+    return _text_result(_paginate_result(full.splitlines(), offset, limit))
 
 
 # ── repo tools ───────────────────────────────────────────────────────────────
@@ -1046,12 +1072,7 @@ def repo_git_show(
         if not target.is_file():
             raise ValueError(f"File not found: {path} (in {root})")
         lines = target.read_text(errors="replace").splitlines()
-    total = len(lines)
-    selected = lines[offset : offset + limit]
-    result = "\n".join(f"{i + offset + 1:6}\t{line}" for i, line in enumerate(selected))
-    if offset + limit < total:
-        result += f"\n(truncated — showing lines {offset + 1}–{offset + len(selected)} of {total}; use offset/limit to paginate)"
-    return _text_result(result)
+    return _text_result(_paginate_result(lines, offset, limit, numbered=True))
 
 
 @mcp.tool(
