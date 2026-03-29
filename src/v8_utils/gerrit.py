@@ -9,7 +9,6 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
-from . import pinpoint
 
 _XSSI = ")]}'\n"
 
@@ -44,18 +43,64 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
 
-def _get(api_base: str, path: str) -> dict | list:
-    """GET against the Gerrit REST API, with auth upgrade on 401."""
-    r = httpx.get(f"{api_base}{path}", timeout=30)
-    if r.status_code == 401:
-        headers = pinpoint.get_auth_headers()
-        if headers:
-            r = httpx.get(f"{api_base}/a{path}", headers=headers, timeout=30)
+def _gerrit_token() -> str | None:
+    """Get a Gerrit access token via git-credential-luci."""
+    try:
+        out = subprocess.check_output(
+            ["git-credential-luci", "get"],
+            input="",
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        for line in out.splitlines():
+            if line.startswith("password="):
+                return line[len("password=") :]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        pass
+    return None
+
+
+def _parse_json(r: httpx.Response) -> dict | list:
     r.raise_for_status()
     text = r.text
     if text.startswith(_XSSI):
         text = text[len(_XSSI) :]
     return json.loads(text)
+
+
+def _get(api_base: str, path: str, *, auth_required: bool = False) -> dict | list:
+    """GET against the Gerrit REST API.
+
+    Public endpoints are tried without auth first; on 401 we upgrade
+    automatically.  When auth_required is True, we go straight to the
+    authenticated endpoint and raise ValueError if no token is available.
+    """
+    if auth_required:
+        token = _gerrit_token()
+        if not token:
+            raise ValueError(
+                "Gerrit authentication required but git-credential-luci "
+                "returned no token. Visit\n"
+                "  https://chromium.googlesource.com/new-password\n"
+                "to set up credentials."
+            )
+        return _parse_json(
+            httpx.get(
+                f"{api_base}/a{path}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+        )
+    r = httpx.get(f"{api_base}{path}", timeout=30)
+    if r.status_code == 401:
+        token = _gerrit_token()
+        if token:
+            r = httpx.get(
+                f"{api_base}/a{path}",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=30,
+            )
+    return _parse_json(r)
 
 
 # ── Query CLs ─────────────────────────────────────────────────────────────────
@@ -150,11 +195,15 @@ def list_cls(query: str, limit: int = 25) -> list[dict]:
 # ── Comments ──────────────────────────────────────────────────────────────────
 
 
-def comments(change_url: str) -> list[dict]:
+def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
     """Return all published comments on a CL, as a flat list of threads.
 
     Each thread has: file, line, patch_set, author, message, replies[].
     Threads are sorted by file then line.
+
+    If include_drafts is True, also fetches your unpublished draft comments
+    (requires authentication via `luci-auth login`).  Drafts are marked
+    with draft=True.
     """
     api_base, project, change_id, _ = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
@@ -165,7 +214,16 @@ def comments(change_url: str) -> list[dict]:
     for filepath, cs in data.items():
         for c in cs:
             c["_file"] = filepath
+            c["_draft"] = False
             by_id[c["id"]] = c
+
+    if include_drafts:
+        drafts: dict = _get(api_base, f"/changes/{cid}/drafts", auth_required=True)
+        for filepath, ds in drafts.items():
+            for d in ds:
+                d["_file"] = filepath
+                d["_draft"] = True
+                by_id[d["id"]] = d
 
     # Root comments only; build thread for each
     def _thread(root: dict) -> dict:
@@ -173,7 +231,7 @@ def comments(change_url: str) -> list[dict]:
             [c for c in by_id.values() if c.get("in_reply_to") == root["id"]],
             key=lambda c: c.get("updated", ""),
         )
-        return {
+        t = {
             "file": root["_file"],
             "line": root.get("line"),
             "patch_set": root.get("patch_set"),
@@ -186,10 +244,14 @@ def comments(change_url: str) -> list[dict]:
                     "author": r.get("author", {}).get("email", "unknown"),
                     "message": r.get("message", ""),
                     "updated": r.get("updated", ""),
+                    **({"draft": True} if r.get("_draft") else {}),
                 }
                 for r in replies
             ],
         }
+        if root.get("_draft"):
+            t["draft"] = True
+        return t
 
     threads = [_thread(c) for c in by_id.values() if not c.get("in_reply_to")]
     threads.sort(key=lambda t: (t["file"], t["line"] or 0))

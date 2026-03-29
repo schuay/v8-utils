@@ -545,8 +545,8 @@ def jsb_run_bench(
 
 
 @mcp.tool()
-def gerrit_comments(change_url: str) -> CallToolResult:
-    """Fetch all published comments on a Gerrit CL, threaded by file and line.
+def gerrit_comments(change_url: str, include_drafts: bool = False) -> CallToolResult:
+    """Fetch comments on a Gerrit CL, threaded by file and line.
 
     Each entry represents a comment thread and includes:
       file, line, patch_set, author, message, updated, replies[]
@@ -554,11 +554,13 @@ def gerrit_comments(change_url: str) -> CallToolResult:
     Threads are sorted by file path then line number.  Use this to understand
     reviewer feedback or the current state of a code review.
 
-    change_url: Gerrit CL URL, e.g.:
+    change_url:     Gerrit CL URL, e.g.:
       https://chromium-review.googlesource.com/c/v8/v8/+/7650974
       https://chromium-review.googlesource.com/7650974
+    include_drafts: also fetch your unpublished draft comments (requires
+      authentication via `luci-auth login`)
     """
-    threads = gerrit_tools.comments(change_url)
+    threads = gerrit_tools.comments(change_url, include_drafts=include_drafts)
     if not threads:
         return _text_result("No comments found.")
     return _text_result(_format_gerrit_comments(threads))
@@ -572,15 +574,20 @@ def _format_gerrit_comments(threads: list[dict]) -> str:
             loc += f":{t['line']}"
         if t.get("patch_set"):
             loc += f" (ps{t['patch_set']})"
-        status = " [unresolved]" if t.get("unresolved") else ""
-        header = f"{loc}{status}"
+        tags = ""
+        if t.get("draft"):
+            tags += " [draft]"
+        if t.get("unresolved"):
+            tags += " [unresolved]"
+        header = f"{loc}{tags}"
         author = t.get("author", "unknown")
         msg = t.get("message", "").strip()
         lines = [header, f"  {author}: {msg}"]
         for r in t.get("replies", []):
             r_author = r.get("author", "unknown")
             r_msg = r.get("message", "").strip()
-            lines.append(f"  {r_author}: {r_msg}")
+            draft_tag = " [draft]" if r.get("draft") else ""
+            lines.append(f"  {r_author}{draft_tag}: {r_msg}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
