@@ -58,6 +58,83 @@ def _get(api_base: str, path: str) -> dict | list:
     return json.loads(text)
 
 
+# ── Query CLs ─────────────────────────────────────────────────────────────────
+
+_GERRIT_HOST = "https://chromium-review.googlesource.com"
+
+# Labels we care about for compact display.
+_INTERESTING_LABELS = ("Code-Review", "Commit-Queue")
+
+
+def _extract_label_scores(labels: dict) -> dict[str, list[tuple[str, int]]]:
+    """Extract {label: [(email, value), ...]} from the labels dict."""
+    result: dict[str, list[tuple[str, int]]] = {}
+    for label_name, label_info in labels.items():
+        votes = []
+        for entry in label_info.get("all", []):
+            value = entry.get("value", 0)
+            if value != 0:
+                email = entry.get("email", "unknown")
+                votes.append((email, value))
+        if votes:
+            result[label_name] = votes
+    return result
+
+
+def _compact_change(change: dict) -> dict:
+    """Distill a ChangeInfo into a compact dict for display."""
+    owner = change.get("owner", {})
+    labels = _extract_label_scores(change.get("labels", {}))
+
+    # Attention set: extract account emails and reasons
+    attention = []
+    for _acct_id, info in change.get("attention_set", {}).items():
+        acct = info.get("account", {})
+        attention.append(
+            {
+                "email": acct.get("email", f"account/{acct.get('_account_id', '?')}"),
+                "reason": info.get("reason", ""),
+            }
+        )
+
+    # Reviewers (just emails, skip service accounts)
+    reviewers = [
+        r.get("email", "unknown")
+        for r in change.get("reviewers", {}).get("REVIEWER", [])
+        if "SERVICE_USER" not in r.get("tags", [])
+    ]
+
+    return {
+        "number": change["_number"],
+        "subject": change.get("subject", ""),
+        "status": change.get("status", ""),
+        "owner": owner.get("email", f"account/{owner.get('_account_id', '?')}"),
+        "project": change.get("project", ""),
+        "branch": change.get("branch", ""),
+        "insertions": change.get("insertions", 0),
+        "deletions": change.get("deletions", 0),
+        "updated": change.get("updated", ""),
+        "wip": change.get("work_in_progress", False),
+        "hashtags": change.get("hashtags", []),
+        "unresolved_comments": change.get("unresolved_comment_count", 0),
+        "patchset": change.get("current_revision_number"),
+        "labels": labels,
+        "reviewers": reviewers,
+        "attention": attention,
+    }
+
+
+def list_cls(query: str, limit: int = 25) -> list[dict]:
+    """Query Gerrit CLs and return compact change info.
+
+    query: Gerrit search query (e.g. "owner:self status:open project:v8/v8")
+    limit: max results (default 25)
+    """
+    params = f"?q={quote(query, safe=':+')}&n={limit}&o=LABELS&o=DETAILED_ACCOUNTS"
+    changes: list = _get(_GERRIT_HOST, f"/changes/{params}")
+    return [_compact_change(c) for c in changes]
+
+
 # ── Comments ──────────────────────────────────────────────────────────────────
 
 

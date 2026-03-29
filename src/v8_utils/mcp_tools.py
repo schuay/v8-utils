@@ -581,6 +581,71 @@ def gerrit_fetch(
     return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
 
+@mcp.tool()
+def gerrit_list_cls(query: str, limit: int = 25) -> CallToolResult:
+    """Search for Gerrit CLs on chromium-review.googlesource.com.
+
+    Returns a compact summary of matching CLs: number, subject, status,
+    owner, labels (Code-Review, Commit-Queue scores), reviewers, and
+    attention set.
+
+    Note: use explicit emails, not "self" (no Gerrit auth configured).
+
+    query: Gerrit search query, e.g.:
+      "owner:user@chromium.org status:open project:v8/v8"
+      "reviewer:user@chromium.org -owner:user@chromium.org status:open"
+      "owner:user@chromium.org status:merged after:2026-03-01"
+      "hashtag:compiler project:v8/v8 status:open"
+    limit: max results (default 25)
+    """
+    cls = gerrit_tools.list_cls(query, limit=limit)
+    if not cls:
+        return _text_result(f"No CLs found for query: {query}")
+    return _text_result(_format_cl_list(cls))
+
+
+def _format_cl_list(cls: list[dict]) -> str:
+    """Format a list of compact change dicts into readable text."""
+    blocks = []
+    for cl in cls:
+        # Label scores
+        label_parts = []
+        for label, votes in cl.get("labels", {}).items():
+            scores = " ".join(f"{'+' if v > 0 else ''}{v}" for _, v in votes)
+            # Shorten well-known labels
+            short = label.replace("Code-Review", "CR").replace("Commit-Queue", "CQ")
+            label_parts.append(f"{short}:{scores}")
+        labels_str = f"  [{', '.join(label_parts)}]" if label_parts else ""
+
+        wip = " (WIP)" if cl.get("wip") else ""
+        comments = ""
+        if cl.get("unresolved_comments"):
+            comments = f"  {cl['unresolved_comments']} unresolved"
+
+        line1 = f'{cl["number"]}  {cl["status"]}{wip}  "{cl["subject"]}"'
+        line2 = (
+            f"  {cl['owner']}  "
+            f"+{cl['insertions']}/-{cl['deletions']}  "
+            f"ps{cl.get('patchset', '?')}  "
+            f"updated {cl['updated'][:10]}"
+            f"{labels_str}{comments}"
+        )
+
+        lines = [line1, line2]
+
+        if cl.get("reviewers"):
+            lines.append(f"  reviewers: {', '.join(cl['reviewers'])}")
+
+        if cl.get("attention"):
+            attn = [f"{a['email']} ({a['reason']})" for a in cl["attention"]]
+            lines.append(f"  attention: {', '.join(attn)}")
+
+        blocks.append("\n".join(lines))
+
+    header = f"{len(cls)} CL(s) found\n"
+    return header + "\n\n".join(blocks)
+
+
 # ── CQ / Buildbucket tools ──────────────────────────────────────────────────
 
 
