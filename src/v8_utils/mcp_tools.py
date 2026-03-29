@@ -691,7 +691,11 @@ def _bb_builder_name(build: dict) -> str:
 
 
 def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
-    """Group builds by status category."""
+    """Group builds by status category, deduplicating by builder name.
+
+    When multiple CQ attempts produce builds for the same builder,
+    keeps only the latest (highest build id) per builder name per category.
+    """
     cats: dict[str, list[dict]] = {
         "SUCCESS": [],
         "FAILURE": [],
@@ -705,6 +709,14 @@ def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
             cats["RUNNING"].append(b)
         elif status in cats:
             cats[status].append(b)
+    # Deduplicate: keep latest build per builder name in each category
+    for key in cats:
+        seen: dict[str, dict] = {}
+        for b in cats[key]:
+            name = _bb_builder_name(b)
+            if name not in seen or str(b.get("id", "")) > str(seen[name].get("id", "")):
+                seen[name] = b
+        cats[key] = list(seen.values())
     return cats
 
 
