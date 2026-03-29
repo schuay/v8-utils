@@ -84,11 +84,20 @@ def _symlink_paths(main: Path, gclient_root: Path) -> list[str]:
     return minimal
 
 
+def _validate_name(name: str) -> None:
+    """Reject names that could escape the gclient root."""
+    if "/" in name or name in (".", "..") or name.startswith("."):
+        raise ValueError(
+            f"invalid worktree name {name!r}: must be a plain directory name"
+        )
+
+
 def create(repo: Path, name: str, branch: str | None = None) -> Path:
     """Create a worktree as a sibling of the main checkout, symlink gclient deps.
 
     Returns the absolute path to the new worktree.
     """
+    _validate_name(name)
     main = _find_main_worktree(repo)
     gclient_root = _find_gclient_root(main)
     wt_path = gclient_root / name
@@ -119,8 +128,19 @@ def create(repo: Path, name: str, branch: str | None = None) -> Path:
     return wt_path
 
 
+def _remove_external_symlinks(wt_path: Path) -> None:
+    """Remove all symlinks under wt_path that point outside of it."""
+    resolved_root = wt_path.resolve()
+    for link in wt_path.rglob("*"):
+        if link.is_symlink():
+            target = link.resolve()
+            if not str(target).startswith(str(resolved_root)):
+                link.unlink()
+
+
 def remove(repo: Path, name: str) -> None:
     """Remove a worktree: clean up symlinks then git worktree remove."""
+    _validate_name(name)
     main = _find_main_worktree(repo)
     gclient_root = _find_gclient_root(main)
     wt_path = gclient_root / name
@@ -128,12 +148,10 @@ def remove(repo: Path, name: str) -> None:
     if not wt_path.exists():
         raise ValueError(f"worktree not found: {wt_path}")
 
-    # Remove symlinks so git doesn't see untracked content.
-    paths = _symlink_paths(main, gclient_root)
-    for dep in paths:
-        dst = wt_path / dep
-        if dst.is_symlink():
-            dst.unlink()
+    # Remove symlinks pointing outside the worktree so git doesn't see
+    # untracked content. This is independent of gclient — robust against
+    # DEPS changes since creation.
+    _remove_external_symlinks(wt_path)
 
     _run(["git", "worktree", "remove", str(wt_path)], cwd=main)
 
