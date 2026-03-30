@@ -330,7 +330,7 @@ def _format_job_detail(j: dict) -> str:
     return "\n".join(lines)
 
 
-def get_gerrit_issue_url() -> str | None:
+def get_gerrit_issue_url(cwd: str | None = None) -> str | None:
     """Read the Gerrit CL URL for the current git branch from git config.
 
     Returns a full URL including patchset, e.g.:
@@ -339,7 +339,9 @@ def get_gerrit_issue_url() -> str | None:
     """
 
     def _git(*args: str) -> str:
-        r = subprocess.run(["git"] + list(args), capture_output=True, text=True)
+        r = subprocess.run(
+            ["git"] + list(args), capture_output=True, text=True, cwd=cwd
+        )
         return r.stdout.strip() if r.returncode == 0 else ""
 
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
@@ -384,7 +386,7 @@ def chat_notify_watching(job_url: str) -> None:
             pass
 
 
-def _resolve_patch_sentinel(value: str) -> str | None:
+def _resolve_patch_sentinel(value: str, cwd: str | None = None) -> str | None:
     """Resolve a single patch sentinel: "auto" -> detect from branch, "none" -> None.
 
     Returns the resolved URL string, None (for "none"), or the original value.
@@ -393,13 +395,14 @@ def _resolve_patch_sentinel(value: str) -> str | None:
     if value.lower() == "none":
         return None
     if value.lower() == "auto":
-        detected = get_gerrit_issue_url()
+        detected = get_gerrit_issue_url(cwd=cwd)
         if detected is None:
             branch = (
                 subprocess.run(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     capture_output=True,
                     text=True,
+                    cwd=cwd,
                 ).stdout.strip()
                 or "(unknown)"
             )
@@ -423,12 +426,14 @@ def resolve_patch_filter(value: str | None) -> str | None:
     return _resolve_patch_sentinel(value)
 
 
-def resolve_exp_patches(exp_patches: list[str]) -> list[str | None]:
+def resolve_exp_patches(
+    exp_patches: list[str], cwd: str | None = None
+) -> list[str | None]:
     """Resolve exp_patch sentinels: "auto" -> detect from branch, "none" -> None.
 
     Raises ValueError if "auto" is used but no CL is found on the current branch.
     """
-    return [_resolve_patch_sentinel(p) for p in exp_patches]
+    return [_resolve_patch_sentinel(p, cwd=cwd) for p in exp_patches]
 
 
 def create_pinpoint_jobs(

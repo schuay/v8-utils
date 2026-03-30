@@ -500,7 +500,7 @@ def diff(
 # Matches call-graph branch lines in `perf report -g callee --stdio` output:
 #   "           --80.00%-- NativeRegExpExec"
 #   "           |           --60.00%-- malloc"
-_CG_BRANCH_RE = re.compile(r"^([\s|]*?)--+(\d+\.\d+)%--\s+(.+?)\s*$")
+_CG_BRANCH_RE = re.compile(r"^([\s|]*)--(\d+\.\d+)%--\s*(.+?)\s*$")
 
 
 def _parse_cg_paths(
@@ -508,20 +508,23 @@ def _parse_cg_paths(
     root_sym: str,
     root_pct: float,
     max_depth: int,
+    absolute_pcts: bool = False,
 ) -> list[tuple[float, list[str]]]:
     """DFS a callee call-graph block into (abs_pct, path) leaf entries.
 
-    Percentages on branch lines are relative to the parent; we multiply down
-    the tree to produce absolute percentages for each leaf path.
+    When absolute_pcts is False (default, --no-children mode), branch
+    percentages are relative to the parent and are multiplied down the tree.
+    When True (--children mode), branch percentages are already absolute
+    percentages of total samples and are used directly.
     """
     branches: list[tuple[int, str, float]] = []
     for line in block_lines:
         m = _CG_BRANCH_RE.match(line)
         if m:
             indent = len(m.group(1))
-            rel_pct = float(m.group(2)) / 100.0
+            pct_val = float(m.group(2))
             sym = m.group(3).strip()
-            branches.append((indent, sym, rel_pct))
+            branches.append((indent, sym, pct_val))
 
     if not branches:
         return [(root_pct, [root_sym])]
@@ -530,11 +533,15 @@ def _parse_cg_paths(
     root_node: dict = {"sym": root_sym, "pct": root_pct, "children": []}
     stack: list[tuple[int, dict]] = [(-1, root_node)]
 
-    for indent, sym, rel_pct in branches:
+    for indent, sym, pct_val in branches:
         while len(stack) > 1 and stack[-1][0] >= indent:
             stack.pop()
         parent = stack[-1][1]
-        node: dict = {"sym": sym, "pct": parent["pct"] * rel_pct, "children": []}
+        if absolute_pcts:
+            node_pct = pct_val
+        else:
+            node_pct = parent["pct"] * pct_val / 100.0
+        node: dict = {"sym": sym, "pct": node_pct, "children": []}
         parent["children"].append(node)
         stack.append((indent, node))
 
@@ -571,6 +578,11 @@ def flamegraph(
     min_pct:      omit paths below this % of total samples (default 0.5)
     depth:        maximum call-chain depth to expand (default 8)
     """
+    # When focus_symbol is set, use --children so the top-level percentage
+    # is inclusive (total) time and call-graph branch percentages are absolute
+    # (% of total samples).  Without focus_symbol, use --no-children for
+    # self-time ordering (like perf_hotspots but with callee-tree context).
+    use_children = focus_symbol is not None
     args = [
         "perf",
         "report",
@@ -580,10 +592,11 @@ def flamegraph(
         # use 0.01 as perf's internal threshold; we filter by min_pct in Python
         "-g",
         "callee,0.01,caller",
-        "--no-children",
         "-i",
         perf_data,
     ]
+    if not use_children:
+        args.append("--no-children")
     if dso:
         args += ["--dso", dso]
     if focus_symbol:
@@ -601,7 +614,9 @@ def flamegraph(
             return
         if focus_symbol and focus_symbol not in current_sym:
             return
-        for pct, path in _parse_cg_paths(block_lines, current_sym, current_pct, depth):
+        for pct, path in _parse_cg_paths(
+            block_lines, current_sym, current_pct, depth, absolute_pcts=use_children
+        ):
             if pct >= min_pct:
                 all_paths.append((pct, path))
 

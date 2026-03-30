@@ -340,6 +340,7 @@ def pinpoint_create_job(
     exp_js_flags: str | None = None,
     repeat: int = 150,
     bug_id: int | None = None,
+    v8_repo_path: str | None = None,
 ) -> CallToolResult:
     """Create Pinpoint A/B try jobs. Requires luci-auth login.
 
@@ -371,7 +372,9 @@ def pinpoint_create_job(
     exp_js_flags:   V8 flags for experiment, same format
     repeat:         number of bot runs per variant (default: 150)
     bug_id:         buganizer issue ID to associate with the job
+    v8_repo_path:   v8 repo for "auto" patch detection (default: configured v8 repo)
     """
+    repo_path = v8_repo_path or str(_resolve_repo("v8"))
     jobs = create_pinpoint_jobs(
         benchmarks=benchmark.split(),
         configurations=configuration.split(),
@@ -380,7 +383,7 @@ def pinpoint_create_job(
         base_git_hash=base_git_hash,
         exp_git_hash=exp_git_hash,
         base_patch=base_patch,
-        exp_patches=resolve_exp_patches([exp_patch]),
+        exp_patches=resolve_exp_patches([exp_patch], cwd=repo_path),
         base_js_flags=base_js_flags,
         exp_js_flags_list=[exp_js_flags],
         repeat=repeat,
@@ -595,13 +598,13 @@ def _format_gerrit_comments(threads: list[dict]) -> str:
 @mcp.tool()
 def gerrit_fetch(
     change_url: str,
-    repo_path: str = ".",
+    v8_repo_path: str | None = None,
     fetch: bool = True,
 ) -> dict:
     """Return the git ref for a Gerrit CL patchset, optionally fetching it.
 
     Gerrit stores each patchset at refs/changes/NN/CHANGE_ID/PATCHSET.
-    If fetch=True (default), runs `git fetch` in repo_path.
+    If fetch=True (default), runs `git fetch` in v8_repo_path.
 
     Returns: ref, remote, patchset, fetch_head (commit SHA, if fetched)
 
@@ -619,11 +622,12 @@ def gerrit_fetch(
 
     If no patchset is in the URL, the latest patchset is fetched.
 
-    change_url: Gerrit CL URL (with or without patchset suffix)
-    repo_path:  local git repo to fetch into (default: current directory)
-    fetch:      if False, return ref/remote without running git fetch
-                (useful for getting the ref name to fetch manually)
+    change_url:    Gerrit CL URL (with or without patchset suffix)
+    v8_repo_path:  local v8 git repo to fetch into (default: configured v8 repo)
+    fetch:         if False, return ref/remote without running git fetch
+                   (useful for getting the ref name to fetch manually)
     """
+    repo_path = v8_repo_path or str(_resolve_repo("v8"))
     return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
 
@@ -1425,6 +1429,12 @@ def perf_flamegraph(
       1. perf_hotspots  — find the hottest symbols
       2. perf_flamegraph(focus_symbol=X)  — understand full call context
       3. perf_annotate  — drill into hot instructions
+
+    When focus_symbol is set, shows the *inclusive* (total) cost breakdown
+    for that symbol — where its children spend time.  Percentages are
+    absolute (% of total samples).  This is the primary use case.
+
+    Without focus_symbol, shows self-time callee paths for all symbols.
 
     focus_symbol: restrict to call trees whose root matches this substring,
                   e.g. "RegExpPrototypeExec" or "Heap::AllocateRaw"
