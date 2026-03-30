@@ -1983,6 +1983,14 @@ _GODBOLT_ISET_MAP = {
     "arm64": {"aarch64", "arm64"},
 }
 
+# Default compiler IDs per arch — Godbolt-maintained trunk builds.
+_GODBOLT_DEFAULT_COMPILER = {
+    "x64": "clang_trunk",
+    "arm64": "armv8-clang-trunk",
+}
+
+_MCA_DEFAULT_CPU = {"x64": "skylake", "arm64": "cortex-a76"}
+
 
 def _godbolt_get_compilers(language: str) -> list[dict]:
     """Fetch and cache compiler list from Godbolt. Cached per-language for process lifetime."""
@@ -2003,77 +2011,59 @@ def _godbolt_get_compilers(language: str) -> list[dict]:
     return _godbolt_compiler_cache[language]
 
 
-def _godbolt_resolve_compiler(compiler: str, target: str, language: str) -> str:
-    """Resolve (compiler, target) to a Godbolt compiler ID."""
-    compilers = _godbolt_get_compilers(language)
-    iset_aliases = _GODBOLT_ISET_MAP.get(target, {target.lower()})
-
-    matches = []
-    for c in compilers:
-        iset = (c.get("instructionSet") or "").lower()
-        if iset not in iset_aliases:
-            continue
-        name = (c.get("name") or "").lower()
-        if compiler.lower() not in name:
-            continue
-        matches.append(c)
-
-    if not matches:
-        raise ValueError(
-            f"No Godbolt compiler found for compiler={compiler!r}, "
-            f"target={target!r}, language={language!r}"
-        )
-
-    def sort_key(c: dict) -> tuple[int, ...]:
-        try:
-            return tuple(int(x) for x in (c.get("semver") or "0").split("."))
-        except ValueError:
-            return (0,)
-
-    matches.sort(key=sort_key, reverse=True)
-    return matches[0]["id"]
-
-
-_MCA_DEFAULT_CPU = {"x64": "skylake", "arm64": "cortex-a76"}
+def _godbolt_infer_arch(compiler_id: str, language: str) -> str:
+    """Infer arch from a Godbolt compiler's instruction set metadata."""
+    for c in _godbolt_get_compilers(language):
+        if c.get("id") == compiler_id:
+            iset = (c.get("instructionSet") or "").lower()
+            for arch, aliases in _GODBOLT_ISET_MAP.items():
+                if iset in aliases:
+                    return arch
+            break
+    return "x64"
 
 
 @mcp.tool()
 def godbolt_compile(
     source: str,
-    target: str = "x64",
-    compiler: str = "clang",
+    arch: str = "x64",
+    compiler: str | None = None,
     language: str = "c++",
     flags: str = "-O3 -fno-strict-aliasing -fno-omit-frame-pointer",
-    compiler_id: str | None = None,
-    mca: bool = False,
+    mca: bool = True,
     opt_remarks: bool = False,
 ) -> CallToolResult:
     """Compile a code snippet on Godbolt and return the assembly output.
 
+    By default uses the latest clang trunk and runs llvm-mca analysis.
+
     source:      the source code to compile
-    target:      "x64" or "arm64" (default: "x64")
-    compiler:    "gcc" or "clang" (default: "clang")
+    arch:        "x64" (default) or "arm64"
+    compiler:    exact Godbolt compiler ID (default: clang_trunk for x64,
+                 armv8-clang-trunk for arm64).
+                 Use godbolt_list_compilers to find other IDs.
     language:    "c++" or "c" (default: "c++")
     flags:       compiler flags (default: V8 release flags)
-    compiler_id: exact Godbolt compiler ID; overrides target/compiler/language
-    mca:         run llvm-mca pipeline analysis on the assembly (clang only).
+    mca:         run llvm-mca pipeline analysis (default: True, clang only).
                  Shows throughput, bottlenecks, and port pressure per instruction.
-                 Useful to check if a loop is bound by execution ports or latency.
-    opt_remarks: include LLVM optimization pass remarks (clang only).
+    opt_remarks: include LLVM optimization pass remarks (default: False, clang only).
                  Shows which optimizations fired or failed and why.
-                 Useful to understand missed inlining, vectorization, etc.
     """
     import httpx
 
-    if (
-        (mca or opt_remarks)
-        and "clang" not in compiler.lower()
-        and (compiler_id is None or "clang" not in compiler_id.lower())
-    ):
-        return _text_result("Error: mca and opt_remarks require a Clang compiler.")
-
+    compiler_id = compiler or _GODBOLT_DEFAULT_COMPILER.get(arch)
     if compiler_id is None:
-        compiler_id = _godbolt_resolve_compiler(compiler, target, language)
+        return _text_result(
+            f"Unknown arch {arch!r}. Use 'x64' or 'arm64', "
+            f"or pass an explicit compiler ID."
+        )
+
+    # When compiler is explicitly specified, infer arch from metadata for MCA.
+    if compiler is not None:
+        arch = _godbolt_infer_arch(compiler_id, language)
+
+    if (mca or opt_remarks) and "clang" not in compiler_id.lower():
+        return _text_result("Error: mca and opt_remarks require a Clang compiler.")
 
     options: dict = {
         "userArguments": flags,
@@ -2086,7 +2076,7 @@ def godbolt_compile(
     }
 
     if mca:
-        cpu = _MCA_DEFAULT_CPU.get(target, "")
+        cpu = _MCA_DEFAULT_CPU.get(arch, "")
         mca_arg = f"-mcpu={cpu}" if cpu else ""
         options["tools"] = [{"id": "llvm-mcatrunk", "args": mca_arg}]
 
@@ -2163,7 +2153,8 @@ def godbolt_list_compilers(
         compilers = [
             c
             for c in compilers
-            if needle in (c.get("name") or "").lower()
+            if needle in (c.get("id") or "").lower()
+            or needle in (c.get("name") or "").lower()
             or needle in (c.get("instructionSet") or "").lower()
         ]
 
