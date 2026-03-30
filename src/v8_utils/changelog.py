@@ -43,6 +43,9 @@ ENTRIES: list[str] = [
     "`show-results` and `show-job` now display creation date and sort jobs oldest-first",
     "v8-utils mcp: added `llvm_mca` tool for local pipeline analysis of raw assembly from perf or d8",
     "Results are *cached locally* — repeated queries and `--patch` lookups are near-instant",
+    "v8-utils mcp: added `gerrit_list_cls` for searching CLs and `gerrit_cq` for viewing CQ/tryjob results",
+    "v8-utils mcp: `gerrit_comments` can now include your unpublished drafts with `include_drafts`",
+    "v8-utils mcp: added `worktree` tool for V8 git worktree management _(create/list/remove with auto-configured build dirs)_",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
