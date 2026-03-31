@@ -242,7 +242,6 @@ def _format_job_list(jobs: list[dict]) -> str:
 @mcp.tool()
 def pinpoint_show_results(
     job_urls: str = "",
-    show_all: bool = False,
     use_cas: bool = False,
     recent: int | None = None,
     patch: str | None = None,
@@ -259,7 +258,6 @@ def pinpoint_show_results(
 
     job_urls:  one or more Pinpoint job URLs or IDs, space-separated
                (e.g. "14cc0d73090000 12fd3dd7090000")
-    show_all:  if False (default), only show statistically significant results.
     use_cas:   if True, fetch raw per-run values from CAS isolates instead of
                the histogram HTML. Slower but surfaces richer sub-metrics for
                JetStream (Score, First, Average, Worst4 per story).
@@ -309,7 +307,7 @@ def pinpoint_show_results(
 
     fns = [
         lambda jid=jid: _format_results_table(
-            jid, show_all, use_cas, job=detail_map.get(jid)
+            jid, False, use_cas, job=detail_map.get(jid)
         )
         for jid in job_ids
     ]
