@@ -236,6 +236,8 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             "file": root["_file"],
             "line": root.get("line"),
             "patch_set": root.get("patch_set"),
+            "side": root.get("side"),
+            "commit_id": root.get("commit_id"),
             "unresolved": root.get("unresolved", False),
             "author": root.get("author", {}).get("email", "unknown"),
             "message": root.get("message", ""),

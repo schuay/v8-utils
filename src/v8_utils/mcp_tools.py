@@ -548,8 +548,10 @@ def jsb_run_bench(
 def gerrit_comments(change_url: str, include_drafts: bool = False) -> CallToolResult:
     """Fetch comments on a Gerrit CL, threaded by file and line.
 
-    Each entry represents a comment thread and includes:
-      file, line, patch_set, author, message, updated, replies[]
+    Each entry represents a comment thread showing file:line, the short
+    commit hash the comment is attached to, author, message, and replies.
+    The commit hash identifies the exact code version — use `git show
+    <hash>:path` to see the file as it was when the comment was written.
 
     Threads are sorted by file path then line number.  Use this to understand
     reviewer feedback or the current state of a code review.
@@ -573,7 +575,9 @@ def _format_gerrit_comments(threads: list[dict]) -> str:
         if t.get("line"):
             loc += f":{t['line']}"
         if t.get("patch_set"):
-            loc += f" (ps{t['patch_set']})"
+            side = "Base" if t.get("side") == "PARENT" else f"ps{t['patch_set']}"
+            commit = f" {t['commit_id'][:9]}" if t.get("commit_id") else ""
+            loc += f" ({side}{commit})"
         tags = ""
         if t.get("draft"):
             tags += " [draft]"
