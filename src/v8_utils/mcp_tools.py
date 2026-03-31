@@ -881,21 +881,18 @@ _RE_INFRA_LOG = _re.compile(
     r"|^swarming_bot_logs:"
     r"|^Use of LUCI "
     r"|^[0-9a-f]{16}: "
-    r"|^\s*$"
 )
 
 
 def _strip_infra(lines: list[str]) -> list[str]:
-    """Remove leading and trailing infrastructure log lines."""
-    # Strip leading
-    start = 0
-    while start < len(lines) and _RE_INFRA_LOG.match(lines[start]):
-        start += 1
-    # Strip trailing
-    end = len(lines)
-    while end > start and _RE_INFRA_LOG.match(lines[end - 1]):
-        end -= 1
-    return lines[start:end]
+    """Remove infrastructure log lines everywhere, then trim blank edges."""
+    lines = [l for l in lines if not _RE_INFRA_LOG.match(l)]
+    # Trim leading/trailing blank lines
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    while lines and not lines[-1].strip():
+        lines.pop()
+    return lines
 
 
 def _clean_log(text: str) -> str:
