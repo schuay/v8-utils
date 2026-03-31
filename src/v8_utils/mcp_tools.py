@@ -874,22 +874,34 @@ def _dedup_lines(text: str) -> str:
     return "\n".join(out)
 
 
-_RE_INFRA_LOG = _re.compile(r"^\[?[DIW]\d{4}-\d{2}-\d{2}T|^I\d{4} |^INFO:|^\s*$")
+_RE_INFRA_LOG = _re.compile(
+    r"^\[?[DIW]\d{4}-\d{2}-\d{2}T"
+    r"|^I\d{4} "
+    r"|^INFO:"
+    r"|^swarming_bot_logs:"
+    r"|^Use of LUCI "
+    r"|^[0-9a-f]{16}: "
+    r"|^\s*$"
+)
 
 
-def _strip_trailing_infra(lines: list[str]) -> list[str]:
-    """Remove trailing infrastructure log lines (swarming, CAS, etc.)."""
-    # Walk backwards, dropping infra log lines
-    i = len(lines)
-    while i > 0 and _RE_INFRA_LOG.match(lines[i - 1]):
-        i -= 1
-    return lines[:i] if i < len(lines) else lines
+def _strip_infra(lines: list[str]) -> list[str]:
+    """Remove leading and trailing infrastructure log lines."""
+    # Strip leading
+    start = 0
+    while start < len(lines) and _RE_INFRA_LOG.match(lines[start]):
+        start += 1
+    # Strip trailing
+    end = len(lines)
+    while end > start and _RE_INFRA_LOG.match(lines[end - 1]):
+        end -= 1
+    return lines[start:end]
 
 
 def _clean_log(text: str) -> str:
     """Light cleanup of a build log: dedup lines, strip PASS/infra noise."""
     lines = [l for l in text.splitlines() if not l.rstrip().endswith(": PASS")]
-    lines = _strip_trailing_infra(lines)
+    lines = _strip_infra(lines)
     return _dedup_lines("\n".join(lines))
 
 
