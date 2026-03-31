@@ -482,7 +482,6 @@ def jsb_run_bench(
     builds: list[str] = [],
     runs: int = 5,
     suite: str = "js3",
-    show_all: bool = False,
     perf: bool = False,
     perf_upload: bool = False,
 ) -> CallToolResult:
@@ -538,9 +537,7 @@ def jsb_run_bench(
     ]
 
     return _text_result(
-        jsb_module.format_table(
-            lineitems, suite_label, runs, variants, results, show_all=show_all
-        )
+        jsb_module.format_table(lineitems, suite_label, runs, variants, results)
     )
 
 
