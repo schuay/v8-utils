@@ -323,9 +323,7 @@ def _set_value(key: str, value: str) -> None:
     if pattern.search(text):
         text = pattern.sub(new_line, text)
     else:
-        if not text.endswith("\n"):
-            text += "\n"
-        text += new_line + "\n"
+        text = new_line + "\n" + text
     CONFIG_PATH.write_text(text)
 
 
