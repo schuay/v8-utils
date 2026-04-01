@@ -8,8 +8,10 @@ Shared between the ``lv`` CLI and MCP tools.
 from __future__ import annotations
 
 import bisect
+import logging
 import os
 import re
+import subprocess
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
@@ -242,6 +244,85 @@ class CodeMap:
         return list(self._entries)
 
 
+# ── C++ symbolizer ───────────────────────────────────────────────────────────
+
+_log = logging.getLogger(__name__)
+
+# nm output: "0000000000abcdef 0000000000000123 T symbolName"
+# or without size: "0000000000abcdef T symbolName"
+_NM_RE = re.compile(r"^([0-9a-fA-F]+)\s+(?:([0-9a-fA-F]+)\s+)?[A-Za-z]\s+(.+)$")
+
+
+class CppSymbolizer:
+    """Lazily resolves C++ symbols from shared libraries via nm."""
+
+    def __init__(self, shared_libs: list[SharedLibrary]) -> None:
+        self._libs = shared_libs
+        self._loaded: set[str] = set()
+
+    def symbolize_into(self, code_map: CodeMap) -> None:
+        """Load C++ symbols from all shared libraries into the code map."""
+        for lib in self._libs:
+            if lib.name in self._loaded:
+                continue
+            self._loaded.add(lib.name)
+            self._load_lib(lib, code_map)
+
+    def _load_lib(self, lib: SharedLibrary, code_map: CodeMap) -> None:
+        path = Path(lib.name)
+        if not path.exists():
+            _log.debug("Skipping %s: file not found", lib.name)
+            return
+        try:
+            result = subprocess.run(
+                ["nm", "-C", "-n", "-S", str(path)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            _log.debug("nm failed for %s", lib.name)
+            return
+        if result.returncode != 0:
+            _log.debug("nm returned %d for %s", result.returncode, lib.name)
+            return
+
+        symbols: list[tuple[int, int, str]] = []
+        for line in result.stdout.splitlines():
+            m = _NM_RE.match(line)
+            if not m:
+                continue
+            addr = int(m.group(1), 16)
+            size = int(m.group(2), 16) if m.group(2) else 0
+            name = m.group(3)
+            symbols.append((addr, size, name))
+
+        # Fill in missing sizes from gaps between consecutive symbols
+        for i in range(len(symbols) - 1):
+            if symbols[i][1] == 0:
+                gap = symbols[i + 1][0] - symbols[i][0]
+                symbols[i] = (symbols[i][0], gap, symbols[i][2])
+        if symbols and symbols[-1][1] == 0:
+            symbols[-1] = (symbols[-1][0], 1, symbols[-1][2])
+
+        lib_base = lib.start
+        lib_end = lib.end
+        for nm_addr, size, name in symbols:
+            runtime_addr = lib_base + nm_addr
+            if runtime_addr < lib_base or runtime_addr >= lib_end:
+                continue
+            code_map.add(
+                CodeEntry(
+                    type="CPP",
+                    name=name,
+                    start=runtime_addr,
+                    size=size,
+                    timestamp=0,
+                    state="",
+                )
+            )
+
+
 # ── V8Log parser ─────────────────────────────────────────────────────────────
 
 
@@ -263,6 +344,17 @@ class V8Log:
         self.ticks: list[TickEntry] = []
         self.scripts: dict[int, tuple[str, str]] = {}
         self._sfi_map: dict[int, int] = {}
+        self._symbolized = False
+
+    def symbolize(self) -> None:
+        """Load C++ symbols from shared libraries into the code map.
+
+        Lazy: only runs nm on first call, subsequent calls are no-ops.
+        """
+        if self._symbolized:
+            return
+        self._symbolized = True
+        CppSymbolizer(self.shared_libs).symbolize_into(self.code_map)
 
     @classmethod
     def parse(
@@ -715,6 +807,7 @@ def analyze_profile(
     top: int = 20,
     filter_pat: str | None = None,
 ) -> ProfileSummary:
+    log.symbolize()
     tick_counts: Counter[int | None] = Counter()
     vm_counts: Counter[str] = Counter()
 
@@ -769,6 +862,7 @@ def analyze_vms(log: V8Log) -> VmsSummary:
 
 
 def analyze_fn(log: V8Log, pattern: str) -> FnSummary:
+    log.symbolize()
     # Find all matching code entries
     matching: list[CodeEntry] = []
     matching_addrs: set[int] = set()

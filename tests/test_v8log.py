@@ -1,6 +1,5 @@
 """Unit tests for v8log — parser, analysis, and formatting."""
 
-from pathlib import Path
 from textwrap import dedent
 
 import pytest
@@ -8,18 +7,9 @@ import pytest
 from v8_utils.v8log import (
     CodeEntry,
     CodeMap,
-    DeoptEntry,
-    DeoptSummary,
-    FnSummary,
-    IcEntry,
-    IcSummary,
-    MapEvent,
-    MapSummary,
-    ProfileSummary,
+    CppSymbolizer,
     SharedLibrary,
-    TickEntry,
     V8Log,
-    VmsSummary,
     _split_line,
     _unescape,
     analyze_deopts,
@@ -866,3 +856,90 @@ class TestEdgeCases:
         assert entry is not None
         assert entry.type == "RegExp"
         assert entry.state == ""
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CppSymbolizer
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCppSymbolizer:
+    def test_symbolize_missing_binary(self):
+        """Symbolizer should silently skip missing binaries."""
+        lib = SharedLibrary("/nonexistent/binary", 0x1000, 0x2000, 0)
+        cm = CodeMap()
+        CppSymbolizer([lib]).symbolize_into(cm)
+        assert cm.lookup(0x1500) is None
+
+    def test_symbolize_into_codemap(self, tmp_path):
+        """Symbolizer should populate code map from nm output."""
+        # Create a tiny C program and compile it so nm has something to parse
+        src = tmp_path / "test.c"
+        src.write_text(
+            "int myfunc(int x) { return x + 1; }\nint main() { return myfunc(0); }\n"
+        )
+        binary = tmp_path / "test_bin"
+        import subprocess
+
+        result = subprocess.run(
+            ["cc", "-o", str(binary), str(src)],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            pytest.skip("cc not available")
+
+        # Find the address of myfunc via nm
+        nm_result = subprocess.run(
+            ["nm", "-n", str(binary)],
+            capture_output=True,
+            text=True,
+        )
+        myfunc_offset = None
+        for line in nm_result.stdout.splitlines():
+            if "myfunc" in line:
+                myfunc_offset = int(line.split()[0], 16)
+                break
+        if myfunc_offset is None:
+            pytest.skip("Could not find myfunc in nm output")
+
+        # Simulate the binary loaded at address 0x400000
+        lib_start = 0x400000
+        lib = SharedLibrary(str(binary), lib_start, lib_start + 0x100000, 0)
+        cm = CodeMap()
+        CppSymbolizer([lib]).symbolize_into(cm)
+
+        # myfunc should now be in the code map
+        entry = cm.lookup(lib_start + myfunc_offset)
+        assert entry is not None
+        assert entry.type == "CPP"
+        assert "myfunc" in entry.name
+
+    def test_symbolize_idempotent(self, tmp_path):
+        """V8Log.symbolize() should only run once."""
+        p = tmp_path / "v8.log"
+        p.write_text("shared-library,/nonexistent,0x1000,0x2000,0\n")
+        log = V8Log.parse(p)
+        log.symbolize()
+        assert log._symbolized is True
+        # Second call should be a no-op (no error even though binary doesn't exist)
+        log.symbolize()
+
+    def test_profile_triggers_symbolize(self, tmp_path):
+        """analyze_profile should auto-trigger symbolization."""
+        p = tmp_path / "v8.log"
+        p.write_text("tick,0x1000,100,0,0x0,0\n")
+        log = V8Log.parse(p)
+        assert log._symbolized is False
+        analyze_profile(log)
+        assert log._symbolized is True
+
+    def test_fn_triggers_symbolize(self, tmp_path):
+        """analyze_fn should auto-trigger symbolization."""
+        p = tmp_path / "v8.log"
+        p.write_text(
+            "code-creation,LazyCompile,0,100,0x1000,200,fn test.js:1:1,0x5000,~\n"
+        )
+        log = V8Log.parse(p)
+        assert log._symbolized is False
+        analyze_fn(log, "fn")
+        assert log._symbolized is True
