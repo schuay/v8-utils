@@ -226,10 +226,28 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
                 d.setdefault("author", {"email": "me"})
                 by_id[d["id"]] = d
 
+    # Map each comment to its thread root by walking in_reply_to chains.
+    def _find_root(c: dict) -> str:
+        seen: set[str] = set()
+        cur = c
+        while cur.get("in_reply_to") and cur["in_reply_to"] in by_id:
+            if cur["id"] in seen:
+                break  # cycle guard
+            seen.add(cur["id"])
+            cur = by_id[cur["in_reply_to"]]
+        return cur["id"]
+
+    # Group all non-root comments by their thread root.
+    children: dict[str, list[dict]] = {}
+    for c in by_id.values():
+        if c.get("in_reply_to"):
+            root_id = _find_root(c)
+            children.setdefault(root_id, []).append(c)
+
     # Root comments only; build thread for each
     def _thread(root: dict) -> dict:
         replies = sorted(
-            [c for c in by_id.values() if c.get("in_reply_to") == root["id"]],
+            children.get(root["id"], []),
             key=lambda c: c.get("updated", ""),
         )
         t = {
@@ -238,7 +256,7 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             "patch_set": root.get("patch_set"),
             "side": root.get("side"),
             "commit_id": root.get("commit_id"),
-            "unresolved": root.get("unresolved", False),
+            "unresolved": (replies[-1] if replies else root).get("unresolved", False),
             "author": root.get("author", {}).get("email", "unknown"),
             "message": root.get("message", ""),
             "updated": root.get("updated", ""),
