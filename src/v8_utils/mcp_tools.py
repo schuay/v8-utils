@@ -477,25 +477,26 @@ def run_d8(
 @mcp.tool()
 def jsb_run_bench(
     lineitems: list[str] | None = None,
-    builds: list[str] = [],
+    binaries: list[str] = [],
     runs: int = 5,
     suite: str = "js3",
     perf: bool = False,
     perf_upload: bool = False,
 ) -> CallToolResult:
-    """Run a JetStream2/3 story with one or more JS shell builds and return scores.
+    """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
 
     lineitems: benchmark story names, e.g. ["regexp-octane", "chai-wtb"].
                Omit to run the full suite.
-    builds: list of "build[:flags]" specs under v8_out, or full paths
-            to any JS shell binary (d8, jsc, etc.), e.g.:
-              ["release-main", "release-lto:--turbolev-future",
-               "/home/user/v8-alt/out/release/d8",
-               "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
+    binaries: list of "build[:flags]" specs under v8_out, or absolute paths to
+              JS shell *binaries* (d8, jsc, etc.) — NOT build directories.
+              Pass the executable file itself, e.g.:
+                ["release-main", "release-lto:--turbolev-future",
+                 "/home/user/v8-alt/out/x64.release/d8",
+                 "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
     perf:   if True, record a local perf trace (no upload) instead of
-            running for scores.  Requires exactly one build.  Returns the
+            running for scores.  Requires exactly one binary.  Returns the
             perf.data path for use with perf_hotspots, perf_annotate, etc.
     perf_upload: like perf, but also uploads the trace via pprof.
 
@@ -507,17 +508,22 @@ def jsb_run_bench(
     suite_dir = cfg.repos["js3"].path if js3 else cfg.repos["js2"].path
     suite_label = "JS3" if js3 else "JS2"
 
-    variants = [jsb_module.Variant.parse(b) for b in builds]
+    variants = [jsb_module.Variant.parse(b) for b in binaries]
     for v in variants:
         d8 = v.d8(cfg.v8_out)
+        if d8.is_dir():
+            raise ValueError(
+                f"{d8} is a directory, not a binary. "
+                f'Pass the executable itself, e.g. "{d8}/d8".'
+            )
         if not d8.exists():
-            raise ValueError(f"d8 not found: {d8}")
+            raise ValueError(f"binary not found: {d8}")
 
     if perf or perf_upload:
         if perf and perf_upload:
             raise ValueError("perf and perf_upload are mutually exclusive")
         if len(variants) != 1:
-            raise ValueError("perf/perf_upload requires exactly one build")
+            raise ValueError("perf/perf_upload requires exactly one binary")
         return _text_result(
             jsb_module.run_perf(
                 variants[0],
