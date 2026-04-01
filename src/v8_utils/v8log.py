@@ -133,11 +133,15 @@ class CodeEntry:
 
     @property
     def func_name(self) -> str:
+        if self.type == "CPP":
+            return self.name
         idx = self.name.find(" ")
         return self.name[:idx] if idx != -1 else self.name
 
     @property
     def source(self) -> str:
+        if self.type == "CPP":
+            return ""
         idx = self.name.find(" ")
         return self.name[idx + 1 :] if idx != -1 else ""
 
