@@ -165,10 +165,7 @@ def run_v8log(
     """
     log_path = output or (suite_dir / "v8.log")
     extra_flags = [
-        "--prof",
-        "--log-ic",
-        "--log-maps",
-        "--log-deopt",
+        "--log-all",
         f"--logfile={log_path}",
     ]
     d8 = variant.d8(v8_out)
