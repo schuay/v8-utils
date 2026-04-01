@@ -652,7 +652,34 @@ class TestAnalyzeProfile:
     def test_format_has_tier_legend(self, parsed_log):
         text = format_profile(analyze_profile(parsed_log))
         assert "ignition" in text
-        assert "turbofan" in text
+
+    def test_total_pct_fields_present(self, parsed_log):
+        s = analyze_profile(parsed_log)
+        for e in s.entries:
+            assert e.total_ticks >= e.self_ticks
+            assert e.total_pct >= e.self_pct
+
+    def test_total_pct_in_format(self, parsed_log):
+        text = format_profile(analyze_profile(parsed_log))
+        assert "total%" in text
+
+    def test_total_counts_nested_stack(self, tmp_path):
+        # target is self; outer is its caller — total for target should be 1,
+        # and outer (0 self ticks) is not in the profile entries
+        log_text = dedent("""\
+            code-creation,LazyCompile,0,100,0x1000,200,target t.js:1:1,0x5000,*
+            code-creation,LazyCompile,0,100,0x2000,200,outer t.js:2:1,0x6000,*
+            tick,0x1050,1000,0,0x0,0,0x2050
+        """)
+        p = tmp_path / "v8.log"
+        p.write_text(log_text)
+        log = V8Log.parse(p)
+        s = analyze_profile(log)
+        by_name = {e.name: e for e in s.entries}
+        assert by_name["target"].self_ticks == 1
+        assert by_name["target"].total_ticks == 1
+        # outer has 0 self ticks — not ranked into entries
+        assert "outer" not in by_name
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -636,6 +636,8 @@ class MapSummary:
 class ProfileEntry:
     self_ticks: int
     self_pct: float
+    total_ticks: int
+    total_pct: float
     name: str
     source: str
     tier: str
@@ -808,25 +810,47 @@ def analyze_profile(
     filter_pat: str | None = None,
 ) -> ProfileSummary:
     log.symbolize()
-    tick_counts: Counter[int | None] = Counter()
+    self_counts: Counter[int | None] = Counter()
+    total_counts: Counter[int | None] = Counter()
     vm_counts: Counter[str] = Counter()
 
     for tick in log.ticks:
         vm_counts[VM_STATES.get(tick.vm_state, "OTHER")] += 1
-        # Self-time: attribute to the top-of-stack (pc)
+        # Self: top-of-stack only
         entry = log.code_map.lookup(tick.pc)
-        if filter_pat and entry and not fnmatch(entry.func_name, filter_pat):
-            continue
-        tick_counts[entry.start if entry else None] += 1
+        self_counts[entry.start if entry else None] += 1
+        # Total: walk the full call stack (stack[0] == pc), count each fn once
+        seen: set[int | None] = set()
+        for addr in tick.stack:
+            ce = log.code_map.lookup(addr)
+            k = ce.start if ce else None
+            if k not in seen:
+                seen.add(k)
+                total_counts[k] += 1
 
     total = len(log.ticks)
+    # Rank by self ticks; apply filter only to what we show
+    ranked = [
+        (addr, count)
+        for addr, count in self_counts.most_common()
+        if not filter_pat
+        or addr is None
+        or (
+            (e := log.code_map.lookup(addr)) is not None
+            and fnmatch(e.func_name, filter_pat)
+        )
+    ][:top]
+
     entries: list[ProfileEntry] = []
-    for addr, count in tick_counts.most_common(top):
+    for addr, sc in ranked:
+        tc = total_counts.get(addr, 0)
         if addr is None:
             entries.append(
                 ProfileEntry(
-                    self_ticks=count,
-                    self_pct=100.0 * count / total if total else 0,
+                    self_ticks=sc,
+                    self_pct=100.0 * sc / total if total else 0,
+                    total_ticks=tc,
+                    total_pct=100.0 * tc / total if total else 0,
                     name="(unknown)",
                     source="",
                     tier="",
@@ -838,8 +862,10 @@ def analyze_profile(
             if entry:
                 entries.append(
                     ProfileEntry(
-                        self_ticks=count,
-                        self_pct=100.0 * count / total if total else 0,
+                        self_ticks=sc,
+                        self_pct=100.0 * sc / total if total else 0,
+                        total_ticks=tc,
+                        total_pct=100.0 * tc / total if total else 0,
                         name=entry.func_name,
                         source=entry.source,
                         tier=entry.tier,
@@ -882,20 +908,18 @@ def analyze_fn(log: V8Log, pattern: str) -> FnSummary:
             fn_ics.append(ic)
 
     # Count ticks and extract callers
+    # tick.stack[0] == tick.pc (self), so walk tick.stack directly
     self_ticks = 0
     total_ticks = 0
     caller_counts: Counter[tuple[str, str]] = Counter()
     for tick in log.ticks:
-        # Self: top of stack in matching code
-        entry = log.code_map.lookup(tick.pc)
-        if entry and entry.start in matching_addrs:
-            self_ticks += 1
-        # Total: anywhere in stack in matching code; extract callers
         for i, addr in enumerate(tick.stack):
             ce = log.code_map.lookup(addr)
             if ce and ce.start in matching_addrs:
+                if i == 0:
+                    self_ticks += 1
                 total_ticks += 1
-                # Caller is the next frame in the stack (caller of current)
+                # Caller: one level up (what called us)
                 if i + 1 < len(tick.stack):
                     caller = log.code_map.lookup(tick.stack[i + 1])
                     if caller:
@@ -1104,6 +1128,7 @@ def format_profile(summary: ProfileSummary, ansi: bool = False) -> str:
         padding=(0, 1),
     )
     table.add_column("self%", justify="right")
+    table.add_column("total%", justify="right")
     table.add_column("ticks", justify="right")
     table.add_column("tier")
     table.add_column("name")
@@ -1113,6 +1138,7 @@ def format_profile(summary: ProfileSummary, ansi: bool = False) -> str:
         marker = e.tier_marker if e.tier_marker else " "
         table.add_row(
             f"{e.self_pct:.1f}%",
+            f"{e.total_pct:.1f}%",
             str(e.self_ticks),
             marker,
             e.name,
