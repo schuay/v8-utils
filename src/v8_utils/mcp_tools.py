@@ -30,7 +30,39 @@ from .tools import (
     resolve_patch_filter,
 )
 
-mcp = FastMCP("v8-utils", log_level="WARNING")
+
+def _repo_summary() -> str:
+    """One-line summary of configured repos for embedding in tool descriptions."""
+    cfg = config.load()
+    parts = []
+    for alias, entry in cfg.repos.items():
+        if entry.path.is_dir():
+            parts.append(f"{alias} ({entry.desc})" if entry.desc else alias)
+    return ", ".join(parts)
+
+
+_REPOS_LINE = _repo_summary()
+
+mcp = FastMCP(
+    "v8-utils",
+    log_level="WARNING",
+    instructions=(
+        f"V8 engine development toolkit. Configured repos: {_REPOS_LINE}.\n"
+        "\n"
+        "Tools: "
+        "repo_git_* (search/read companion repos), "
+        "run_d8 (execute JS in V8 shell), "
+        "worktree (manage V8 git worktrees), "
+        "perf_* (Linux perf profiles), "
+        "godbolt_* (Compiler Explorer), "
+        "llvm_mca (assembly throughput), "
+        "d8_trace_index (V8 traces), "
+        "v8log_analyze (V8 logs: deopts, ICs, maps, profile), "
+        "jsb_run_bench (run/compare JS benchmarks), "
+        "pinpoint_* (Chromium Pinpoint A/B jobs), "
+        "gerrit_* (Chromium Gerrit code review)."
+    ),
+)
 
 _STARTUP_MTIME = os.path.getmtime(__file__)
 
@@ -1047,20 +1079,23 @@ def _register_repo_resources():
 _register_repo_resources()
 
 
-def _repo_summary() -> str:
-    """One-line summary of configured repos for embedding in tool descriptions."""
-    cfg = config.load()
-    parts = []
-    for alias, entry in cfg.repos.items():
-        if entry.path.is_dir():
-            parts.append(f"{alias} ({entry.desc})" if entry.desc else alias)
-    return ", ".join(parts)
-
-
-_REPOS_LINE = _repo_summary()
-
-
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Read lines from a file in a related source repo.\n"
+        "\n"
+        "Returns at most `limit` lines starting at `offset`. Use repo_git_grep\n"
+        "to find the right offset first, then read a targeted range.\n"
+        "\n"
+        f"Configured repos: {_REPOS_LINE}\n"
+        "\n"
+        "repo:   repo name (see list above)\n"
+        'path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"\n'
+        "offset: 0-based line offset to start reading from (default: 0)\n"
+        "limit:  max lines to return (default: 100)\n"
+        "ref:    git ref to read from (e.g. commit hash, branch, tag).\n"
+        "        If omitted, reads from the working tree."
+    )
+)
 def repo_git_show(
     repo: str,
     path: str,
@@ -1068,18 +1103,6 @@ def repo_git_show(
     limit: int = 100,
     ref: str | None = None,
 ) -> CallToolResult:
-    """Read lines from a file in a related source repo.
-
-    Returns at most `limit` lines starting at `offset`. Use repo_git_grep
-    to find the right offset first, then read a targeted range.
-
-    repo:   repo name from the repo:// MCP resources
-    path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"
-    offset: 0-based line offset to start reading from (default: 0)
-    limit:  max lines to return (default: 100)
-    ref:    git ref to read from (e.g. commit hash, branch, tag).
-            If omitted, reads from the working tree.
-    """
     root = _resolve_repo(repo)
 
     if ref:
@@ -1174,21 +1197,25 @@ _MAX_LS_FILES = 500
 _MAX_LOG_LINES = 2000
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "List files in a related source repo matching a glob pattern (git ls-files).\n"
+        "\n"
+        f"Configured repos: {_REPOS_LINE}\n"
+        "\n"
+        "repo:   repo name (see list above)\n"
+        'glob:   file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"\n'
+        "limit:  max files to return (default: 500)\n"
+        "ref:    git ref to list from (e.g. commit hash, branch, tag).\n"
+        "        If omitted, lists from the working tree."
+    )
+)
 def repo_git_find(
     repo: str,
     glob: str,
     limit: int = _MAX_LS_FILES,
     ref: str | None = None,
 ) -> CallToolResult:
-    """List files in a related source repo matching a glob pattern (git ls-files).
-
-    repo:   repo name from the repo:// MCP resources
-    glob:   file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"
-    limit:  max files to return (default: 500)
-    ref:    git ref to list from (e.g. commit hash, branch, tag).
-            If omitted, lists from the working tree.
-    """
     root = _resolve_repo(repo)
     if ref:
         cmd = ["git", "ls-tree", "-r", "--name-only", ref, "--", glob]
@@ -1224,7 +1251,19 @@ def repo_git_find(
     return _text_result(result)
 
 
-@mcp.tool()
+@mcp.tool(
+    description=(
+        "Show git log in a related source repo.\n"
+        "\n"
+        f"Configured repos: {_REPOS_LINE}\n"
+        "\n"
+        "repo:   repo name (see list above)\n"
+        "path:   optional file path to show history for\n"
+        "ref:    git ref to start from (default: HEAD)\n"
+        "limit:  max commits to return (default: 20)\n"
+        "grep:   optional pattern to filter commit messages"
+    )
+)
 def repo_git_log(
     repo: str,
     path: str | None = None,
@@ -1232,14 +1271,6 @@ def repo_git_log(
     limit: int = 20,
     grep: str | None = None,
 ) -> CallToolResult:
-    """Show git log in a related source repo.
-
-    repo:   repo name from the repo:// MCP resources
-    path:   optional file path to show history for
-    ref:    git ref to start from (default: HEAD)
-    limit:  max commits to return (default: 20)
-    grep:   optional pattern to filter commit messages
-    """
     root = _resolve_repo(repo)
     cmd = [
         "git",
