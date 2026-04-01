@@ -481,8 +481,7 @@ def jsb_run_bench(
     binaries: list[str] = [],
     runs: int = 5,
     suite: str = "js3",
-    perf: bool = False,
-    perf_upload: bool = False,
+    record: str | None = None,
 ) -> CallToolResult:
     """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
 
@@ -496,10 +495,13 @@ def jsb_run_bench(
                  "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
-    perf:   if True, record a local perf trace (no upload) instead of
-            running for scores.  Requires exactly one binary.  Returns the
-            perf.data path for use with perf_hotspots, perf_annotate, etc.
-    perf_upload: like perf, but also uploads the trace via pprof.
+    record: profiling mode — omit to run for scores (default). Options:
+              "perf"        → record a linux-perf trace; returns perf.data path
+                              for use with perf_hotspots, perf_annotate, etc.
+              "perf_upload" → same, and upload the trace via pprof
+              "v8log"       → record a v8.log profiling trace; returns the log
+                              path for use with v8log_analyze
+            All record modes require exactly one binary.
 
     Returns a comparison table with mean, stdev, delta, p-value
     (Welch's t-test), and confidence (high/medium/low) per metric.
@@ -520,19 +522,25 @@ def jsb_run_bench(
         if not d8.exists():
             raise ValueError(f"binary not found: {d8}")
 
-    if perf or perf_upload:
-        if perf and perf_upload:
-            raise ValueError("perf and perf_upload are mutually exclusive")
+    if record is not None:
+        _RECORD_MODES = ("perf", "perf_upload", "v8log")
+        if record not in _RECORD_MODES:
+            raise ValueError(f"record must be one of {_RECORD_MODES}, got {record!r}")
         if len(variants) != 1:
-            raise ValueError("perf/perf_upload requires exactly one binary")
+            raise ValueError("record mode requires exactly one binary")
+        v = variants[0]
+        if record == "v8log":
+            return _text_result(
+                str(jsb_module.run_v8log(v, suite_dir, lineitems, cfg.v8_out))
+            )
         return _text_result(
             jsb_module.run_perf(
-                variants[0],
+                v,
                 suite_dir,
                 lineitems,
                 cfg.v8_out,
                 cfg.perf_script,
-                upload=perf_upload,
+                upload=(record == "perf_upload"),
             )
         )
 
