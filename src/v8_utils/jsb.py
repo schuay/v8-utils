@@ -151,6 +151,40 @@ def run_variant(
     return all_scores
 
 
+def run_v8log(
+    variant: Variant,
+    suite_dir: Path,
+    lineitems: list[str] | None,
+    v8_out: Path,
+    output: Path | None = None,
+) -> Path:
+    """Record a v8.log profiling trace.
+
+    Runs d8 with --prof --log-ic --log-maps --log-deopt and returns the
+    path to the generated log file.
+    """
+    log_path = output or (suite_dir / "v8.log")
+    extra_flags = [
+        "--prof",
+        "--log-ic",
+        "--log-maps",
+        "--log-deopt",
+        f"--logfile={log_path}",
+    ]
+    d8 = variant.d8(v8_out)
+    flags = (variant.flags.split() if variant.flags else []) + extra_flags
+    cmd = [str(d8)] + flags + [str(suite_dir / "cli.js")]
+    if lineitems:
+        cmd += ["--", ",".join(lineitems)]
+    r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
+    if r.returncode != 0:
+        output_text = (r.stdout + r.stderr).strip()
+        raise RuntimeError(f"d8 exited with code {r.returncode}\n{output_text[:1000]}")
+    if not log_path.exists():
+        raise RuntimeError(f"v8.log not found at {log_path} after run")
+    return log_path
+
+
 def run_perf(
     variant: Variant,
     suite_dir: Path,
@@ -366,6 +400,7 @@ examples:
   jsb crypto-md5-SP -b release --gdb                  # run under gdb
   jsb crypto-md5-SP -b release --rr                   # record with rr
   jsb crypto-md5-SP -b release --perf                 # linux-perf-d8.py
+  jsb crypto-md5-SP -b release --v8log                # record v8.log
   jsb regexp-octane -b ~/v8-alt/out/release/d8        # full d8 path
 """,
     )
@@ -418,6 +453,11 @@ examples:
         action="store_true",
         help="Record a perf trace and upload via pprof (single variant)",
     )
+    perf_group.add_argument(
+        "--v8log",
+        action="store_true",
+        help="Record a v8.log profiling trace (single variant)",
+    )
     args = p.parse_args(argv or None)
     lineitems = args.lineitems or None  # empty list → None (full suite)
 
@@ -434,6 +474,18 @@ examples:
         d8 = v.d8(v8_out)
         if not d8.exists():
             sys.exit(f"error: d8 not found: {d8}")
+
+    # --- v8.log recording ---
+    if args.v8log:
+        if len(variants) != 1:
+            sys.exit("error: --v8log requires exactly one build")
+        v = variants[0]
+        try:
+            log_path = run_v8log(v, suite_dir, lineitems, v8_out)
+        except RuntimeError as e:
+            sys.exit(f"error: {e}")
+        print(log_path)
+        return
 
     # --- Profiling ---
     if args.perf or args.perf_upload:
