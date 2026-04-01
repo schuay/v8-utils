@@ -14,6 +14,7 @@ from . import gerrit as gerrit_tools
 from . import jsb as jsb_module
 from . import perf as perf_tools
 from . import pinpoint
+from . import v8log
 from . import worktree as worktree_mod
 from .tools import (
     _fetch_job_detail,
@@ -2245,3 +2246,65 @@ def worktree(
         return _text_result(f"Worktree '{name}' removed.")
 
     raise ValueError(f"Unknown action {action!r}. Use 'create', 'remove', or 'list'.")
+
+
+# ── lv: V8 log viewer ───────────────────────────────────────────────────────
+
+
+@mcp.tool()
+def lv(
+    log_path: str,
+    command: str = "deopts",
+    top: int = 20,
+    filter: str | None = None,
+    pattern: str | None = None,
+    verbose: bool = False,
+) -> CallToolResult:
+    """Analyze a V8 log file (v8.log) produced by d8 --prof --log-ic --log-maps.
+
+    Commands:
+      deopts   — deoptimization summary (uses: top, filter)
+      ics      — inline cache summary (uses: top, filter)
+      maps     — map transition summary (uses: top, verbose)
+      fn       — function drill-down (requires: pattern)
+      profile  — tick profile flat view (uses: top, filter)
+      vms      — VM state breakdown
+
+    log_path: path to a v8.log file
+    command: one of deopts, ics, maps, fn, profile, vms
+    top: max rows to show (default 20)
+    filter: function name glob to filter results (e.g. "parse*")
+    pattern: function name glob for the fn command (required for fn)
+    verbose: show full map-details strings (maps command only)
+    """
+    path = Path(log_path).expanduser()
+    if not path.exists():
+        raise ValueError(f"File not found: {path}")
+
+    log = v8log.V8Log.parse(path)
+
+    if command == "deopts":
+        summary = v8log.analyze_deopts(log, top=top, filter_pat=filter)
+        return _text_result(v8log.format_deopts(summary))
+    if command == "ics":
+        summary = v8log.analyze_ics(log, top=top, filter_pat=filter)
+        return _text_result(v8log.format_ics(summary))
+    if command == "maps":
+        summary = v8log.analyze_maps(log, top=top)
+        return _text_result(v8log.format_maps(summary, verbose=verbose))
+    if command == "fn":
+        if not pattern:
+            raise ValueError("The fn command requires a pattern argument.")
+        summary = v8log.analyze_fn(log, pattern=pattern)
+        return _text_result(v8log.format_fn(summary))
+    if command == "profile":
+        summary = v8log.analyze_profile(log, top=top, filter_pat=filter)
+        return _text_result(v8log.format_profile(summary))
+    if command == "vms":
+        summary = v8log.analyze_vms(log)
+        return _text_result(v8log.format_vms(summary))
+
+    raise ValueError(
+        f"Unknown command {command!r}. "
+        "Use 'deopts', 'ics', 'maps', 'fn', 'profile', or 'vms'."
+    )
