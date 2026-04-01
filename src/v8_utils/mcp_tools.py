@@ -534,10 +534,9 @@ def jsb_run_bench(
             )
         )
 
-    results = [
-        jsb_module.run_variant(v, suite_dir, lineitems, runs, js3, cfg.v8_out)
-        for v in variants
-    ]
+    results = jsb_module.run_round_robin(
+        variants, suite_dir, lineitems, runs, js3, cfg.v8_out
+    )
 
     return _text_result(
         jsb_module.format_table(lineitems, suite_label, runs, variants, results)

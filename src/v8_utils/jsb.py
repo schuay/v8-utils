@@ -125,29 +125,30 @@ def _run_captured(
     return parse_js3(out, full_names) if js3 else parse_js2(out, full_names)
 
 
-def run_variant(
-    variant: Variant,
+def run_round_robin(
+    variants: list[Variant],
     suite_dir: Path,
     lineitems: list[str] | None,
     n: int,
     js3: bool,
     v8_out: Path,
-    on_run: Callable[[], None] | None = None,
-) -> dict[str, list[float]]:
-    """Run one variant N times. Returns metric → list of values.
+    on_run: Callable[[int, int], None] | None = None,
+) -> list[dict[str, list[float]]]:
+    """Run all variants interleaved in round-robin order, N rounds total.
 
-    on_run: called after each completed run (for progress updates).
+    Returns one result dict (metric → list of values) per variant.
+    on_run(round_i, variant_i): called after each completed run.
     """
-    d8 = variant.d8(v8_out)
-    cmd = variant.cmd(d8, suite_dir, lineitems)
     full_names = lineitems is None or len(lineitems) > 1
-    all_scores: dict[str, list[float]] = {}
-    for _ in range(n):
-        scores = _run_captured(cmd, suite_dir, js3, full_names=full_names)
-        for metric, val in scores.items():
-            all_scores.setdefault(metric, []).append(val)
-        if on_run:
-            on_run()
+    cmds = [v.cmd(v.d8(v8_out), suite_dir, lineitems) for v in variants]
+    all_scores: list[dict[str, list[float]]] = [{} for _ in variants]
+    for round_i in range(n):
+        for vi, cmd in enumerate(cmds):
+            scores = _run_captured(cmd, suite_dir, js3, full_names=full_names)
+            for metric, val in scores.items():
+                all_scores[vi].setdefault(metric, []).append(val)
+            if on_run:
+                on_run(round_i, vi)
     return all_scores
 
 
@@ -540,26 +541,24 @@ examples:
         if sys.stderr.isatty()
         else None
     )
+    task = progress.add_task("running", total=total_runs) if progress else None
+
+    def on_run(round_i: int, vi: int) -> None:
+        if progress and task is not None:
+            progress.advance(task)
+
     try:
         if progress:
             progress.start()
-        results = []
-        for v in variants:
-            task = progress.add_task(v.label, total=args.runs) if progress else None
-            r = run_variant(
-                v,
-                suite_dir,
-                lineitems,
-                args.runs,
-                js3,
-                v8_out,
-                on_run=(
-                    (lambda: progress.advance(task))
-                    if progress and task is not None
-                    else None
-                ),
-            )
-            results.append(r)
+        results = run_round_robin(
+            variants,
+            suite_dir,
+            lineitems,
+            args.runs,
+            js3,
+            v8_out,
+            on_run=on_run if progress else None,
+        )
     except RuntimeError as e:
         if progress:
             progress.stop()
