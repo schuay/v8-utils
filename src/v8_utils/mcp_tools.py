@@ -2252,7 +2252,7 @@ def worktree(
 
 
 @mcp.tool()
-def lv(
+def v8log_analyze(
     log_path: str,
     command: str = "deopts",
     top: int = 20,
