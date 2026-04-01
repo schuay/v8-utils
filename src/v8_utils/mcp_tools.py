@@ -402,22 +402,19 @@ def run_d8(
     build: str | None = None,
     cwd: str | None = None,
     timeout: int = 60,
-    stdout_file: str | None = None,
-    stderr_file: str | None = None,
+    output_file: str | None = None,
 ) -> CallToolResult:
     """Run the d8 JavaScript shell with the given arguments.
 
     For benchmarking, use the jsb_run_bench tool instead.
 
-    Note: d8 prints trace output (--trace-turbo, --print-code, etc.) to
-    stdout, not stderr. Use stdout_file to capture traces to a file.
+    stdout and stderr are combined into a single stream.
 
     args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
     build:       build directory name under repos["v8"]/out (default: config default_build)
     cwd:         working directory for d8 (default: repos["v8"])
     timeout:     max seconds before killing the process (default: 60)
-    stdout_file: redirect stdout to this file path instead of capturing
-    stderr_file: redirect stderr to this file path instead of capturing
+    output_file: redirect combined output to this file path instead of capturing
     """
     cfg = config.load()
     build = build or cfg.default_build
@@ -426,13 +423,12 @@ def run_d8(
         raise ValueError(f"d8 not found: {d8}")
 
     cmd = [str(d8), *args]
-    stdout = open(stdout_file, "w") if stdout_file else subprocess.PIPE
-    stderr = open(stderr_file, "w") if stderr_file else subprocess.PIPE
+    stdout = open(output_file, "w") if output_file else subprocess.PIPE
     try:
         result = subprocess.run(
             cmd,
             stdout=stdout,
-            stderr=stderr,
+            stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout,
             errors="replace",
@@ -443,20 +439,14 @@ def run_d8(
     except Exception as e:
         return _text_result(f"Error: {e}")
     finally:
-        if stdout_file:
+        if output_file:
             stdout.close()
-        if stderr_file:
-            stderr.close()
 
     parts: list[str] = []
-    if stdout_file:
-        parts.append(f"[stdout → {stdout_file}]")
+    if output_file:
+        parts.append(f"[output → {output_file}]")
     elif result.stdout:
         parts.append(result.stdout)
-    if stderr_file:
-        parts.append(f"[stderr → {stderr_file}]")
-    elif result.stderr:
-        parts.append("[stderr]\n" + result.stderr)
     if result.returncode not in (0, 1):
         parts.append(f"[exit {result.returncode}]")
 
@@ -467,7 +457,7 @@ def run_d8(
         out = (
             out[:_MAX_D8_OUTPUT]
             + f"\n\n[truncated — {len(out) - _MAX_D8_OUTPUT:,} more chars. "
-            "Use stdout_file/stderr_file to redirect large output to a file.]"
+            "Use output_file to redirect large output to a file.]"
         )
     return _text_result(out)
 
