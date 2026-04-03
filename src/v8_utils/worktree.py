@@ -159,12 +159,18 @@ def create(
 
 def _remove_external_symlinks(wt_path: Path) -> None:
     """Remove all symlinks under wt_path that point outside of it."""
-    resolved_root = wt_path.resolve()
-    for link in wt_path.rglob("*"):
-        if link.is_symlink():
-            target = link.resolve()
-            if not str(target).startswith(str(resolved_root)):
-                link.unlink()
+    resolved_root = str(wt_path.resolve())
+    # find -type l is fast: it uses d_type from readdir to skip non-symlinks
+    # without stat'ing millions of build artifacts in out/.
+    result = subprocess.run(
+        ["find", str(wt_path), "-type", "l"],
+        capture_output=True,
+        text=True,
+    )
+    for line in result.stdout.splitlines():
+        link = Path(line)
+        if not str(link.resolve()).startswith(resolved_root):
+            link.unlink()
 
 
 def remove(repo: Path, name: str, force: bool = False) -> None:
