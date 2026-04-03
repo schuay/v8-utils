@@ -403,7 +403,9 @@ def pinpoint_create_job(
     exp_js_flags:   V8 flags for experiment, same format
     repeat:         number of bot runs per variant (default: 150)
     bug_id:         buganizer issue ID to associate with the job
-    v8_repo_path:   v8 repo for "auto" patch detection (default: configured v8 repo)
+    v8_repo_path:   absolute path to the v8 repo for "auto" patch detection
+                    (default: configured v8 repo).
+                    Must point to the correct worktree when using worktrees.
     """
     repo_path = v8_repo_path or str(_resolve_repo("v8"))
     jobs = create_pinpoint_jobs(
@@ -431,7 +433,7 @@ _MAX_D8_OUTPUT = 5_000
 @mcp.tool()
 def run_d8(
     args: list[str],
-    build: str | None = None,
+    d8_path: str | None = None,
     cwd: str | None = None,
     timeout: int = 60,
     output_file: str | None = None,
@@ -443,14 +445,20 @@ def run_d8(
     stdout and stderr are combined into a single stream.
 
     args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
-    build:       build directory name under repos["v8"]/out (default: config default_build)
+    d8_path:     absolute path to the d8 binary (default: main v8 build)
     cwd:         working directory for d8 (default: repos["v8"])
     timeout:     max seconds before killing the process (default: 60)
     output_file: redirect combined output to this file path instead of capturing
+
+    Example — run a JetStream3 line item:
+      args: ["cli.js", "--", "regexp-octane"]
+      cwd:  "/absolute/path/to/JetStream3"
     """
     cfg = config.load()
-    build = build or cfg.default_build
-    d8 = cfg.v8_out / build / "d8"
+    if d8_path:
+        d8 = Path(d8_path).expanduser()
+    else:
+        d8 = cfg.v8_out / cfg.default_build / "d8"
     if not d8.exists():
         raise ValueError(f"d8 not found: {d8}")
 
@@ -509,11 +517,11 @@ def jsb_run_bench(
 
     lineitems: benchmark story names, e.g. ["regexp-octane", "chai-wtb"].
                Omit to run the full suite.
-    binaries: list of "build[:flags]" specs under v8_out, or absolute paths to
-              JS shell *binaries* (d8, jsc, etc.) — NOT build directories.
-              Pass the executable file itself, e.g.:
-                ["release-main", "release-lto:--turbolev-future",
-                 "/home/user/v8-alt/out/x64.release/d8",
+    binaries: list of absolute paths to JS shell binaries (d8, jsc, etc.),
+              optionally followed by ":flags". Pass the executable file itself,
+              NOT build directories. Examples:
+                ["/home/user/src/v8/v8/out/x64.release/d8",
+                 "/home/user/src/v8/feature-wt/out/x64.release/d8:--turbolev-future",
                  "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
     runs:   number of runs per variant (default: 5)
     suite:  "js2" or "js3" (default: "js3")
@@ -533,6 +541,13 @@ def jsb_run_bench(
     suite_dir = cfg.repos["js3"].path if js3 else cfg.repos["js2"].path
     suite_label = "JS3" if js3 else "JS2"
 
+    for b in binaries:
+        path_part = b.split(":")[0].strip()
+        if not Path(path_part).is_absolute():
+            raise ValueError(
+                f"binary must be an absolute path, got {path_part!r}. "
+                f"Example: /home/user/src/v8/v8/out/x64.release/d8"
+            )
     variants = [jsb_module.Variant.parse(b) for b in binaries]
     for v in variants:
         d8 = v.d8(cfg.v8_out)
