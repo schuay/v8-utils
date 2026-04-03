@@ -1138,6 +1138,7 @@ def repo_git_show(
         "pattern: regex pattern to search for\n"
         'glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"\n'
         "context: lines of context around each match (default: 0)\n"
+        "ignore_case: case-insensitive matching (default: false)\n"
         "limit:   max matches to return (default: 100)\n"
         "ref:     git ref to search in (e.g. commit hash, branch, tag).\n"
         "         If omitted, searches the working tree."
@@ -1148,11 +1149,14 @@ def repo_git_grep(
     pattern: str,
     glob: str | None = None,
     context: int = 0,
+    ignore_case: bool = False,
     limit: int = _MAX_GREP_MATCHES,
     ref: str | None = None,
 ) -> CallToolResult:
     root = _resolve_repo(repo)
     cmd = ["git", "grep", "-n", "--no-color", "-E"]
+    if ignore_case:
+        cmd.append("-i")
     if context > 0:
         cmd.append(f"-C{context}")
     cmd.append(pattern)
