@@ -1096,31 +1096,46 @@ _register_repo_resources()
 
 @mcp.tool(
     description=(
-        "Read lines from a file in a related source repo.\n"
+        "Read lines from a file in a related source repo, or show a commit.\n"
         "\n"
-        "Returns at most `limit` lines starting at `offset`. Use repo_git_grep\n"
-        "to find the right offset first, then read a targeted range.\n"
+        "Two modes:\n"
+        "  1. File mode (path provided): returns `limit` lines from `offset`.\n"
+        "     Use repo_git_grep to find the right offset first.\n"
+        "  2. Commit mode (path omitted, ref required): shows the commit message\n"
+        "     and diff for the given ref (like `git show <ref>`).\n"
         "\n"
         f"Configured repos: {_REPOS_LINE}\n"
         "\n"
         "repo:   repo name (see list above)\n"
-        'path:   file path relative to the repo root, e.g. "runtime/RegExp.cpp"\n'
+        "path:   file path relative to the repo root (omit for commit mode)\n"
         "offset: 0-based line offset to start reading from (default: 0)\n"
         "limit:  max lines to return (default: 100)\n"
-        "ref:    git ref to read from (e.g. commit hash, branch, tag).\n"
-        "        If omitted, reads from the working tree."
+        "ref:    git ref (commit hash, branch, tag). Required for commit mode."
     )
 )
 def repo_git_show(
     repo: str,
-    path: str,
+    path: str | None = None,
     offset: int = 0,
     limit: int = 100,
     ref: str | None = None,
 ) -> CallToolResult:
     root = _resolve_repo(repo)
 
-    if ref:
+    if path is None:
+        # Commit mode: show commit message + diff
+        if not ref:
+            raise ValueError("ref is required when path is omitted (commit mode)")
+        proc = subprocess.run(
+            ["git", "show", "--stat", "--patch", ref],
+            capture_output=True,
+            text=True,
+            cwd=root,
+        )
+        if proc.returncode != 0:
+            raise ValueError(f"git show {ref} failed: {proc.stderr.strip()[:500]}")
+        lines = proc.stdout.splitlines()
+    elif ref:
         proc = subprocess.run(
             ["git", "show", f"{ref}:{path}"],
             capture_output=True,
@@ -1320,6 +1335,29 @@ def repo_git_log(
 
 # ── perf tools ────────────────────────────────────────────────────────────────
 
+# Symbol cache: perf_hotspots stores its most recent result per perf_data path
+# so that downstream tools can accept "#3" instead of the raw symbol name.
+_symbol_cache: dict[str, list[dict]] = {}
+
+
+def _resolve_symbol(perf_data: str, symbol: str, **_kw: object) -> str:
+    """If *symbol* looks like ``#<n>``, resolve it from the hotspots cache."""
+    if symbol.startswith("#"):
+        try:
+            idx = int(symbol[1:])
+        except ValueError:
+            raise ValueError(f"Invalid symbol reference: {symbol!r}")
+        rows = _symbol_cache.get(perf_data)
+        if rows is None:
+            raise ValueError(
+                f"No cached hotspots for {perf_data!r}. "
+                f"Run perf_hotspots first, then use #N references."
+            )
+        if idx < 1 or idx > len(rows):
+            raise ValueError(f"Symbol index {idx} out of range (1–{len(rows)})")
+        return rows[idx - 1]["symbol"]
+    return symbol
+
 
 @mcp.tool()
 def perf_stat(stat_file: str) -> CallToolResult:
@@ -1365,12 +1403,14 @@ def perf_hotspots(
     rows = perf_tools.hotspots(perf_data, dso=dso, n=n)
     if not rows:
         return _text_result("No symbols found.")
-    lines = [f"{'self%':>6}  {'total%':>6}  {'dso':<20}  symbol"]
+    _symbol_cache[perf_data] = rows
+    idx_w = len(str(len(rows)))
+    lines = [f"{'#':>{idx_w}}  {'self%':>6}  {'total%':>6}  {'dso':<20}  symbol"]
     lines.append("-" * len(lines[0]))
-    for r in rows:
+    for i, r in enumerate(rows, 1):
         total = f"{r['total_pct']:.1f}" if r.get("total_pct") is not None else "—"
         lines.append(
-            f"{r['self_pct']:5.1f}%  {total:>5}%  {r['dso']:<20}  {r['symbol']}"
+            f"{i:>{idx_w}}  {r['self_pct']:5.1f}%  {total:>5}%  {r['dso']:<20}  {r['symbol']}"
         )
     return _text_result("\n".join(lines))
 
@@ -1389,9 +1429,10 @@ def perf_callers(
     self-time or propagated from a call site.
 
     perf_data: path to perf.data file
-    symbol:    symbol name or unique substring, e.g. "Heap::AllocateRaw"
+    symbol:    symbol name, unique substring, or #N from perf_hotspots
     n:         max lines of call-graph detail to return (default 20)
     """
+    symbol = _resolve_symbol(perf_data, symbol)
     return _text_result(perf_tools.callers(perf_data, symbol, n=n))
 
 
@@ -1412,11 +1453,12 @@ def perf_annotate(
     to explore surrounding code.
 
     perf_data: path to perf.data file
-    symbol:    exact symbol name (use perf_hotspots to find it)
+    symbol:    exact symbol name or #N from perf_hotspots
     dso:       shared object filter, e.g. "libv8.so"
     min_pct:   minimum sample % to qualify as hot (default 0.5)
     context:   lines of context around each hot cluster (default 8)
     """
+    symbol = _resolve_symbol(perf_data, symbol, dso=dso)
     data = perf_tools.annotate(
         perf_data, symbol, dso=dso, min_pct=min_pct, context=context
     )
@@ -1461,11 +1503,12 @@ def perf_annotate_read_around(
     for further navigation.
 
     perf_data: path to perf.data file
-    symbol:    symbol name (must match perf_annotate call)
+    symbol:    symbol name or #N from perf_hotspots
     line:      1-based line number to centre the window on
     context:   lines before and after to include (default 30)
     dso:       shared object filter (must match perf_annotate call if used)
     """
+    symbol = _resolve_symbol(perf_data, symbol, dso=dso)
     return _text_result(
         perf_tools.annotate_read_around(
             perf_data, symbol, line, context=context, dso=dso
@@ -1499,11 +1542,14 @@ def perf_flamegraph(
     Without focus_symbol, shows self-time callee paths for all symbols.
 
     focus_symbol: restrict to call trees whose root matches this substring,
-                  e.g. "RegExpPrototypeExec" or "Heap::AllocateRaw"
+                  or #N from perf_hotspots.
+                  e.g. "RegExpPrototypeExec" or "#3"
     dso:          restrict to a specific shared object, e.g. "libv8.so"
     min_pct:      omit paths below this % of total samples (default 0.5)
     depth:        maximum call-chain depth to expand (default 8)
     """
+    if focus_symbol is not None:
+        focus_symbol = _resolve_symbol(perf_data, focus_symbol, dso=dso)
     return _text_result(
         perf_tools.flamegraph(
             perf_data, focus_symbol=focus_symbol, dso=dso, min_pct=min_pct, depth=depth
@@ -1536,9 +1582,11 @@ def perf_tma(
       3. perf_flamegraph     — understand call context
       4. perf_annotate       — inspect hot instructions
 
-    symbol:  filter to symbols containing this substring
+    symbol:  filter to symbols containing this substring, or #N from perf_hotspots
     n:       max symbols to return, sorted by cycles_pct (default 20)
     """
+    if symbol is not None:
+        symbol = _resolve_symbol(perf_data, symbol)
     data = perf_tools.tma(perf_data, symbol=symbol, n=n)
     if not data.get("available"):
         return _text_result(data.get("message", "TMA data not available."))
