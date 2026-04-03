@@ -167,7 +167,7 @@ def _remove_external_symlinks(wt_path: Path) -> None:
                 link.unlink()
 
 
-def remove(repo: Path, name: str) -> None:
+def remove(repo: Path, name: str, force: bool = False) -> None:
     """Remove a worktree: clean up symlinks then git worktree remove."""
     _validate_name(name)
     main = _find_main_worktree(repo)
@@ -182,7 +182,10 @@ def remove(repo: Path, name: str) -> None:
     # DEPS changes since creation.
     _remove_external_symlinks(wt_path)
 
-    _run(["git", "worktree", "remove", str(wt_path)], cwd=main)
+    cmd = ["git", "worktree", "remove", str(wt_path)]
+    if force:
+        cmd.append("--force")
+    _run(cmd, cwd=main)
 
 
 def list_worktrees(repo: Path) -> list[dict]:

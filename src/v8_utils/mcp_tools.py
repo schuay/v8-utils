@@ -2242,6 +2242,7 @@ def worktree(
     name: str | None = None,
     branch: str | None = None,
     upstream: str = "main",
+    force: bool = False,
 ) -> CallToolResult:
     """Manage V8 git worktrees with automatic gclient dependency symlinking.
 
@@ -2252,6 +2253,7 @@ def worktree(
 
     action:   "create", "remove", or "list"
     name:     worktree directory name (required for create/remove)
+    force:    force removal of dirty worktrees (remove only)
     branch:   branch to check out (create only, optional).
               If it exists, checks it out. Otherwise creates a new branch.
               Defaults to the worktree name.
@@ -2289,7 +2291,7 @@ def worktree(
         )
 
     if action == "remove":
-        worktree_mod.remove(repo, name)
+        worktree_mod.remove(repo, name, force=force)
         return _text_result(f"Worktree '{name}' removed.")
 
     raise ValueError(f"Unknown action {action!r}. Use 'create', 'remove', or 'list'.")
