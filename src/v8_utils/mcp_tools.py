@@ -7,7 +7,11 @@ import subprocess
 from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 from mcp.types import CallToolResult, TextContent
+
+# Reject unknown tool parameters instead of silently ignoring them.
+ArgModelBase.model_config["extra"] = "forbid"
 
 from . import config
 from . import gerrit as gerrit_tools
