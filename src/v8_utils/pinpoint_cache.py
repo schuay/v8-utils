@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS watermarks (
 """
 
 
-_SCHEMA_VERSION = 2  # bump when schema changes to clear stale caches
+_SCHEMA_VERSION = 3  # bump when schema changes to clear stale caches
 
 
 def get_db() -> sqlite3.Connection:
@@ -171,7 +171,9 @@ def parse_patch_fields(
         host = parsed.hostname or ""
         path = parsed.path
 
-        if "chromium-review.googlesource.com" in host:
+        if "chromium-review.googlesource.com" in host or (
+            "chromium-review" in host and "corp.google.com" in host
+        ):
             plus_idx = path.find("/+/")
             if plus_idx != -1:
                 # Canonical: /c/PROJECT/+/CHANGE[/PATCHSET]

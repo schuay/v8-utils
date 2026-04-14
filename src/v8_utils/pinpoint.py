@@ -135,7 +135,10 @@ def resolve_patch(patch: str) -> str:
             if result:
                 return _resolve_change_id(*result)
 
-        if host == "chromium-review.googlesource.com":
+        if host in (
+            "chromium-review.googlesource.com",
+            "chromium-review.git.corp.google.com",
+        ):
             if parsed.path.startswith("/c/"):
                 # Already canonical — strip any query/fragment and return
                 return f"{_GERRIT_BASE}{parsed.path}"
