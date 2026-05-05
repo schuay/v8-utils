@@ -68,6 +68,18 @@ def _parse_json(r: httpx.Response) -> dict | list:
     return json.loads(text)
 
 
+def _require_auth() -> str:
+    token = _gerrit_token()
+    if not token:
+        raise ValueError(
+            "Gerrit authentication required but git-credential-luci "
+            "returned no token. Visit\n"
+            "  https://chromium.googlesource.com/new-password\n"
+            "to set up credentials."
+        )
+    return token
+
+
 def _get(api_base: str, path: str, *, auth_required: bool = False) -> dict | list:
     """GET against the Gerrit REST API.
 
@@ -76,14 +88,7 @@ def _get(api_base: str, path: str, *, auth_required: bool = False) -> dict | lis
     authenticated endpoint and raise ValueError if no token is available.
     """
     if auth_required:
-        token = _gerrit_token()
-        if not token:
-            raise ValueError(
-                "Gerrit authentication required but git-credential-luci "
-                "returned no token. Visit\n"
-                "  https://chromium.googlesource.com/new-password\n"
-                "to set up credentials."
-            )
+        token = _require_auth()
         return _parse_json(
             httpx.get(
                 f"{api_base}/a{path}",
@@ -100,6 +105,24 @@ def _get(api_base: str, path: str, *, auth_required: bool = False) -> dict | lis
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=30,
             )
+    return _parse_json(r)
+
+
+def _put_json(api_base: str, path: str, body: dict) -> dict | list:
+    """Authenticated PUT with a JSON body. Always uses /a/ prefix.
+
+    On non-2xx responses, raises RuntimeError with the response body
+    (Gerrit returns useful error text there, e.g. "Invalid inReplyTo, ...").
+    """
+    token = _require_auth()
+    r = httpx.put(
+        f"{api_base}/a{path}",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text.strip()}")
     return _parse_json(r)
 
 
@@ -257,11 +280,13 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             "side": root.get("side"),
             "commit_id": root.get("commit_id"),
             "unresolved": (replies[-1] if replies else root).get("unresolved", False),
+            "id": root.get("id"),
             "author": root.get("author", {}).get("email", "unknown"),
             "message": root.get("message", ""),
             "updated": root.get("updated", ""),
             "replies": [
                 {
+                    "id": r.get("id"),
                     "author": r.get("author", {}).get("email", "unknown"),
                     "message": r.get("message", ""),
                     "updated": r.get("updated", ""),
@@ -277,6 +302,76 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
     threads = [_thread(c) for c in by_id.values() if not c.get("in_reply_to")]
     threads.sort(key=lambda t: (t["file"], t["line"] or 0))
     return threads
+
+
+# ── Drafts ────────────────────────────────────────────────────────────────────
+
+
+def create_drafts(
+    change_url: str,
+    comments: list[dict],
+    patchset: int | str | None = None,
+) -> list[dict]:
+    """Create one or more draft comments on a Gerrit CL revision.
+
+    comments: list of per-comment dicts:
+      message     (required) comment text
+      path        (optional) file path. Omit for a top-level CL comment.
+      line        (optional) 1-based line; omit + no range = file-level
+      side        (optional) "REVISION" (default, after) or "PARENT" (before)
+      in_reply_to (optional) UUID of comment to reply to
+      unresolved  (optional) default True
+      range       (optional) {start_line, start_character, end_line, end_character}
+
+    patchset: revision identifier ("current", commit SHA, or patchset number).
+              Defaults to the patchset in the URL, or "current".
+
+    Returns one result per input, in order: on success a CommentInfo dict
+    with {"ok": True}, on failure {"ok": False, "error": ..., "input": ...}.
+    Continues past failures: each draft is persisted server-side independently.
+    """
+    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+
+    rev = patchset if patchset is not None else (url_patchset or "current")
+    endpoint = f"/changes/{cid}/revisions/{rev}/drafts"
+
+    results: list[dict] = []
+    for c in comments:
+        if not c.get("message"):
+            results.append({"ok": False, "error": "missing field: message", "input": c})
+            continue
+        # Path is optional: omitted (or any /PATCHSET_LEVEL/ variant) means
+        # a top-level CL comment. Gerrit's canonical magic path has no trailing
+        # slash; trailing slash makes Gerrit treat it as a literal file path.
+        path = c.get("path") or "/PATCHSET_LEVEL"
+        if path.strip("/").upper() == "PATCHSET_LEVEL":
+            path = "/PATCHSET_LEVEL"
+        body: dict = {
+            "path": path,
+            "message": c["message"],
+            "side": c.get("side", "REVISION"),
+            "unresolved": c.get("unresolved", True),
+        }
+        if c.get("line") is not None:
+            body["line"] = c["line"]
+        if c.get("range"):
+            body["range"] = c["range"]
+        if c.get("in_reply_to"):
+            body["in_reply_to"] = c["in_reply_to"]
+        try:
+            info = _put_json(api_base, endpoint, body)
+            if isinstance(info, dict):
+                info["ok"] = True
+                results.append(info)
+            else:
+                results.append(
+                    {"ok": False, "error": f"unexpected response: {info!r}", "input": c}
+                )
+        except (httpx.HTTPError, ValueError, RuntimeError) as e:
+            results.append({"ok": False, "error": str(e), "input": c})
+
+    return results
 
 
 # ── Fetch ref ─────────────────────────────────────────────────────────────────

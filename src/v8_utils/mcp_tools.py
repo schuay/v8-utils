@@ -606,6 +606,9 @@ def gerrit_comments(change_url: str, include_drafts: bool = False) -> CallToolRe
     The commit hash identifies the exact code version — use `git show
     <hash>:path` to see the file as it was when the comment was written.
 
+    Each comment line shows its UUID in `[brackets]` after the author.
+    Pass that UUID as `in_reply_to` to `gerrit_create_comments` to reply.
+
     Threads are sorted by file path then line number.  Use this to understand
     reviewer feedback or the current state of a code review.
 
@@ -624,9 +627,13 @@ def gerrit_comments(change_url: str, include_drafts: bool = False) -> CallToolRe
 def _format_gerrit_comments(threads: list[dict]) -> str:
     blocks = []
     for t in threads:
-        loc = t["file"]
-        if t.get("line"):
-            loc += f":{t['line']}"
+        file = t["file"]
+        if file == "/PATCHSET_LEVEL":
+            loc = "(top-level)"
+        else:
+            loc = file
+            if t.get("line"):
+                loc += f":{t['line']}"
         if t.get("patch_set"):
             side = "Base" if t.get("side") == "PARENT" else f"ps{t['patch_set']}"
             commit = f" {t['commit_id'][:9]}" if t.get("commit_id") else ""
@@ -639,14 +646,77 @@ def _format_gerrit_comments(threads: list[dict]) -> str:
         header = f"{loc}{tags}"
         author = t.get("author", "unknown")
         msg = t.get("message", "").strip()
-        lines = [header, f"  {author}: {msg}"]
+        root_id = t.get("id")
+        id_tag = f" [{root_id}]" if root_id else ""
+        lines = [header, f"  {author}{id_tag}: {msg}"]
         for r in t.get("replies", []):
             r_author = r.get("author", "unknown")
             r_msg = r.get("message", "").strip()
+            r_id = r.get("id")
+            r_id_tag = f" [{r_id}]" if r_id else ""
             draft_tag = " [draft]" if r.get("draft") else ""
-            lines.append(f"  {r_author}{draft_tag}: {r_msg}")
+            lines.append(f"  {r_author}{r_id_tag}{draft_tag}: {r_msg}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
+
+
+@mcp.tool()
+def gerrit_create_comments(
+    change_url: str,
+    comments: list[dict],
+    patchset: int | str | None = None,
+) -> CallToolResult:
+    """Create one or more draft comments on a Gerrit CL revision.
+
+    Drafts are private to you until published — review them in the Gerrit UI
+    or via `gerrit_comments` with `include_drafts=True`, then publish via
+    Gerrit's "Reply" button.  Requires authentication via `luci-auth login`.
+
+    change_url: Gerrit CL URL (patchset suffix in URL is honored unless the
+                `patchset` argument overrides it)
+    comments:   list of per-comment dicts with these fields:
+      message     (required) comment text
+      path        (optional) file path. Omit for a top-level CL comment.
+      line        (optional) 1-based line number; omit + no range for a
+                  file-level comment
+      side        (optional) "REVISION" (default, the new patch) or
+                  "PARENT" (the base it's diffed against)
+      in_reply_to (optional) UUID of an existing comment to reply to.
+                  Get UUIDs from `gerrit_comments` (shown as `[id]` in
+                  the output)
+      unresolved  (optional) bool, default True
+      range       (optional) {start_line, start_character, end_line,
+                  end_character} for multi-line / character-range selection.
+                  When set, `line` is ignored.
+    patchset:   revision id ("current", commit SHA, or patchset number).
+                Default: patchset from URL, else "current".
+
+    Returns one result line per input, in order.  Each draft is created
+    independently — failures don't stop later ones.
+    """
+    results = gerrit_tools.create_drafts(change_url, comments, patchset=patchset)
+    return _text_result(_format_draft_results(results))
+
+
+def _format_draft_results(results: list[dict]) -> str:
+    def _loc(path: str | None, line: int | None) -> str:
+        if path == "/PATCHSET_LEVEL" or not path:
+            return "(top-level)"
+        return f"{path}:{line}" if line else path
+
+    lines = []
+    for i, r in enumerate(results):
+        if r.get("ok"):
+            lines.append(
+                f"[{i}] ok  {_loc(r.get('path'), r.get('line'))}  id={r.get('id', '?')}"
+            )
+        else:
+            inp = r.get("input", {})
+            lines.append(
+                f"[{i}] FAIL {_loc(inp.get('path'), inp.get('line'))}  "
+                f"{r.get('error', 'unknown error')}"
+            )
+    return "\n".join(lines)
 
 
 @mcp.tool()
