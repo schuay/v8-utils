@@ -1,0 +1,18 @@
+#!/usr/bin/env vpython3
+# Launcher for the `pp` CLI under vpython3.
+#
+# Resolves to the v8-utils repo via the realpath of this file (so symlinks
+# from $PATH dirs work) and adds src/ to sys.path before dispatching to
+# v8_utils.pp:main.
+
+import os
+import sys
+
+_SCRIPT = os.path.realpath(__file__)
+_REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
+
+from v8_utils.pp import main
+
+if __name__ == "__main__":
+    main()

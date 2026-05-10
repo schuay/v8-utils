@@ -1,0 +1,14 @@
+#!/usr/bin/env vpython3
+# Launcher for the `vt` CLI under vpython3.
+
+import os
+import sys
+
+_SCRIPT = os.path.realpath(__file__)
+_REPO_ROOT = os.path.dirname(os.path.dirname(_SCRIPT))
+sys.path.insert(0, os.path.join(_REPO_ROOT, "src"))
+
+from v8_utils.vt import main
+
+if __name__ == "__main__":
+    main()

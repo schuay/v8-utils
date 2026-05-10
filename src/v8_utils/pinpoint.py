@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from scipy.stats import false_discovery_control, mannwhitneyu
+from scipy.stats import mannwhitneyu
 
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
 _GERRIT_BASE = "https://chromium-review.googlesource.com"
@@ -605,62 +605,33 @@ def _value_stats(vals: list[float]) -> dict:
 
 def _apply_significance(
     rows: list[dict],
-    method: str = "pinpoint",
-    alpha: float | None = None,
+    alpha: float = 0.01,
 ) -> list[dict]:
     """Mark rows as significant based on their p-values.
 
-    method:
-      "pinpoint" — per-metric threshold at α=0.01, matching the Pinpoint UI.
-      "fdr"      — Benjamini-Hochberg FDR correction at α=0.05.
-
-    alpha overrides the default for either method.
+    Per-metric threshold at alpha (default 0.01, matching the Pinpoint UI).
     """
     import math
 
-    if not rows:
-        return rows
-
-    if method == "fdr":
-        alpha = alpha or 0.05
-        # Separate valid and NaN p-values (NaN crashes false_discovery_control)
-        valid = [(i, r) for i, r in enumerate(rows) if not math.isnan(r["p_value"])]
-        for r in rows:
-            if math.isnan(r["p_value"]):
-                r["p_value"] = 1.0
-                r["significant"] = False
-
-        if not valid:
-            return rows
-
-        raw_ps = [r["p_value"] for _, r in valid]
-        adjusted = false_discovery_control(raw_ps, method="bh")
-        for (_, r), adj_p in zip(valid, adjusted):
-            r["p_value"] = float(adj_p)
-            r["significant"] = bool(adj_p < alpha)
-    else:
-        alpha = alpha or 0.01
-        for r in rows:
-            p = r["p_value"]
-            if math.isnan(p):
-                r["p_value"] = 1.0
-                r["significant"] = False
-            else:
-                r["significant"] = bool(p < alpha)
+    for r in rows:
+        p = r["p_value"]
+        if math.isnan(p):
+            r["p_value"] = 1.0
+            r["significant"] = False
+        else:
+            r["significant"] = bool(p < alpha)
     return rows
 
 
-def pivot_results(job_id: str, significance: str = "pinpoint") -> list[dict]:
+def pivot_results(job_id: str) -> list[dict]:
     """Return one row per metric comparing base vs experiment.
 
     Each row has: name, unit, base_label, base_mean, base_stdev, base_n,
     exp_label, exp_mean, exp_stdev, exp_n, p_value, significant.
 
     Labels with "base:"/"exp:" prefix are assigned accordingly; otherwise
-    alphabetical order is used. Mann-Whitney U (two-sided).
-
-    significance: "pinpoint" (per-metric α=0.01, matches Pinpoint UI)
-                  or "fdr" (Benjamini-Hochberg FDR correction, α=0.05).
+    alphabetical order is used. Mann-Whitney U (two-sided), with
+    significance flagged per-metric at alpha=0.01 (matches Pinpoint UI).
     Only metrics with exactly two labels are included.
     """
     from . import pinpoint_cache
@@ -701,7 +672,7 @@ def pivot_results(job_id: str, significance: str = "pinpoint") -> list[dict]:
                 "p_value": p,
             }
         )
-    rows = _apply_significance(rows, method=significance)
+    rows = _apply_significance(rows)
     if rows:
         pinpoint_cache.put_results(job_id, rows, source="histogram")
     return rows
@@ -820,7 +791,7 @@ def _parse_crossbench_probe(raw: bytes) -> dict[str, list[float]] | None:
     return result or None
 
 
-def pivot_results_cas(job_id: str, significance: str = "pinpoint") -> list[dict]:
+def pivot_results_cas(job_id: str) -> list[dict]:
     """Like pivot_results, but fetches raw per-run values from CAS isolates.
 
     Uses the RBE REST API directly — no `cas` binary required.
@@ -950,7 +921,7 @@ def pivot_results_cas(job_id: str, significance: str = "pinpoint") -> list[dict]
                 "p_value": p,
             }
         )
-    rows = _apply_significance(rows, method=significance)
+    rows = _apply_significance(rows)
     if rows:
         pinpoint_cache.put_results(job_id, rows, source="cas")
     return rows

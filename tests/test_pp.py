@@ -482,11 +482,11 @@ class TestApplySignificance:
         return {"p_value": p}
 
     def test_pinpoint_significant(self):
-        rows = _apply_significance([self._row(0.005)], method="pinpoint")
+        rows = _apply_significance([self._row(0.005)])
         assert rows[0]["significant"] is True
 
     def test_pinpoint_not_significant(self):
-        rows = _apply_significance([self._row(0.05)], method="pinpoint")
+        rows = _apply_significance([self._row(0.05)])
         assert rows[0]["significant"] is False
 
     def test_pinpoint_default_alpha_is_001(self):
@@ -496,36 +496,16 @@ class TestApplySignificance:
         assert rows[0]["significant"] is False
 
     def test_pinpoint_custom_alpha(self):
-        rows = _apply_significance([self._row(0.04)], method="pinpoint", alpha=0.05)
+        rows = _apply_significance([self._row(0.04)], alpha=0.05)
         assert rows[0]["significant"] is True
 
     def test_nan_p_value_pinpoint(self):
-        rows = _apply_significance([self._row(float("nan"))], method="pinpoint")
+        rows = _apply_significance([self._row(float("nan"))])
         assert rows[0]["significant"] is False
         assert rows[0]["p_value"] == 1.0
-
-    def test_fdr_method(self):
-        # One clearly significant, one not
-        rows = _apply_significance([self._row(0.001), self._row(0.9)], method="fdr")
-        assert rows[0]["significant"] is True
-        assert rows[1]["significant"] is False
-
-    def test_fdr_nan_handling(self):
-        rows = _apply_significance(
-            [self._row(float("nan")), self._row(0.001)], method="fdr"
-        )
-        assert rows[0]["significant"] is False
-        assert rows[0]["p_value"] == 1.0
-        assert rows[1]["significant"] is True
 
     def test_empty_rows(self):
         assert _apply_significance([]) == []
-
-    def test_all_nan_fdr(self):
-        rows = _apply_significance(
-            [self._row(float("nan")), self._row(float("nan"))], method="fdr"
-        )
-        assert all(not r["significant"] for r in rows)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
