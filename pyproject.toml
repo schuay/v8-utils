@@ -22,7 +22,7 @@ dependencies = [
 ]
 
 [project.scripts]
-v8-mcp = "v8_utils.server:mcp.run"
+v8-mcp = "v8_utils.server:main"
 pp = "v8_utils.pp:main"
 jsb = "v8_utils.jsb:main"
 pd = "v8_utils.pd.cli:app"
