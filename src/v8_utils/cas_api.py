@@ -3,7 +3,7 @@
 Avoids spawning `cas download` subprocesses and downloading full isolate
 trees.  Algorithm:
 
-  Phase 1 — BFS across all isolates, level by level:
+  Phase 1 - BFS across all isolates, level by level:
     Fetch directory blobs via BatchReadBlobs (binary proto), parse with
     Directory.FromString(), extract FileNode/DirectoryNode digests.
     All unique directory blobs at each BFS level are batched into as few
@@ -11,11 +11,14 @@ trees.  Algorithm:
     All target filenames are searched in a single BFS pass; a branch is
     only abandoned once all requested files have been found in it.
 
-  Phase 2 — BatchReadBlobs for all found file blobs:
+  Phase 2 - BatchReadBlobs for all found file blobs:
     Collect all found file digests, fetch contents in one batched call.
 
-Auth uses Application Default Credentials (gcloud auth application-default
-login).
+Auth: chrome-swarming requires LUCI realm-mediated impersonation of the
+`cas-read-only` service account; @chromium.org user tokens cannot hit
+RBE directly.  See luci_ts.py for the token exchange.  Prerequisite:
+`luci-auth login` (any default scope works -- the user token only
+authenticates the caller to the LUCI Token Server).
 """
 
 from __future__ import annotations
@@ -24,10 +27,8 @@ import base64
 import logging
 
 import httpx
-from google.auth import default as _gauth_default
-from google.auth.transport.requests import Request as _AuthRequest
 
-from . import rbe_pb2
+from . import luci_ts, rbe_pb2
 
 log = logging.getLogger(__name__)
 
@@ -35,23 +36,22 @@ _RBE_BASE = "https://remotebuildexecution.googleapis.com/v2"
 _CAS_INSTANCE = "projects/chrome-swarming/instances/default_instance"
 _BATCH_SIZE = 100  # max digests per BatchReadBlobs call
 
+# LUCI realm config for chrome-swarming CAS read access.
+# Mirrors luci-go/client/casclient/client.go: perRPCCreds().
+_CAS_SA = "cas-read-only@chrome-swarming.iam.gserviceaccount.com"
+_CAS_REALM = "@internal:chrome-swarming/cas-read-only"
+_CAS_SCOPES = [
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+]
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
-_creds = None
-
 
 def _auth_headers() -> dict[str, str]:
-    global _creds
-    if _creds is None:
-        log.debug("loading Application Default Credentials")
-        _creds, _ = _gauth_default(
-            scopes=["https://www.googleapis.com/auth/cloud-platform"]
-        )
-    if not _creds.valid:
-        log.debug("refreshing auth token")
-        _creds.refresh(_AuthRequest())
-    return {"Authorization": f"Bearer {_creds.token}"}
+    token = luci_ts.mint_sa_token(_CAS_SA, _CAS_REALM, _CAS_SCOPES)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def _parse_digest(d: str) -> tuple[str, int]:
@@ -61,6 +61,7 @@ def _parse_digest(d: str) -> tuple[str, int]:
 
 # ── Low-level RBE helper ──────────────────────────────────────────────────────
 
+
 def _batch_read_blobs(
     client: httpx.Client,
     digests: list[tuple[str, int]],
@@ -69,11 +70,14 @@ def _batch_read_blobs(
     result: dict[str, bytes] = {}
     for i in range(0, len(digests), _BATCH_SIZE):
         batch = digests[i : i + _BATCH_SIZE]
-        log.debug("BatchReadBlobs: %d blobs (batch %d-%d of %d)",
-                  len(batch), i + 1, min(i + _BATCH_SIZE, len(digests)), len(digests))
-        payload = {
-            "digests": [{"hash": h, "sizeBytes": str(s)} for h, s in batch]
-        }
+        log.debug(
+            "BatchReadBlobs: %d blobs (batch %d-%d of %d)",
+            len(batch),
+            i + 1,
+            min(i + _BATCH_SIZE, len(digests)),
+            len(digests),
+        )
+        payload = {"digests": [{"hash": h, "sizeBytes": str(s)} for h, s in batch]}
         r = client.post(
             f"{_RBE_BASE}/{_CAS_INSTANCE}/blobs:batchRead",
             json=payload,
@@ -93,6 +97,7 @@ def _batch_read_blobs(
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
+
 
 def fetch_probe_files(
     root_digests: list[str],
@@ -141,8 +146,12 @@ def fetch_probe_files(
             if not needed:
                 break
 
-            log.debug("BFS level %d: fetching %d unique dir blobs (%d isolates still searching)",
-                      bfs_level, len(needed), pending)
+            log.debug(
+                "BFS level %d: fetching %d unique dir blobs (%d isolates still searching)",
+                bfs_level,
+                len(needed),
+                pending,
+            )
 
             raw_blobs = _batch_read_blobs(client, list(needed))
             parse_errors = 0
@@ -173,7 +182,10 @@ def fetch_probe_files(
                         continue
                     for fn in d.files:
                         if fn.name in missing:
-                            file_digest[root][fn.name] = (fn.digest.hash, fn.digest.size_bytes)
+                            file_digest[root][fn.name] = (
+                                fn.digest.hash,
+                                fn.digest.size_bytes,
+                            )
                             missing.discard(fn.name)
                             found_this_level += 1
                     if missing:
@@ -183,8 +195,11 @@ def fetch_probe_files(
                             )
 
             if found_this_level:
-                log.debug("  found %d file(s) across isolates at level %d",
-                          found_this_level, bfs_level)
+                log.debug(
+                    "  found %d file(s) across isolates at level %d",
+                    found_this_level,
+                    bfs_level,
+                )
 
             remaining = next_remaining
             bfs_level += 1
@@ -192,20 +207,20 @@ def fetch_probe_files(
                 break
 
         found_total = sum(
-            1 for fds in file_digest.values()
+            1
+            for fds in file_digest.values()
             if any(fd is not None for fd in fds.values())
         )
         log.debug("BFS complete: found files in %d/%d isolates", found_total, n_total)
 
         all_file_digests: set[tuple[str, int]] = {
-            fd
-            for fds in file_digest.values()
-            for fd in fds.values()
-            if fd is not None
+            fd for fds in file_digest.values() for fd in fds.values() if fd is not None
         }
         log.debug("fetching %d unique file blobs", len(all_file_digests))
         blob_by_hash: dict[str, bytes] = (
-            _batch_read_blobs(client, list(all_file_digests)) if all_file_digests else {}
+            _batch_read_blobs(client, list(all_file_digests))
+            if all_file_digests
+            else {}
         )
         log.debug("received %d file blobs", len(blob_by_hash))
 
@@ -213,7 +228,8 @@ def fetch_probe_files(
     for fn in probe_filenames:
         result[fn] = [
             blob_by_hash.get(file_digest[root][fn][0])
-            if file_digest[root][fn] is not None else None
+            if file_digest[root][fn] is not None
+            else None
             for root in root_digests
         ]
     return result
