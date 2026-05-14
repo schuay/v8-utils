@@ -1,6 +1,7 @@
 """Git worktree management for V8 with gclient dependency symlinking."""
 
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -92,23 +93,38 @@ def _validate_name(name: str) -> None:
         )
 
 
-_DEFAULT_BUILDS = ["x64.optdebug", "x64.release"]
+_DEFAULT_BUILDS = ["x64.optdebug", "x64.debug", "x64.release"]
+
+
+def _force_symbol_level(args_gn: Path) -> None:
+    """Rewrite or append `symbol_level = 2` in args.gn."""
+    text = args_gn.read_text()
+    pattern = re.compile(r"^symbol_level\s*=.*$", re.MULTILINE)
+    if pattern.search(text):
+        new_text = pattern.sub("symbol_level = 2", text)
+    else:
+        new_text = text if text.endswith("\n") else text + "\n"
+        new_text += "symbol_level = 2\n"
+    if new_text != text:
+        args_gn.write_text(new_text)
 
 
 def _setup_builds(wt_path: Path, builds: list[str]) -> list[str]:
-    """Run gm.py gn_args for each build config. Returns status lines."""
+    """Prepare each build dir: write args.gn (gm.py), force symbol_level=2, run gn gen."""
     gm = wt_path / "tools" / "dev" / "gm.py"
     if not gm.exists():
-        return [f"(gm.py not found, skipping build setup)"]
+        return ["(gm.py not found, skipping build setup)"]
     results = []
     for build in builds:
+        label = f"  out/{build}"
         try:
             _run(["python3", str(gm), f"{build}.gn_args"], cwd=wt_path)
-            results.append(f"  out/{build.replace('.', '.')}: ok")
+            _force_symbol_level(wt_path / "out" / build / "args.gn")
+            _run(["gn", "gen", f"out/{build}"], cwd=wt_path)
+            results.append(f"{label}: ok")
         except subprocess.CalledProcessError as e:
-            results.append(
-                f"  out/{build.replace('.', '.')}: FAILED ({e.stderr.strip()[:80]})"
-            )
+            err = (e.stderr or e.stdout or "").strip()[:80]
+            results.append(f"{label}: FAILED ({err})")
     return results
 
 
@@ -173,8 +189,20 @@ def _remove_external_symlinks(wt_path: Path) -> None:
             link.unlink()
 
 
-def remove(repo: Path, name: str, force: bool = False) -> None:
-    """Remove a worktree: clean up symlinks then git worktree remove."""
+def remove(
+    repo: Path,
+    name: str,
+    force: bool = False,
+    remove_branch: bool = False,
+) -> dict:
+    """Remove a worktree: clean up symlinks then git worktree remove.
+
+    If remove_branch is true, also delete the underlying git branch.
+    Skipped for detached HEAD, `main`/`master`, or branches checked out
+    in another worktree.
+
+    Returns {branch, branch_removed, note} describing the branch outcome.
+    """
     _validate_name(name)
     main = _find_main_worktree(repo)
     gclient_root = _find_gclient_root(main)
@@ -182,6 +210,15 @@ def remove(repo: Path, name: str, force: bool = False) -> None:
 
     if not wt_path.exists():
         raise ValueError(f"worktree not found: {wt_path}")
+
+    worktrees = list_worktrees(main)
+    branch: str | None = None
+    for wt in worktrees:
+        if Path(wt["path"]).resolve() == wt_path.resolve():
+            b = wt.get("branch")
+            if b and b != "(detached)":
+                branch = b
+            break
 
     # Remove symlinks pointing outside the worktree so git doesn't see
     # untracked content. This is independent of gclient — robust against
@@ -192,6 +229,26 @@ def remove(repo: Path, name: str, force: bool = False) -> None:
     if force:
         cmd.append("--force")
     _run(cmd, cwd=main)
+
+    result = {"branch": branch, "branch_removed": False, "note": None}
+    if not remove_branch:
+        return result
+    if branch is None:
+        result["note"] = "no branch to delete (detached HEAD)"
+        return result
+    if branch in ("main", "master"):
+        result["note"] = f"refusing to delete protected branch {branch!r}"
+        return result
+    for wt in worktrees:
+        if Path(wt["path"]).resolve() == wt_path.resolve():
+            continue
+        if wt.get("branch") == branch:
+            result["note"] = f"branch {branch!r} also checked out in {wt['path']}"
+            return result
+
+    _run(["git", "branch", "-D", branch], cwd=main)
+    result["branch_removed"] = True
+    return result
 
 
 def list_worktrees(repo: Path) -> list[dict]:

@@ -15,6 +15,7 @@ def register(mcp: FastMCP) -> None:
         branch: str | None = None,
         upstream: str = "main",
         force: bool = False,
+        remove_branch: bool = False,
     ) -> CallToolResult:
         """Manage V8 git worktrees with automatic gclient dependency symlinking.
 
@@ -23,13 +24,20 @@ def register(mcp: FastMCP) -> None:
         third_party/*, etc.) are symlinked from the main checkout — no gclient sync
         needed. To update shared deps, run gclient sync in the main checkout.
 
-        action:   "create", "remove", or "list"
-        name:     worktree directory name (required for create/remove)
-        force:    force removal of dirty worktrees (remove only)
-        branch:   branch to check out (create only, optional).
-                  If it exists, checks it out. Otherwise creates a new branch.
-                  Defaults to the worktree name.
-        upstream: base branch/ref for the new branch (default "main")
+        Create produces three build-ready directories — out/x64.optdebug, out/x64.debug,
+        out/x64.release — each with symbol_level=2 forced and `gn gen` already run,
+        so `autoninja -C out/<build> d8` will start building without a gn step.
+
+        action:        "create", "remove", or "list"
+        name:          worktree directory name (required for create/remove)
+        force:         force removal of dirty worktrees (remove only)
+        remove_branch: also delete the underlying git branch (remove only).
+                       Skipped for detached HEAD, main/master, or branches
+                       checked out in another worktree.
+        branch:        branch to check out (create only, optional).
+                       If it exists, checks it out. Otherwise creates a new branch.
+                       Defaults to the worktree name.
+        upstream:      base branch/ref for the new branch (default "main")
         """
         repo = _resolve_repo("v8")
 
@@ -63,8 +71,17 @@ def register(mcp: FastMCP) -> None:
             )
 
         if action == "remove":
-            worktree_mod.remove(repo, name, force=force)
-            return _text_result(f"Worktree '{name}' removed.")
+            result = worktree_mod.remove(
+                repo, name, force=force, remove_branch=remove_branch
+            )
+            lines = [f"Worktree '{name}' removed."]
+            if remove_branch:
+                if result["branch_removed"]:
+                    lines.append(f"Branch '{result['branch']}' deleted.")
+                else:
+                    note = result["note"] or "no branch to delete"
+                    lines.append(f"Branch kept: {note}.")
+            return _text_result(" ".join(lines))
 
         raise ValueError(
             f"Unknown action {action!r}. Use 'create', 'remove', or 'list'."

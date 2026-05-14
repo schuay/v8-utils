@@ -52,9 +52,9 @@ def _cmd_create(repo: Path, name: str, branch: str | None, upstream: str) -> Non
         console.print(f"  {line.strip()}")
 
 
-def _cmd_remove(repo: Path, name: str, force: bool) -> bool:
+def _cmd_remove(repo: Path, name: str, force: bool, remove_branch: bool) -> bool:
     try:
-        worktree.remove(repo, name, force=force)
+        result = worktree.remove(repo, name, force=force, remove_branch=remove_branch)
     except Exception as e:
         msg = str(e)
         if isinstance(e, subprocess.CalledProcessError):
@@ -62,6 +62,12 @@ def _cmd_remove(repo: Path, name: str, force: bool) -> bool:
         console.print(f"[bold red]Error[/] removing '{name}': {msg}")
         return False
     console.print(f"[bold green]Removed[/] '{name}'")
+    if remove_branch:
+        if result["branch_removed"]:
+            console.print(f"  [dim]branch[/] {result['branch']} [dim]deleted[/]")
+        else:
+            note = result["note"] or "no branch to delete"
+            console.print(f"  [dim]branch kept:[/] {note}")
     return True
 
 
@@ -91,6 +97,11 @@ def main(argv: list[str] | None = None) -> None:
     rp.add_argument(
         "-f", "--force", action="store_true", help="Remove even if worktree is dirty"
     )
+    rp.add_argument(
+        "--remove-branch",
+        action="store_true",
+        help="Also delete the underlying git branch",
+    )
 
     args = p.parse_args(argv)
     repo = config.load().repos["v8"].path
@@ -100,7 +111,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.action in ("create", "new"):
         _cmd_create(repo, args.name, args.branch, args.upstream)
     elif args.action in ("remove", "rm"):
-        failed = sum(not _cmd_remove(repo, n, args.force) for n in args.names)
+        failed = sum(
+            not _cmd_remove(repo, n, args.force, args.remove_branch) for n in args.names
+        )
         if failed:
             sys.exit(1)
     else:
