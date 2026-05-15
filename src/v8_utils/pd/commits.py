@@ -123,6 +123,18 @@ class CommitStore:
         if path:
             self.conn.execute("DELETE FROM commits WHERE engine=?", (engine,))
 
+        # The pathspec is relative to the repo root, so run from there even if
+        # the configured src_dir points at a subtree.
+        cwd = src_dir
+        if path:
+            top = subprocess.run(
+                ["git", "-C", str(src_dir), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+            )
+            if top.returncode == 0 and top.stdout.strip():
+                cwd = Path(top.stdout.strip())
+
         git_format = "%H|%cs|%ct|%ae|%s|%b%n--END-COMMIT--"
         cmd = f'git log origin/main --pretty=format:"{git_format}"'
         if since:
@@ -130,9 +142,7 @@ class CommitStore:
         if path:
             cmd += f" -- {path}"
 
-        res = subprocess.run(
-            cmd, shell=True, cwd=src_dir, capture_output=True, text=True
-        )
+        res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
         if res.returncode != 0:
             return 0
 
