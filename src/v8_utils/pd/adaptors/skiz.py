@@ -18,16 +18,19 @@ Requires Application Default Credentials:
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 import pandas as pd
 
 _AGG_TABLE = "benchmarks"
 
-# Variant prefixes that name an engine, per skiz/ingest._make_variant.
-# A variant of "v8", "v8 (turbolev)", "jsc", "jsc (foo)" maps engine accordingly;
-# anything else (e.g. raw flag-only variants like "default") leaves engine unset.
+# Variant prefixes that name an engine. Two layouts are recognised:
+#   skiz/ingest._make_variant:  "v8", "v8 (turbolev)", "jsc", "jsc (foo)"
+#   underscore-separated:       "v8_default", "jsc_default", ...
+# Anything else (raw flag-only variants like "default") leaves engine unset.
 _KNOWN_ENGINES = {"v8", "jsc", "chromium"}
+_ENGINE_SEP_RE = re.compile(r"[ _]")
 
 
 def _connect(project: str, instance: str, database: str):
@@ -79,14 +82,14 @@ def _query(con, sql: str, params: list) -> pd.DataFrame:
 
 
 def _engine_from_variant(variant: str) -> str:
-    """Extract engine name from skiz variant label (see skiz/ingest._make_variant).
+    """Extract engine name from a skiz variant label.
 
     Empty string when the variant does not name a known engine; pandas groupby
     drops NaN groups by default, so we use "" as a stable sentinel.
     """
     if not variant:
         return ""
-    head = variant.split(" ", 1)[0]
+    head = _ENGINE_SEP_RE.split(variant, maxsplit=1)[0]
     return head if head in _KNOWN_ENGINES else ""
 
 
