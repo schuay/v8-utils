@@ -155,7 +155,7 @@ def detect(
         results,
         group_by_commit=group_by_commit,
         commit_store=commit_store,
-        engine=engine,
+        default_engine=engine,
         verbose=verbose,
     )
     commit_store.close()

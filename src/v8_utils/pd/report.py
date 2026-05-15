@@ -145,10 +145,14 @@ def _resolve_v8_roll(
 # ── Detect report ────────────────────────────────────────────────────────────
 
 
+def _resolve_engine(cp: ChangePoint, default_engine: str | None) -> str | None:
+    return cp.engine or default_engine
+
+
 def _format_candidates(
     cp: ChangePoint,
     commit_store: CommitStore | None,
-    engine: str | None,
+    default_engine: str | None,
 ) -> str | None:
     """Format candidate breakpoints as ranges with probabilities."""
     if not cp.candidates:
@@ -157,6 +161,7 @@ def _format_candidates(
     if top_prob >= 0.90:
         return None
 
+    engine = _resolve_engine(cp, default_engine)
     parts = []
     prev_cid = cp.prev_commit_id
     for cid, prob in cp.candidates:
@@ -190,8 +195,9 @@ def _get_commit_info(
 def _get_commit_range(
     cp: ChangePoint,
     commit_store: CommitStore | None,
-    engine: str | None,
+    default_engine: str | None,
 ) -> list[CommitInfo]:
+    engine = _resolve_engine(cp, default_engine)
     if commit_store and engine:
         result = commit_store.get_range(engine, cp.prev_commit_id, cp.commit_id)
         if result:
@@ -203,7 +209,7 @@ def print_detect_report(
     results: list[ChangePoint],
     group_by_commit: bool = False,
     commit_store: CommitStore | None = None,
-    engine: str | None = None,
+    default_engine: str | None = None,
     verbose: bool = False,
 ):
     """Print change-point results as rich tables."""
@@ -211,46 +217,51 @@ def print_detect_report(
         console.print("No change points detected.")
         return
 
-    if verbose and commit_store and engine:
-        # Check what's in the commit store for debugging
-        sample = commit_store.get(engine, results[0].commit_id)
-        v8_count = commit_store.conn.execute(
-            "SELECT count(*) FROM commits WHERE engine='v8'"
-        ).fetchone()[0]
-        eng_count = commit_store.conn.execute(
-            "SELECT count(*) FROM commits WHERE engine=?", (engine,)
-        ).fetchone()[0]
-        console.print(
-            f"[dim]commit store: engine={engine}, {eng_count} {engine} commits, "
-            f"{v8_count} v8 commits, "
-            f"sample lookup({results[0].commit_id})={'found' if sample else 'miss'}[/dim]",
-            highlight=False,
-        )
+    if verbose and commit_store:
+        engines_seen = {_resolve_engine(cp, default_engine) for cp in results}
+        engines_seen.discard(None)
+        for eng in sorted(engines_seen):
+            eng_count = commit_store.conn.execute(
+                "SELECT count(*) FROM commits WHERE engine=?", (eng,)
+            ).fetchone()[0]
+            sample_cp = next(
+                cp for cp in results if _resolve_engine(cp, default_engine) == eng
+            )
+            sample = commit_store.get(eng, sample_cp.commit_id)
+            console.print(
+                f"[dim]commit store: engine={eng}, {eng_count} commits, "
+                f"sample lookup({sample_cp.commit_id})="
+                f"{'found' if sample else 'miss'}[/dim]",
+                highlight=False,
+            )
 
     if group_by_commit:
-        _print_grouped(results, commit_store, engine, verbose=verbose)
+        _print_grouped(results, commit_store, default_engine, verbose=verbose)
     else:
-        _print_flat(results, commit_store, engine)
+        _print_flat(results, commit_store, default_engine)
 
 
 def _print_grouped(
     results: list[ChangePoint],
     commit_store: CommitStore | None,
-    engine: str | None,
+    default_engine: str | None,
     verbose: bool = False,
 ):
-    groups: dict[int, list[ChangePoint]] = defaultdict(list)
+    # Group by (engine, commit_id): commit_id is per-engine, so different engines
+    # land in different number spaces but we want the safety in case they ever overlap.
+    groups: dict[tuple[str | None, int], list[ChangePoint]] = defaultdict(list)
     for cp in results:
-        groups[cp.commit_id].append(cp)
+        groups[(_resolve_engine(cp, default_engine), cp.commit_id)].append(cp)
 
     # Only show these columns if they have more than one distinct value.
     show_variant = len({cp.variant for cp in results}) > 1
     show_submetric = any(cp.submetric for cp in results)
+    show_engine = len({_resolve_engine(cp, default_engine) for cp in results}) > 1
 
     has_commit_info = False
-    for cid in sorted(groups):
-        cp0 = groups[cid][0]
-        range_commits = _get_commit_range(cp0, commit_store, engine)
+    for engine, cid in sorted(groups, key=lambda k: (k[0] or "", k[1])):
+        cp0 = groups[(engine, cid)][0]
+        range_commits = _get_commit_range(cp0, commit_store, default_engine)
         n = len(range_commits)
 
         # Header: always show as range since chromium data points span multiple commits
@@ -267,10 +278,11 @@ def _print_grouped(
                 has_commit_info = True
                 header = _fmt_commit(info)
 
-        console.print(f"\n[bold]{header}[/bold]")
+        prefix = f"{engine}: " if show_engine and engine else ""
+        console.print(f"\n[bold]{prefix}{header}[/bold]")
 
         # Show candidates or commit range listing
-        alt = _format_candidates(cp0, commit_store, engine)
+        alt = _format_candidates(cp0, commit_store, default_engine)
         if alt:
             console.print(f"  [dim]candidates: {alt}[/dim]")
             # Show details for each candidate with significant probability
@@ -304,7 +316,9 @@ def _print_grouped(
         table.add_column("P-VALUE", justify="right")
         table.add_column("CONF")
 
-        for cp in sorted(groups[cid], key=lambda x: abs(x.pct_change), reverse=True):
+        for cp in sorted(
+            groups[(engine, cid)], key=lambda x: abs(x.pct_change), reverse=True
+        ):
             pct = cp.pct_change * 100
             color = "green" if cp.direction == "improvement" else "red"
             p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
@@ -328,30 +342,34 @@ def _print_grouped(
         console.print(table)
 
     if not has_commit_info:
-        eng = engine or "<engine>"
+        engines = sorted(
+            {_resolve_engine(cp, default_engine) or "<engine>" for cp in results}
+        )
+        sync_cmds = "\n".join(f"  pd sync {e}" for e in engines)
         console.print(
-            f"\n[yellow]Warning: no commit metadata available — "
-            f"titles and authors are missing.[/yellow]"
+            "\n[yellow]Warning: no commit metadata available — "
+            "titles and authors are missing.[/yellow]"
         )
         console.print(
-            f"[dim]To fix, configure the source repo and sync:\n"
-            f"  1. Set {eng}_dir in ~/.config/v8-utils/config.toml\n"
-            f'  2. Set engine = "{eng}" for this source in config\n'
-            f"  3. Run: pd sync {eng}[/dim]"
+            f"[dim]To fix, ensure the engine repos are configured under [repos.*]\n"
+            f"in ~/.config/v8-utils/config.toml, then run:\n{sync_cmds}[/dim]"
         )
 
 
 def _print_flat(
     results: list[ChangePoint],
     commit_store: CommitStore | None,
-    engine: str | None,
+    default_engine: str | None,
 ):
     results = sorted(results, key=lambda x: abs(x.pct_change), reverse=True)
 
     show_variant = len({cp.variant for cp in results}) > 1
     show_submetric = any(cp.submetric for cp in results)
+    show_engine = len({_resolve_engine(cp, default_engine) for cp in results}) > 1
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
+    if show_engine:
+        table.add_column("ENGINE")
     table.add_column("BENCHMARK")
     table.add_column("METRIC")
     if show_variant:
@@ -368,7 +386,7 @@ def _print_flat(
         pct = cp.pct_change * 100
         color = "green" if cp.direction == "improvement" else "red"
 
-        range_commits = _get_commit_range(cp, commit_store, engine)
+        range_commits = _get_commit_range(cp, commit_store, default_engine)
         n = len(range_commits)
 
         if n == 1 and range_commits[0].title:
@@ -378,15 +396,20 @@ def _print_flat(
         else:
             desc = str(cp.commit_id)
 
-        alt = _format_candidates(cp, commit_store, engine)
+        alt = _format_candidates(cp, commit_store, default_engine)
         if alt:
             desc += f"\n  also: {alt}"
 
         p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
-        row_cells = [
-            rich_escape(cp.benchmark),
-            cp.metric,
-        ]
+        row_cells = []
+        if show_engine:
+            row_cells.append(_resolve_engine(cp, default_engine) or "")
+        row_cells.extend(
+            [
+                rich_escape(cp.benchmark),
+                cp.metric,
+            ]
+        )
         if show_variant:
             row_cells.append(cp.variant)
         if show_submetric:

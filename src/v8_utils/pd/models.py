@@ -24,6 +24,7 @@ class ChangePoint:
     seg_before_mean: float
     seg_after_mean: float
     candidates: list[tuple[int, float]] = field(default_factory=list)
+    engine: str | None = None
 
 
 @dataclass

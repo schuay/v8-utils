@@ -24,6 +24,11 @@ import pandas as pd
 
 _AGG_TABLE = "benchmarks"
 
+# Variant prefixes that name an engine, per skiz/ingest._make_variant.
+# A variant of "v8", "v8 (turbolev)", "jsc", "jsc (foo)" maps engine accordingly;
+# anything else (e.g. raw flag-only variants like "default") leaves engine unset.
+_KNOWN_ENGINES = {"v8", "jsc", "chromium"}
+
 
 def _connect(project: str, instance: str, database: str):
     import os
@@ -71,6 +76,18 @@ def _query(con, sql: str, params: list) -> pd.DataFrame:
         cur.execute(sql.replace("?", "%s"), params or None)
         cols = [desc[0] for desc in cur.description]
         return pd.DataFrame(cur.fetchall(), columns=cols)
+
+
+def _engine_from_variant(variant: str) -> str:
+    """Extract engine name from skiz variant label (see skiz/ingest._make_variant).
+
+    Empty string when the variant does not name a known engine; pandas groupby
+    drops NaN groups by default, so we use "" as a stable sentinel.
+    """
+    if not variant:
+        return ""
+    head = variant.split(" ", 1)[0]
+    return head if head in _KNOWN_ENGINES else ""
 
 
 def _parse_url(url: str) -> tuple[str, str, str]:
@@ -149,6 +166,8 @@ class SkizAdaptor:
             f" ORDER BY bot, benchmark, test, variant, commit_number",
             params,
         )
+        if not df.empty:
+            df["engine"] = df["variant"].map(_engine_from_variant)
         return df
 
 

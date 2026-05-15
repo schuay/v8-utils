@@ -29,7 +29,7 @@ REQUIRED_COLUMNS = {
 # Optional columns (present when data is pre-aggregated)
 AGGREGATE_COLUMNS = {"stdev", "count"}
 # Optional dimension columns
-OPTIONAL_COLUMNS = {"submetric"}
+OPTIONAL_COLUMNS = {"submetric", "engine"}
 
 
 class Adaptor(Protocol):
@@ -83,6 +83,8 @@ def ensure_aggregated(df: pd.DataFrame) -> pd.DataFrame:
     ]
     if "submetric" in df.columns:
         group_cols.insert(4, "submetric")
+    if "engine" in df.columns:
+        group_cols.append("engine")
     grouped = df.groupby(group_cols, sort=False)["value"]
 
     agg = grouped.agg(["mean", "std", "count"]).reset_index()
