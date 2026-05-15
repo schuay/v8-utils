@@ -13,6 +13,7 @@ ENGINES: dict[str, dict] = {
     },
     "jsc": {
         "id_regex": r"Canonical link:.*/([0-9]+)@",
+        "path": "Source/JavaScriptCore",
     },
 }
 
@@ -34,3 +35,9 @@ def get_id_regex(engine: str) -> str | None:
     """Get the commit ID regex for an engine."""
     info = ENGINES.get(engine)
     return info["id_regex"] if info else None
+
+
+def get_path_filter(engine: str) -> str | None:
+    """Optional path inside the repo to restrict commits to (e.g. Source/JavaScriptCore)."""
+    info = ENGINES.get(engine)
+    return info.get("path") if info else None

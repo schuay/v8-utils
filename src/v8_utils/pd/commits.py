@@ -112,12 +112,23 @@ class CommitStore:
         src_dir: Path,
         id_regex: str,
         since: str | None = None,
+        path: str | None = None,
     ) -> int:
-        """Populate commit metadata from git log."""
+        """Populate commit metadata from git log.
+
+        When `path` is set, restricts to commits touching that subtree and
+        first deletes any pre-existing rows for the engine (since the previous
+        un-filtered sync would have included unrelated commits).
+        """
+        if path:
+            self.conn.execute("DELETE FROM commits WHERE engine=?", (engine,))
+
         git_format = "%H|%cs|%ct|%ae|%s|%b%n--END-COMMIT--"
         cmd = f'git log origin/main --pretty=format:"{git_format}"'
         if since:
             cmd += f' --since="{since}"'
+        if path:
+            cmd += f" -- {path}"
 
         res = subprocess.run(
             cmd, shell=True, cwd=src_dir, capture_output=True, text=True

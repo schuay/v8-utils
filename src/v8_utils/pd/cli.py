@@ -12,7 +12,7 @@ import typer
 from .adaptor import discover
 from .commits import CommitStore
 from .detect import detect_from_df
-from .engines import ENGINES, get_id_regex, get_src_dir
+from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir
 from .models import AnalysisConfig
 from .report import print_compare_report, print_detect_report
 
@@ -326,8 +326,12 @@ def sync(
     since_date = since or "6 months ago"
 
     store = CommitStore()
-    typer.echo(f"Syncing {engine} commits from {src_dir} (since {since_date})...")
-    count = store.populate(engine, src_dir, id_regex, since=since_date)
+    path = get_path_filter(engine)
+    suffix = f" path={path}" if path else ""
+    typer.echo(
+        f"Syncing {engine} commits from {src_dir} (since {since_date}){suffix}..."
+    )
+    count = store.populate(engine, src_dir, id_regex, since=since_date, path=path)
     typer.echo(f"  {count} commits processed.")
     store.close()
 
