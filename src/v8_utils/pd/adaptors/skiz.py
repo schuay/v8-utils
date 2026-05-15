@@ -1,11 +1,19 @@
-"""Adaptor for skiz (Postgres/DuckDB) perf data.
-
-Copy to ~/.config/v8-utils/adaptors/skiz.py and adjust if needed.
+"""Adaptor for skiz (Spanner) perf data.
 
 Config example:
     [sources.skiz]
+    adaptor  = "skiz"
+    project  = "v8-infra"
+    instance = "v8-perf"
+    database = "v8-perf"
+
+Or with a single URL:
+    [sources.skiz]
     adaptor = "skiz"
-    db_url = "postgres://user:pass@host/skiz"
+    url     = "spanner://v8-infra/v8-perf/v8-perf"
+
+Requires Application Default Credentials:
+    gcloud auth application-default login
 """
 
 from __future__ import annotations
@@ -14,36 +22,86 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-_AGG_TABLE = "agg.benchmarks"
+_AGG_TABLE = "benchmarks"
 
 
-def _connect(url: str):
-    parsed = urlparse(url)
-    if parsed.scheme in ("postgres", "postgresql"):
-        import psycopg2
+def _connect(project: str, instance: str, database: str):
+    import os
+    import warnings
 
-        con = psycopg2.connect(url)
-        con.autocommit = True
-        return con, "postgres"
-    else:
-        import duckdb
+    # Disable the built-in metrics exporter; it tries to push to Cloud
+    # Monitoring and spews PERMISSION_DENIED tracebacks for ADC users that
+    # don't have monitoring.timeSeries.create. Must be set before Client is
+    # constructed (Client reads the env var in __init__).
+    # google-cloud-spanner < 3.50 used SPANNER_ENABLE_BUILTIN_METRICS=false.
+    os.environ.setdefault("SPANNER_DISABLE_BUILTIN_METRICS", "true")
 
-        return duckdb.connect(url, read_only=True), "duckdb"
+    # google-auth ADC fires a quota-project UserWarning on every connection.
+    warnings.filterwarnings(
+        "ignore",
+        message="Your application has authenticated using end user credentials",
+        category=UserWarning,
+        module=r"google\.auth\._default",
+    )
 
+    try:
+        from google.cloud.spanner_dbapi import connect as dbapi_connect
+    except ImportError as e:
+        raise ImportError(
+            "google-cloud-spanner required: uv add google-cloud-spanner"
+        ) from e
 
-def _query(con, dialect: str, sql: str, params: list) -> pd.DataFrame:
-    if dialect == "postgres":
+    con = dbapi_connect(instance, database, project=project)
+    con.autocommit = True
+
+    # Validate creds with a cheap query. Without this the first failure is a
+    # DDL call whose default retry policy retries auth errors for 3600 s.
+    try:
         with con.cursor() as cur:
-            cur.execute(sql.replace("?", "%s"), params or None)
-            cols = [desc[0] for desc in cur.description]
-            return pd.DataFrame(cur.fetchall(), columns=cols)
-    else:
-        return con.execute(sql, params).df()
+            cur.execute("SELECT 1")
+    except Exception as e:
+        con.close()
+        raise ConnectionError(f"Spanner auth check failed: {e}") from e
+
+    return con
+
+
+def _query(con, sql: str, params: list) -> pd.DataFrame:
+    with con.cursor() as cur:
+        cur.execute(sql.replace("?", "%s"), params or None)
+        cols = [desc[0] for desc in cur.description]
+        return pd.DataFrame(cur.fetchall(), columns=cols)
+
+
+def _parse_url(url: str) -> tuple[str, str, str]:
+    parsed = urlparse(url)
+    if parsed.scheme != "spanner":
+        raise ValueError(f"Expected spanner:// URL, got {url!r}")
+    parts = parsed.path.strip("/").split("/")
+    if len(parts) != 2 or not parsed.netloc:
+        raise ValueError(
+            f"Invalid spanner URL: {url!r} (expected spanner://project/instance/database)"
+        )
+    return parsed.netloc, parts[0], parts[1]
 
 
 class SkizAdaptor:
-    def __init__(self, db_url: str, **_kwargs):
-        self._con, self._dialect = _connect(db_url)
+    def __init__(
+        self,
+        project: str | None = None,
+        instance: str | None = None,
+        database: str | None = None,
+        url: str | None = None,
+        **_kwargs,
+    ):
+        if url is not None:
+            project, instance, database = _parse_url(url)
+        if not (project and instance and database):
+            raise ValueError(
+                "skiz adaptor requires either url=spanner://... or "
+                "project/instance/database keys"
+            )
+        self._con = _connect(project, instance, database)
 
     def fetch(
         self,
@@ -83,7 +141,6 @@ class SkizAdaptor:
         where = " AND ".join(conditions)
         df = _query(
             self._con,
-            self._dialect,
             f"SELECT bot, benchmark, test, variant,"
             f"       commit_number AS commit_id, git_hash, commit_time,"
             f"       mean AS value, stdev, count"
