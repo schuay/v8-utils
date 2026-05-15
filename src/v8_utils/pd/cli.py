@@ -84,6 +84,12 @@ def detect(
     metric: Annotated[
         Optional[str], typer.Option("--metric", "-m", help="Metric/test glob filter")
     ] = None,
+    engine_filter: Annotated[
+        Optional[str],
+        typer.Option(
+            "--engine", help="Engine filter (e.g. v8, jsc) for sources that expose it"
+        ),
+    ] = None,
     since: Annotated[
         Optional[str],
         typer.Option(
@@ -101,7 +107,8 @@ def detect(
         Optional[float], typer.Option("--min-effect", help="Min Cohen's d")
     ] = None,
     min_change: Annotated[
-        Optional[float], typer.Option("--min-change", help="Min pct change")
+        Optional[float],
+        typer.Option("--min-change", help="Min percent change (e.g. 5 = 5%)"),
     ] = None,
     group_by_commit: Annotated[
         bool, typer.Option("--group", help="Group results by commit")
@@ -120,7 +127,7 @@ def detect(
     config = AnalysisConfig(
         penalty=penalty or analysis_cfg.get("penalty", 3.0),
         min_effect_size=min_effect or analysis_cfg.get("min_effect_size", 0.5),
-        min_pct_change=min_change or analysis_cfg.get("min_pct_change", 0.01),
+        min_pct_change=min_change or analysis_cfg.get("min_pct_change", 1.0),
     )
 
     filter_kwargs = {}
@@ -146,6 +153,16 @@ def detect(
     if metric:
         fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
         _log(f"  after --metric filter: {len(fetched)} rows")
+
+    if engine_filter:
+        if "engine" not in fetched.columns:
+            typer.echo(
+                f"Error: source '{source}' does not expose an engine column",
+                err=True,
+            )
+            raise typer.Exit(1)
+        fetched = fetched[fetched["engine"] == engine_filter]
+        _log(f"  after --engine filter: {len(fetched)} rows")
 
     t0 = time.monotonic()
     results = detect_from_df(fetched, config)

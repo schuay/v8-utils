@@ -127,7 +127,7 @@ class Config:
         default_factory=lambda: {
             "penalty": 3.0,
             "min_effect_size": 0.5,
-            "min_pct_change": 0.01,
+            "min_pct_change": 1.0,
         },
         metadata={_HELP: "PELT analysis tuning parameters"},
     )
@@ -302,7 +302,7 @@ def load() -> Config:
             {
                 "penalty": 3.0,
                 "min_effect_size": 0.5,
-                "min_pct_change": 0.01,
+                "min_pct_change": 1.0,
             },
         ),
     )

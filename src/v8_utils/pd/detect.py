@@ -98,7 +98,10 @@ def detect_series(
             counts[bk:next_bk],
         )
 
-        if abs(pct_change) < config.min_pct_change and abs(d) < config.min_effect_size:
+        if (
+            abs(pct_change) * 100 < config.min_pct_change
+            or abs(d) < config.min_effect_size
+        ):
             prev_bk = bk
             continue
 
