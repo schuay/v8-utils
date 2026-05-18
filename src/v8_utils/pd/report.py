@@ -163,11 +163,15 @@ def _format_candidates(
 
     engine = _resolve_engine(cp, default_engine)
     parts = []
+    # Each candidate is a position in the data points; its window is the commits
+    # added between the previous candidate (or the last known-good data point)
+    # and this one. Advancing prev_cid even on skipped candidates keeps the
+    # windows disjoint.
     prev_cid = cp.prev_commit_id
     for cid, prob in cp.candidates:
         if prob < 0.05:
+            prev_cid = cid
             continue
-        # Each candidate is a range from prev data point to this one
         n = 0
         if commit_store and engine:
             range_commits = commit_store.get_range(engine, prev_cid, cid)
@@ -178,6 +182,7 @@ def _format_candidates(
         else:
             label = str(cid)
         parts.append(f"{label}[dim]({prob:.0%})[/dim]")
+        prev_cid = cid
 
     return " | ".join(parts) if parts else None
 
@@ -285,12 +290,16 @@ def _print_grouped(
         alt = _format_candidates(cp0, commit_store, default_engine)
         if alt:
             console.print(f"  [dim]candidates: {alt}[/dim]")
-            # Show details for each candidate with significant probability
+            # Advance prev_cid across all candidates so each window covers only
+            # the commits added between adjacent candidates, not the cumulative
+            # span back to cp0.prev_commit_id (which would repeat shared commits).
+            prev_cid = cp0.prev_commit_id
             for c_cid, c_prob in cp0.candidates:
                 if c_prob < 0.05:
+                    prev_cid = c_cid
                     continue
                 c_range = (
-                    commit_store.get_range(engine, cp0.prev_commit_id, c_cid)
+                    commit_store.get_range(engine, prev_cid, c_cid)
                     if commit_store and engine
                     else []
                 )
@@ -298,6 +307,7 @@ def _print_grouped(
                     _print_commit_range(
                         c_range, commit_store, indent="    ", verbose=verbose
                     )
+                prev_cid = c_cid
         elif range_commits:
             _print_commit_range(range_commits, commit_store, verbose=verbose)
 
