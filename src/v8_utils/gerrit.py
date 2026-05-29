@@ -347,16 +347,19 @@ def create_drafts(
         path = c.get("path") or "/PATCHSET_LEVEL"
         if path.strip("/").upper() == "PATCHSET_LEVEL":
             path = "/PATCHSET_LEVEL"
+        is_patchset_level = path == "/PATCHSET_LEVEL"
         body: dict = {
             "path": path,
             "message": c["message"],
-            "side": c.get("side", "REVISION"),
             "unresolved": c.get("unresolved", True),
         }
-        if c.get("line") is not None:
-            body["line"] = c["line"]
-        if c.get("range"):
-            body["range"] = c["range"]
+        # Gerrit rejects side/line/range on patchset-level drafts.
+        if not is_patchset_level:
+            body["side"] = c.get("side", "REVISION")
+            if c.get("line") is not None:
+                body["line"] = c["line"]
+            if c.get("range"):
+                body["range"] = c["range"]
         if c.get("in_reply_to"):
             body["in_reply_to"] = c["in_reply_to"]
         try:
