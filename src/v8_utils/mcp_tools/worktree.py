@@ -28,8 +28,15 @@ def register(mcp: FastMCP) -> None:
         out/x64.release — each with symbol_level=2 forced and `gn gen` already run,
         so `autoninja -C out/<build> d8` will start building without a gn step.
 
-        action:        "create", "remove", or "list"
-        name:          worktree directory name (required for create/remove)
+        The symlink set is a snapshot from create time. After rebasing a worktree
+        onto a different main, DEPS may no longer match it (new deps unlinked,
+        removed deps left dangling). If a build breaks with missing/unexpected
+        dep directories after a rebase, use action="refresh" to rebuild the links.
+        Run gclient sync in the main checkout first if main has not synced the
+        new deps yet.
+
+        action:        "create", "remove", "refresh", or "list"
+        name:          worktree directory name (required for create/remove/refresh)
         force:         force removal of dirty worktrees (remove only)
         remove_branch: also delete the underlying git branch (remove only).
                        Skipped for detached HEAD, main/master, or branches
@@ -70,6 +77,19 @@ def register(mcp: FastMCP) -> None:
                 f"  cd {wt_path} && autoninja -C out/x64.release d8\n"
             )
 
+        if action == "refresh":
+            result = worktree_mod.refresh(repo, name)
+            linked = result["linked"]
+            if linked:
+                body = f"Linked {len(linked)} dep(s):\n" + "\n".join(
+                    f"  {dep}" for dep in linked
+                )
+            else:
+                body = "No deps to link (already up to date)."
+            return _text_result(
+                f"Symlinks refreshed for '{name}' at {result['path']}.\n{body}"
+            )
+
         if action == "remove":
             result = worktree_mod.remove(
                 repo, name, force=force, remove_branch=remove_branch
@@ -84,5 +104,5 @@ def register(mcp: FastMCP) -> None:
             return _text_result(" ".join(lines))
 
         raise ValueError(
-            f"Unknown action {action!r}. Use 'create', 'remove', or 'list'."
+            f"Unknown action {action!r}. Use 'create', 'remove', 'refresh', or 'list'."
         )

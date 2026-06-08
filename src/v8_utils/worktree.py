@@ -157,8 +157,21 @@ def create(
     _run(cmd, cwd=main)
 
     # Symlink gclient-managed deps.
-    paths = _symlink_paths(main, gclient_root)
-    for dep in paths:
+    _create_symlinks(main, wt_path, gclient_root)
+
+    # Set up default build directories.
+    build_results = _setup_builds(wt_path, _DEFAULT_BUILDS)
+
+    return {"path": wt_path, "builds": build_results}
+
+
+def _create_symlinks(main: Path, wt_path: Path, gclient_root: Path) -> list[str]:
+    """Create symlinks for the current set of gclient deps. Skips existing links.
+
+    Returns the list of dep paths that were linked.
+    """
+    linked = []
+    for dep in _symlink_paths(main, gclient_root):
         src = main / dep
         dst = wt_path / dep
         if not src.exists() or dst.exists() or dst.is_symlink():
@@ -166,11 +179,36 @@ def create(
         dst.parent.mkdir(parents=True, exist_ok=True)
         rel = Path(src).resolve().relative_to(dst.parent.resolve(), walk_up=True)
         dst.symlink_to(rel)
+        linked.append(dep)
+    return linked
 
-    # Set up default build directories.
-    build_results = _setup_builds(wt_path, _DEFAULT_BUILDS)
 
-    return {"path": wt_path, "builds": build_results}
+def refresh(repo: Path, name: str) -> dict:
+    """Rebuild a worktree's gclient dep symlinks against the current DEPS.
+
+    The symlink set is a snapshot taken at create time. After rebasing the
+    worktree onto a different main, the checked-out DEPS no longer matches it:
+    new deps have no link, removed deps leave stale links, moved deps do both.
+    This removes all external symlinks and recreates them from the current DEPS.
+
+    Targets resolve into the main checkout, so run `gclient sync` there first
+    if the rebase pulled in deps main has not synced yet.
+
+    Returns {path, linked} with the worktree path and the deps that were linked.
+    """
+    _validate_name(name)
+    main = _find_main_worktree(repo)
+    gclient_root = _find_gclient_root(main)
+    wt_path = gclient_root / name
+
+    if not wt_path.exists():
+        raise ValueError(f"worktree not found: {wt_path}")
+
+    # Remove first: the create loop skips existing links, so stale ones must go
+    # before recreation. _remove_external_symlinks also clears dangling links.
+    _remove_external_symlinks(wt_path)
+    linked = _create_symlinks(main, wt_path, gclient_root)
+    return {"path": wt_path, "linked": linked}
 
 
 def _remove_external_symlinks(wt_path: Path) -> None:

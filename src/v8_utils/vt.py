@@ -4,6 +4,7 @@ Usage:
   vt list
   vt create <name> [-b BRANCH] [-u UPSTREAM]
   vt remove <name> [-f]
+  vt refresh <name>
 """
 
 from __future__ import annotations
@@ -71,6 +72,16 @@ def _cmd_remove(repo: Path, name: str, force: bool, remove_branch: bool) -> bool
     return True
 
 
+def _cmd_refresh(repo: Path, name: str) -> None:
+    result = worktree.refresh(repo, name)
+    linked = result["linked"]
+    console.print(f"[bold green]Refreshed[/] symlinks for '{name}'")
+    if linked:
+        console.print(f"  [dim]linked {len(linked)} dep(s):[/] {', '.join(linked)}")
+    else:
+        console.print("  [dim]no deps to link (already up to date)[/]")
+
+
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="vt", description="V8 worktree manager")
     sub = p.add_subparsers(dest="action", required=True)
@@ -103,6 +114,14 @@ def main(argv: list[str] | None = None) -> None:
         help="Also delete the underlying git branch",
     )
 
+    # refresh
+    fp = sub.add_parser(
+        "refresh",
+        help="Rebuild gclient dep symlinks after a rebase (fixes DEPS-related "
+        "build breakage)",
+    )
+    fp.add_argument("name", help="Worktree directory name")
+
     args = p.parse_args(argv)
     repo = config.load().repos["v8"].path
 
@@ -116,6 +135,8 @@ def main(argv: list[str] | None = None) -> None:
         )
         if failed:
             sys.exit(1)
+    elif args.action == "refresh":
+        _cmd_refresh(repo, args.name)
     else:
         p.print_help()
         sys.exit(1)
