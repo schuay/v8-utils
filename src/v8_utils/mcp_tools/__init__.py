@@ -14,12 +14,13 @@ from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 # Reject unknown tool parameters instead of silently ignoring them.
 ArgModelBase.model_config["extra"] = "forbid"
 
-from . import gerrit, performance, pinpoint, repo_git, worktree
+from . import gerrit, pd, performance, pinpoint, repo_git, worktree
 from .repo_git import REPOS_LINE
 
 
 GROUPS: dict[str, tuple[Callable[[FastMCP], None], bool]] = {
     "gerrit": (gerrit.register, True),
+    "pd": (pd.register, False),
     "performance": (performance.register, True),
     "pinpoint": (pinpoint.register, True),
     "repo_git": (repo_git.register, True),
@@ -50,6 +51,7 @@ def build_server(overrides: dict[str, bool] | None = None) -> FastMCP:
             "d8_trace_index (V8 traces), "
             "v8log_analyze (V8 logs: deopts, ICs, maps, profile), "
             "jsb_run_bench (run/compare JS benchmarks), "
+            "pd_* (perf data: change-point detection and AB compare), "
             "pinpoint_* (Chromium Pinpoint A/B jobs), "
             "gerrit_* (Chromium Gerrit code review)."
         ),
