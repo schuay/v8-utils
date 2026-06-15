@@ -330,6 +330,10 @@ def parse_since(value: str) -> datetime:
     Uses dateparser for natural language support. Accepts anything dateparser
     understands, e.g. "one month ago", "2 weeks ago", "2026-03-01", "yesterday".
 
+    "today" and "yesterday" are mapped to midnight, since dateparser otherwise
+    resolves them to the current time of day, which makes "--since today" exclude
+    everything earlier today.
+
     The special value "all" disables the cutoff (returns datetime.min).
     """
     import dateparser
@@ -337,6 +341,9 @@ def parse_since(value: str) -> datetime:
     value = value.strip()
     if value.lower() == "all":
         return datetime.min
+    value = {"today": "midnight", "yesterday": "yesterday midnight"}.get(
+        value.lower(), value
+    )
     dt = dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": True})
     if dt is None:
         raise ValueError(
