@@ -452,6 +452,7 @@ def print_compare_report(
         return
 
     visible = result_df if show_all else result_df[result_df["significant"]]
+    visible = visible.sort_values("pct_change", ascending=False)
     omitted = len(result_df) - len(visible)
 
     if visible.empty:
