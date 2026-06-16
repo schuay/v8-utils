@@ -352,34 +352,65 @@ def _format_cq_builder_detail(
     return "\n".join(lines)
 
 
-def register(mcp: FastMCP) -> None:
-    @mcp.tool()
-    def gerrit_comments(
-        change_url: str, include_drafts: bool = False
-    ) -> CallToolResult:
-        """Fetch comments on a Gerrit CL, threaded by file and line.
+def _comments_result(change_url: str, include_drafts: bool) -> CallToolResult:
+    threads = gerrit_tools.comments(change_url, include_drafts=include_drafts)
+    if not threads:
+        return _text_result("No comments found.")
+    return _text_result(_format_gerrit_comments(threads))
 
-        Each entry represents a comment thread showing file:line, the short
-        commit hash the comment is attached to, author, message, and replies.
-        The commit hash identifies the exact code version — use `git show
-        <hash>:path` to see the file as it was when the comment was written.
 
-        Each comment line shows its UUID in `[brackets]` after the author.
-        Pass that UUID as `in_reply_to` to `gerrit_create_comments` to reply.
+def register(
+    mcp: FastMCP, *, drafts_enabled: bool = True, default_user: bool = True
+) -> None:
+    # When drafts are disabled (e.g. a shared/untrusted deployment) the
+    # include_drafts parameter is removed entirely, so an agent cannot surface
+    # the operator's unpublished review drafts.
+    if drafts_enabled:
 
-        Threads are sorted by file path then line number.  Use this to understand
-        reviewer feedback or the current state of a code review.
+        @mcp.tool()
+        def gerrit_comments(
+            change_url: str, include_drafts: bool = False
+        ) -> CallToolResult:
+            """Fetch comments on a Gerrit CL, threaded by file and line.
 
-        change_url:     Gerrit CL URL, e.g.:
-          https://chromium-review.googlesource.com/c/v8/v8/+/7650974
-          https://chromium-review.googlesource.com/7650974
-        include_drafts: also fetch your unpublished draft comments (requires
-          authentication via `luci-auth login`)
-        """
-        threads = gerrit_tools.comments(change_url, include_drafts=include_drafts)
-        if not threads:
-            return _text_result("No comments found.")
-        return _text_result(_format_gerrit_comments(threads))
+            Each entry represents a comment thread showing file:line, the short
+            commit hash the comment is attached to, author, message, and replies.
+            The commit hash identifies the exact code version — use `git show
+            <hash>:path` to see the file as it was when the comment was written.
+
+            Each comment line shows its UUID in `[brackets]` after the author.
+            Pass that UUID as `in_reply_to` to `gerrit_create_comments` to reply.
+
+            Threads are sorted by file path then line number.  Use this to understand
+            reviewer feedback or the current state of a code review.
+
+            change_url:     Gerrit CL URL, e.g.:
+              https://chromium-review.googlesource.com/c/v8/v8/+/7650974
+              https://chromium-review.googlesource.com/7650974
+            include_drafts: also fetch your unpublished draft comments (requires
+              authentication via `luci-auth login`)
+            """
+            return _comments_result(change_url, include_drafts)
+
+    else:
+
+        @mcp.tool()
+        def gerrit_comments(change_url: str) -> CallToolResult:
+            """Fetch published comments on a Gerrit CL, threaded by file and line.
+
+            Each entry represents a comment thread showing file:line, the short
+            commit hash the comment is attached to, author, message, and replies.
+            The commit hash identifies the exact code version — use `git show
+            <hash>:path` to see the file as it was when the comment was written.
+
+            Threads are sorted by file path then line number.  Use this to understand
+            reviewer feedback or the current state of a code review.
+
+            change_url:     Gerrit CL URL, e.g.:
+              https://chromium-review.googlesource.com/c/v8/v8/+/7650974
+              https://chromium-review.googlesource.com/7650974
+            """
+            return _comments_result(change_url, include_drafts=False)
 
     @mcp.tool()
     def gerrit_create_comments(
@@ -470,6 +501,11 @@ def register(mcp: FastMCP) -> None:
           "hashtag:compiler project:v8/v8 status:open"
         limit: max results (default 25)
         """
+        if not default_user and _re.search(r"\bself\b", query):
+            return _text_result(
+                "Error: 'self' is disabled in this deployment; specify an "
+                "explicit owner/reviewer email instead."
+            )
         cls = gerrit_tools.list_cls(query, limit=limit)
         if not cls:
             return _text_result(f"No CLs found for query: {query}")

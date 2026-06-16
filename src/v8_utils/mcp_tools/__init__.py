@@ -28,11 +28,22 @@ GROUPS: dict[str, tuple[Callable[[FastMCP], None], bool]] = {
 }
 
 
-def build_server(overrides: dict[str, bool] | None = None) -> FastMCP:
+def build_server(
+    overrides: dict[str, bool] | None = None,
+    *,
+    gerrit_drafts: bool = True,
+    default_user: bool = True,
+) -> FastMCP:
     """Construct a FastMCP server with the chosen groups registered.
 
-    overrides: optional {group_name: enabled} mapping. Groups not mentioned
-               fall back to their default in GROUPS.
+    overrides:     optional {group_name: enabled} mapping. Groups not mentioned
+                   fall back to their default in GROUPS.
+    gerrit_drafts: when False, gerrit_comments cannot read unpublished drafts
+                   and drops the include_drafts parameter (for deployments that
+                   expose the tools to untrusted callers).
+    default_user:  when False, tools never fall back to the logged-in account:
+                   pinpoint job listings require an explicit user and
+                   gerrit_list_cls rejects 'self'.
     """
     overrides = overrides or {}
     mcp = FastMCP(
@@ -58,5 +69,10 @@ def build_server(overrides: dict[str, bool] | None = None) -> FastMCP:
     )
     for name, (register, default) in GROUPS.items():
         if overrides.get(name, default):
-            register(mcp)
+            if name == "gerrit":
+                register(mcp, drafts_enabled=gerrit_drafts, default_user=default_user)
+            elif name == "pinpoint":
+                register(mcp, default_user=default_user)
+            else:
+                register(mcp)
     return mcp

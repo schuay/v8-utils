@@ -12,8 +12,25 @@ import httpx
 
 _XSSI = ")]}'\n"
 
+# Gerrit hosts we are willing to talk to. The host is taken from the
+# caller-supplied change URL, and authenticated requests attach the user's
+# luci OAuth token; without this allowlist a crafted URL would send that token
+# (and, via fetch_ref, a git fetch) to an arbitrary host. Only Google-operated
+# Gerrit review hosts qualify (chromium-review, chrome-internal-review, ...).
+_ALLOWED_HOST_SUFFIX = "-review.googlesource.com"
+
 
 # ── URL parsing ───────────────────────────────────────────────────────────────
+
+
+def _check_host(netloc: str) -> None:
+    """Reject any host that is not a Google-operated Gerrit review host."""
+    host = netloc.rsplit("@", 1)[-1].rsplit(":", 1)[0].lower()
+    if not host.endswith(_ALLOWED_HOST_SUFFIX):
+        raise ValueError(
+            f"Refusing Gerrit request to non-allowlisted host {host!r}; "
+            f"only *{_ALLOWED_HOST_SUFFIX} is permitted."
+        )
 
 
 def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
@@ -26,6 +43,9 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
       https://chromium-review.googlesource.com/7650974/1
     """
     p = urlparse(url)
+    if p.scheme != "https":
+        raise ValueError(f"Gerrit URL must be https, got {p.scheme!r}: {url!r}")
+    _check_host(p.netloc)
     api_base = f"{p.scheme}://{p.netloc}"
     path = p.path.rstrip("/")
 

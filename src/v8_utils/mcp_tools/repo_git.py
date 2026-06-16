@@ -82,7 +82,7 @@ def register(mcp: FastMCP) -> None:
             if not ref:
                 raise ValueError("ref is required when path is omitted (commit mode)")
             proc = subprocess.run(
-                ["git", "show", "--stat", "--patch", ref],
+                ["git", "show", "--stat", "--patch", "--end-of-options", ref],
                 capture_output=True,
                 text=True,
                 cwd=root,
@@ -92,7 +92,7 @@ def register(mcp: FastMCP) -> None:
             lines = proc.stdout.splitlines()
         elif ref:
             proc = subprocess.run(
-                ["git", "show", f"{ref}:{path}"],
+                ["git", "show", "--end-of-options", f"{ref}:{path}"],
                 capture_output=True,
                 text=True,
                 cwd=root,
@@ -103,9 +103,13 @@ def register(mcp: FastMCP) -> None:
                 )
             lines = proc.stdout.splitlines()
         else:
+            root = root.resolve()
             target = (root / path).resolve()
-            # Prevent path traversal outside repo root
-            if not str(target).startswith(str(root)):
+            # Prevent path traversal outside repo root. is_relative_to is a true
+            # path-boundary check; a string prefix test would admit siblings
+            # that merely share the root's leading characters (e.g. v8-secrets
+            # for a v8 root).
+            if not target.is_relative_to(root):
                 raise ValueError(f"Path escapes repo root: {path}")
             if not target.is_file():
                 raise ValueError(f"File not found: {path} (in {root})")
@@ -143,9 +147,11 @@ def register(mcp: FastMCP) -> None:
             cmd.append("-i")
         if context > 0:
             cmd.append(f"-C{context}")
-        cmd.append(pattern)
+        # -e keeps a leading-dash pattern from being parsed as an option;
+        # --end-of-options does the same for a caller-supplied ref.
+        cmd.extend(["-e", pattern])
         if ref:
-            cmd.append(ref)
+            cmd.extend(["--end-of-options", ref])
         if glob:
             cmd.extend(["--", glob])
 
@@ -201,7 +207,16 @@ def register(mcp: FastMCP) -> None:
     ) -> CallToolResult:
         root = _resolve_repo(repo)
         if ref:
-            cmd = ["git", "ls-tree", "-r", "--name-only", ref, "--", glob]
+            cmd = [
+                "git",
+                "ls-tree",
+                "-r",
+                "--name-only",
+                "--end-of-options",
+                ref,
+                "--",
+                glob,
+            ]
         else:
             cmd = ["git", "ls-files", "--", glob]
 
@@ -263,7 +278,7 @@ def register(mcp: FastMCP) -> None:
         if grep:
             cmd.extend(["--grep", grep, "-i"])
         if ref:
-            cmd.append(ref)
+            cmd.extend(["--end-of-options", ref])
         if path:
             cmd.extend(["--", path])
 

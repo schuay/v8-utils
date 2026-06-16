@@ -58,7 +58,7 @@ def _format_job_list(jobs: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def register(mcp: FastMCP) -> None:
+def register(mcp: FastMCP, *, default_user: bool = True) -> None:
     @mcp.tool()
     def pinpoint_show_job(job_urls: str) -> CallToolResult:
         """Fetch and display key information about one or more Pinpoint jobs.
@@ -143,6 +143,11 @@ def register(mcp: FastMCP) -> None:
 
         All filters are ANDed together.
         """
+        if not default_user and not user:
+            return _text_result(
+                "Error: pass an explicit user= (the default-user fallback is "
+                "disabled in this deployment)."
+            )
         patch = resolve_patch_filter(patch)
         filters = []
         if patch:
@@ -210,6 +215,13 @@ def register(mcp: FastMCP) -> None:
         if bot:
             filters.append(f"bot={bot}")
         has_filters = len(filters) > 1 or recent or since
+
+        if not default_user and (recent or has_filters):
+            return _text_result(
+                "Error: listing jobs by recency/filters resolves to the "
+                "logged-in account, which is disabled in this deployment; "
+                "pass explicit job_urls instead."
+            )
 
         if recent or has_filters:
             since_str = since or ("one month ago" if has_filters else None)

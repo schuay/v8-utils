@@ -39,10 +39,35 @@ def main() -> None:
             default=None,
             help=f"disable the {name} tool group (default: {state})",
         )
+    parser.add_argument(
+        "--no-gerrit-drafts",
+        dest="gerrit_drafts",
+        action="store_false",
+        default=True,
+        help=(
+            "disable reading unpublished Gerrit draft comments and drop the "
+            "include_drafts parameter (for untrusted/shared deployments)"
+        ),
+    )
+    parser.add_argument(
+        "--no-default-user",
+        dest="default_user",
+        action="store_false",
+        default=True,
+        help=(
+            "do not fall back to the logged-in account: pinpoint job listings "
+            "require an explicit user and gerrit_list_cls rejects 'self' "
+            "(avoids exposing the operator's activity to untrusted callers)"
+        ),
+    )
     args = parser.parse_args()
 
     overrides = {n: getattr(args, n) for n in GROUPS if getattr(args, n) is not None}
-    build_server(overrides).run()
+    build_server(
+        overrides,
+        gerrit_drafts=args.gerrit_drafts,
+        default_user=args.default_user,
+    ).run()
 
 
 if __name__ == "__main__":
