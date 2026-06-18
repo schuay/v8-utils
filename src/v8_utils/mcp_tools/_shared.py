@@ -10,6 +10,36 @@ from .. import config
 
 _STARTUP_MTIME = os.path.getmtime(__file__)
 
+# Overall byte cap for a single tool result, enforced by _text_result as a last
+# line of defense. Individual tools already bound their output via pagination,
+# match limits, etc; this only catches pathological cases those limits miss
+# (e.g. a grep matching multi-hundred-KB minified lines or binary blobs). Set
+# well below the 16 MiB stdio JSON-RPC message limit that, when exceeded, makes
+# Claude Code tear down the whole MCP transport: truncating one result is far
+# better than disconnecting the server. The text is measured in UTF-8 bytes;
+# JSON escaping inflates this somewhat on the wire, hence the conservative gap.
+_MAX_RESULT_BYTES = 8 * 1024 * 1024
+
+
+def _truncate_to_bytes(text: str, limit: int) -> str:
+    """Truncate text so its UTF-8 encoding is at most `limit` bytes.
+
+    Returns text unchanged when already within the limit; otherwise keeps the
+    head (most relevant) and appends a notice explaining the cap. Cuts on a
+    character boundary so the result stays valid UTF-8.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= limit:
+        return text
+    notice = (
+        "\n\n[truncated: result exceeded the {mb} MiB tool-output cap "
+        "({actual} bytes). Narrow the query (tighter path globs, lower limit, "
+        "more specific pattern) to see the rest.]"
+    ).format(mb=limit // (1024 * 1024), actual=len(encoded))
+    budget = max(limit - len(notice.encode("utf-8")), 0)
+    head = encoded[:budget].decode("utf-8", errors="ignore")
+    return head + notice
+
 
 def _check_stale() -> str:
     try:
@@ -30,8 +60,9 @@ def _text_result(text: str) -> CallToolResult:
     with proper newlines instead of a collapsed JSON blob (see
     anthropics/claude-code#9962).
     """
+    body = _truncate_to_bytes(text, _MAX_RESULT_BYTES)
     return CallToolResult(
-        content=[TextContent(type="text", text=_check_stale() + text)],
+        content=[TextContent(type="text", text=_check_stale() + body)],
     )
 
 
