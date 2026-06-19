@@ -341,6 +341,9 @@ def at(
     show_all: Annotated[
         bool, typer.Option("--show-all", help="Include below-threshold series")
     ] = False,
+    chart_only: Annotated[
+        bool, typer.Option("--charts", help="One sparkline line per series, no table")
+    ] = False,
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show timing and progress info")
     ] = False,
@@ -426,7 +429,7 @@ def at(
         header.append(filt)
 
     snapped = deltas[0].snapped_commit_id if deltas else target_id
-    print_at_report(deltas, snapped, header, show_all=show_all)
+    print_at_report(deltas, snapped, header, show_all=show_all, chart_only=chart_only)
 
 
 # ── sync ─────────────────────────────────────────────────────────────────────

@@ -502,13 +502,16 @@ def print_compare_report(
 # ── At-commit report ─────────────────────────────────────────────────────────
 
 _BLOCKS = "▁▂▃▄▅▆▇█"
+# Commit marker inside the sparkline. Deliberately not "|" or "┃": those read
+# as table-column delimiters and get stripped when an agent relays the output.
+_C_MARK = "┊"
 
 
 def _sparkline(values: list[float], split: int, after_color: str) -> str:
-    """Block-eighths sparkline with the after-segment colored and C marked.
+    """Block-eighths sparkline with the after-segment colored and the commit marked.
 
-    The whole series is scaled jointly so the step at C is visible; the before
-    and after segments are separated by a marker bar.
+    The whole series is scaled jointly so the step at the commit is visible; the
+    before and after segments are separated by the commit marker.
     """
     if not values:
         return ""
@@ -518,7 +521,19 @@ def _sparkline(values: list[float], split: int, after_color: str) -> str:
     chars = [_BLOCKS[round((v - lo) / span * (len(_BLOCKS) - 1))] for v in values]
     before = "".join(chars[:split])
     after = "".join(chars[split:])
-    return f"[dim]{before}[/dim][bold]┃[/bold][{after_color}]{after}[/{after_color}]"
+    return f"[dim]{before}[/dim]{_C_MARK}[{after_color}]{after}[/{after_color}]"
+
+
+def _at_label(d: CommitDelta) -> str:
+    """Compact identifier for a series: benchmark/metric[ submetric]."""
+    label = (
+        f"{rich_escape(d.benchmark)}/{d.metric}"
+        if d.metric
+        else rich_escape(d.benchmark)
+    )
+    if d.submetric:
+        label += f" [{d.submetric}]"
+    return label
 
 
 def print_at_report(
@@ -526,8 +541,13 @@ def print_at_report(
     target_id: int,
     header_lines: list[str],
     show_all: bool = False,
+    chart_only: bool = False,
 ):
-    """Print at-commit before/after assessments as a compact rich table."""
+    """Print at-commit before/after assessments.
+
+    Default is a compact table; chart_only emits one plain line per series
+    (sparkline first) with no table borders, which survives relaying intact.
+    """
     for line in header_lines:
         console.print(f"[dim]{line}[/dim]")
 
@@ -544,8 +564,23 @@ def print_at_report(
             console.print(f"[dim]({omitted} below threshold; --show-all to see)[/dim]")
         return
 
-    show_engine = any(d.engine for d in visible)
     show_variant = len({d.variant for d in visible}) > 1
+
+    if chart_only:
+        console.print(f"[dim]chart C={target_id}, before {_C_MARK} after[/dim]")
+        for d in visible:
+            color = "green" if d.step > 0 else "red"
+            spark = _sparkline(d.spark, d.spark_split, color)
+            conf = d.confidence + ("*" if d.transient else "")
+            variant = f" {d.variant}" if show_variant else ""
+            console.print(
+                f"{spark}  [{color}]{d.pct_change * 100:+.1f}%[/{color}]"
+                f"  {_at_label(d)}{variant}  [dim]{conf}[/dim]"
+            )
+        _print_at_footnotes(visible, omitted)
+        return
+
+    show_engine = any(d.engine for d in visible)
     show_submetric = any(d.submetric for d in visible)
 
     table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
@@ -557,24 +592,17 @@ def print_at_report(
         table.add_column("VARIANT")
     if show_submetric:
         table.add_column("SUBMETRIC")
-    table.add_column("BEFORE", justify="right")
-    table.add_column("AFTER", justify="right")
+    table.add_column("BEFORE→AFTER", justify="right")
     table.add_column("CHG%", justify="right")
     table.add_column("SNR", justify="right")
-    table.add_column("Z", justify="right")
     table.add_column("N", justify="right")
     table.add_column("CONF")
-    table.add_column(f"SURROUND (C={target_id})")
+    table.add_column(f"CHART C={target_id}")
 
     for d in visible:
         color = "green" if d.step > 0 else "red"
         spark = _sparkline(d.spark, d.spark_split, color)
-
-        conf = d.confidence
-        if d.transient:
-            conf += "*"
-
-        z_str = f"{d.z:.1f}" if not math.isnan(d.z) else "—"
+        conf = d.confidence + ("*" if d.transient else "")
         snr_str = f"{d.snr:.1f}" if d.sigma > 0 else "—"
 
         row_cells = []
@@ -587,11 +615,9 @@ def print_at_report(
             row_cells.append(d.submetric)
         row_cells.extend(
             [
-                f"{d.before_level:.3f}",
-                f"{d.after_level:.3f}",
+                f"{d.before_level:.3f}→{d.after_level:.3f}",
                 f"[{color}]{d.pct_change * 100:+.2f}%[/{color}]",
                 snr_str,
-                z_str,
                 f"{d.n_before}/{d.n_after}",
                 conf,
                 spark,
@@ -600,6 +626,10 @@ def print_at_report(
         table.add_row(*row_cells)
 
     console.print(table)
+    _print_at_footnotes(visible, omitted)
+
+
+def _print_at_footnotes(visible: list[CommitDelta], omitted: int):
     if any(d.transient for d in visible):
         console.print(
             "[dim]* newest measured commit: change unconfirmed, may be transient"

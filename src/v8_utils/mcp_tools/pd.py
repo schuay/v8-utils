@@ -81,30 +81,24 @@ def register(mcp: FastMCP) -> None:
         min_effect: float | None = None,
         source: str = "skiz",
     ) -> CallToolResult:
-        """Detect change points (regressions/improvements) in benchmark time series.
+        """Scan benchmark timelines for regressions/improvements (change points).
 
-        Runs PELT change-point detection per series and reports significant
-        shifts with percent change, effect size, p-value, and the commit range
-        each shift falls into.
+        Use when you do NOT know where a change happened: PELT searches each
+        series over a date range and reports significant shifts with the commit
+        range each falls in. Needs several points around a shift, so for a known
+        or very recent commit use pd_commit_impact instead; to compare two fixed
+        configurations use pd_compare.
 
-        Output size grows with the number of series scanned. Omitting
-        `benchmark` scans every benchmark and can produce a very large report;
-        prefer a `benchmark` (and optionally `metric`) filter, raise
-        `min_change`, or shorten the `since` window to bound the result.
+        Narrow with benchmark/engine/metric; omitting benchmark scans all series
+        (large). Shows only significant shifts.
 
-        benchmark:  benchmark name filter, e.g. "jetstream3.slipstream" or
-                    "jetstream2.slipstream". Omit to scan all benchmarks (large).
-        engine:     engine filter, "v8" or "jsc". Omit to include all engines.
-        bot:        bot name filter (default "mac-m3-jgruber").
-        since:      only include commits after this date. Plain-text dates work,
-                    e.g. "two weeks ago" (default) or "2026-05-01".
-        until:      only include commits before this date (optional).
-        metric:     metric/test glob filter, e.g. "Total*" (optional).
-        min_change: minimum percent change to report (default 3 = 3%).
-        group:      group results by commit (default True).
-        penalty:    PELT penalty override (optional; defaults from config).
-        min_effect: minimum Cohen's d override (optional; defaults from config).
-        source:     data source name (default "skiz").
+        benchmark:  filter, e.g. "jetstream3.slipstream"; omit to scan all (large).
+        engine:     "v8" or "jsc".
+        bot:        default "mac-m3-jgruber".
+        since:      window start, natural language ok (default "two weeks ago").
+        metric:     test glob, e.g. "Total*".
+        min_change: minimum percent change to report (default 3).
+        source:     data source (default "skiz").
         """
         cfg = _load_config()
         since_date = _parse_date(since) if since else None
@@ -153,7 +147,7 @@ def register(mcp: FastMCP) -> None:
         return _text_result(text)
 
     @mcp.tool()
-    def pd_at(
+    def pd_commit_impact(
         commit: str,
         benchmark: str | None = None,
         variant: str | None = None,
@@ -163,37 +157,37 @@ def register(mcp: FastMCP) -> None:
         history: int = 20,
         min_change: float = 3.0,
         show_all: bool = False,
+        chart_only: bool = False,
         source: str = "skiz",
     ) -> CallToolResult:
-        """Assess what changed at a specific commit (before vs after).
+        """Assess one specific commit's impact on benchmarks: before vs after.
 
-        For a known, usually very recent commit, compares the measurements just
-        before it against those at/after it, per series. The noise scale is
-        estimated from the surrounding history (robust lag-1 differences), so
-        the verdict holds even with only a point or two after the commit, where
-        change-point detection (pd_detect) cannot work. The target is snapped to
-        the nearest measured commit >= it.
+        Use when you have a concrete commit (position or hash) and want its
+        effect, especially recent commits where pd_detect has too little
+        post-commit data to work. Compares measurements just before the commit
+        against those at/after it per series; the noise scale comes from the
+        surrounding history, so the verdict holds with only a point or two after.
+        Snaps to the nearest measured commit >= the target. To find unknown
+        change points over time use pd_detect; for two fixed configs, pd_compare.
 
-        Each row reports before/after levels, percent change, SNR (step over the
-        series' own noise), a z-score and FDR-adjusted significance, the
-        before/after sample counts, a confidence tag, and a sparkline of the
-        surrounding series with the commit marked. A `*` on the confidence tag
+        Each row: before->after level, percent change, SNR (step over the
+        series' own noise), FDR significance, n_before/n_after, a confidence tag,
+        and a sparkline of the surround with the commit marked. A `*` on the tag
         means the commit is the newest measured point, so the change is
-        unconfirmed and may be transient (re-run as more data lands).
+        unconfirmed and may be transient. Significant-only unless show_all.
 
-        Typically narrow to one engine/variant/benchmark (and optionally
-        metric); without filters this assesses every series around the commit.
+        Narrow with engine/variant/benchmark/metric; variant encodes the engine
+        (e.g. "v8_default", "v8_turbolev"), so it pins the engine on its own.
 
-        commit:     target commit position (numeric id) or git hash prefix.
-        benchmark:  benchmark name filter, e.g. "jetstream3.slipstream".
-        variant:    variant filter, e.g. "default" or "turbolev".
-        engine:     engine filter, "v8" or "jsc".
-        bot:        bot name filter (default "mac-m3-jgruber").
-        metric:     metric/test glob filter, e.g. "Total*" (optional).
+        commit:     commit position (numeric id) or git hash prefix.
+        benchmark:  e.g. "jetstream3.slipstream".
+        variant:    e.g. "v8_default" (encodes engine).
+        metric:     test glob, e.g. "Total*".
         history:    commits of history for the noise estimate (default 20).
-        min_change: minimum percent change to flag (default 3 = 3%).
+        min_change: minimum percent change to flag (default 3).
         show_all:   include below-threshold series (default False).
-        source:     data source name (default "skiz").
+        chart_only: emit one sparkline line per series, no table (default False).
+        bot/source: default "mac-m3-jgruber" / "skiz".
         """
         cfg = _load_config()
         adaptor = _make_adaptor(source, cfg)
@@ -268,7 +262,9 @@ def register(mcp: FastMCP) -> None:
             header.append(filt)
 
         snapped = deltas[0].snapped_commit_id if deltas else target_id
-        text = _render(report.print_at_report, deltas, snapped, header, show_all)
+        text = _render(
+            report.print_at_report, deltas, snapped, header, show_all, chart_only
+        )
         return _text_result(text)
 
     @mcp.tool()
@@ -283,24 +279,22 @@ def register(mcp: FastMCP) -> None:
         alpha: float = 0.05,
         source: str = "skiz",
     ) -> CallToolResult:
-        """Compare two configurations (A vs B) of benchmark data.
+        """Compare two fixed benchmark configurations head to head (A vs B).
 
-        Each side is defined by field=value overrides on the dimension columns
-        (bot, benchmark, test, variant). Filters not overridden on either side
-        become the join keys, and the report shows per-key A vs B means, percent
-        change, and FDR-corrected significance.
+        Use when you have two configs to compare directly (variants, bots,
+        flag-sets), not a timeline. Each side is field=value overrides on
+        bot/benchmark/test/variant; dimensions left unoverridden become the join
+        keys. Reports per-key A vs B means, percent change, and FDR-corrected
+        significance. To find changes over time use pd_detect; for one specific
+        commit's effect, pd_commit_impact.
 
-        a:          A-side (base) overrides, e.g. ["variant=default"].
-        b:          B-side (experiment) overrides, e.g. ["variant=turbolev"].
-        benchmark:  benchmark filter applied to both sides, e.g.
-                    "jetstream3.slipstream" or "jetstream2.slipstream" (optional).
-        bot:        bot filter applied to both sides (default "mac-m3-jgruber").
-        since:      only include commits after this date. Plain-text dates work,
-                    e.g. "two weeks ago" (default) or "2026-05-01".
-        until:      only include commits before this date (optional).
+        a:          A-side (base) overrides, e.g. ["variant=v8_default"].
+        b:          B-side overrides, e.g. ["variant=v8_turbolev"].
+        benchmark:  filter both sides, e.g. "jetstream3.slipstream".
+        bot:        filter both sides (default "mac-m3-jgruber").
+        since:      window start, natural language ok (default "two weeks ago").
         show_all:   include non-significant results (default False).
-        alpha:      significance threshold after FDR correction (default 0.05).
-        source:     data source name (default "skiz").
+        source:     data source (default "skiz").
         """
         cfg = _load_config()
         since_date = _parse_date(since) if since else None
