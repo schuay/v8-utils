@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
-from .models import ChangePoint, CommitInfo
+from .models import ChangePoint, CommitDelta, CommitInfo
 
 if TYPE_CHECKING:
     from .commits import CommitStore
@@ -497,3 +497,113 @@ def print_compare_report(
         console.print(
             f"[dim]({omitted} non-significant result{'s' if omitted != 1 else ''} omitted)[/dim]"
         )
+
+
+# ── At-commit report ─────────────────────────────────────────────────────────
+
+_BLOCKS = "▁▂▃▄▅▆▇█"
+
+
+def _sparkline(values: list[float], split: int, after_color: str) -> str:
+    """Block-eighths sparkline with the after-segment colored and C marked.
+
+    The whole series is scaled jointly so the step at C is visible; the before
+    and after segments are separated by a marker bar.
+    """
+    if not values:
+        return ""
+    lo = min(values)
+    hi = max(values)
+    span = (hi - lo) or 1.0
+    chars = [_BLOCKS[round((v - lo) / span * (len(_BLOCKS) - 1))] for v in values]
+    before = "".join(chars[:split])
+    after = "".join(chars[split:])
+    return f"[dim]{before}[/dim][bold]┃[/bold][{after_color}]{after}[/{after_color}]"
+
+
+def print_at_report(
+    deltas: list[CommitDelta],
+    target_id: int,
+    header_lines: list[str],
+    show_all: bool = False,
+):
+    """Print at-commit before/after assessments as a compact rich table."""
+    for line in header_lines:
+        console.print(f"[dim]{line}[/dim]")
+
+    if not deltas:
+        console.print("\nNo series with data at or after the commit.")
+        return
+
+    visible = deltas if show_all else [d for d in deltas if d.significant]
+    omitted = len(deltas) - len(visible)
+
+    if not visible:
+        console.print("\n(no significant changes at this commit)")
+        if omitted:
+            console.print(f"[dim]({omitted} below threshold; --show-all to see)[/dim]")
+        return
+
+    show_engine = any(d.engine for d in visible)
+    show_variant = len({d.variant for d in visible}) > 1
+    show_submetric = any(d.submetric for d in visible)
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
+    if show_engine:
+        table.add_column("ENGINE")
+    table.add_column("BENCHMARK")
+    table.add_column("METRIC")
+    if show_variant:
+        table.add_column("VARIANT")
+    if show_submetric:
+        table.add_column("SUBMETRIC")
+    table.add_column("BEFORE", justify="right")
+    table.add_column("AFTER", justify="right")
+    table.add_column("CHG%", justify="right")
+    table.add_column("SNR", justify="right")
+    table.add_column("Z", justify="right")
+    table.add_column("N", justify="right")
+    table.add_column("CONF")
+    table.add_column(f"SURROUND (C={target_id})")
+
+    for d in visible:
+        color = "green" if d.step > 0 else "red"
+        spark = _sparkline(d.spark, d.spark_split, color)
+
+        conf = d.confidence
+        if d.transient:
+            conf += "*"
+
+        z_str = f"{d.z:.1f}" if not math.isnan(d.z) else "—"
+        snr_str = f"{d.snr:.1f}" if d.sigma > 0 else "—"
+
+        row_cells = []
+        if show_engine:
+            row_cells.append(d.engine or "")
+        row_cells.extend([rich_escape(d.benchmark), d.metric])
+        if show_variant:
+            row_cells.append(d.variant)
+        if show_submetric:
+            row_cells.append(d.submetric)
+        row_cells.extend(
+            [
+                f"{d.before_level:.3f}",
+                f"{d.after_level:.3f}",
+                f"[{color}]{d.pct_change * 100:+.2f}%[/{color}]",
+                snr_str,
+                z_str,
+                f"{d.n_before}/{d.n_after}",
+                conf,
+                spark,
+            ]
+        )
+        table.add_row(*row_cells)
+
+    console.print(table)
+    if any(d.transient for d in visible):
+        console.print(
+            "[dim]* newest measured commit: change unconfirmed, may be transient"
+            " (re-run as more data lands).[/dim]"
+        )
+    if omitted:
+        console.print(f"[dim]({omitted} below threshold; --show-all to see)[/dim]")

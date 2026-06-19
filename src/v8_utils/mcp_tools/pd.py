@@ -10,10 +10,11 @@ from rich.console import Console
 from .. import config as v8_config
 from ..pd import report
 from ..pd.adaptor import discover
+from ..pd.at import at_from_df
 from ..pd.commits import CommitStore
 from ..pd.compare import compare_snapshots
 from ..pd.detect import detect_from_df
-from ..pd.models import AnalysisConfig
+from ..pd.models import AnalysisConfig, AtConfig
 from ._shared import _text_result
 
 
@@ -86,8 +87,13 @@ def register(mcp: FastMCP) -> None:
         shifts with percent change, effect size, p-value, and the commit range
         each shift falls into.
 
+        Output size grows with the number of series scanned. Omitting
+        `benchmark` scans every benchmark and can produce a very large report;
+        prefer a `benchmark` (and optionally `metric`) filter, raise
+        `min_change`, or shorten the `since` window to bound the result.
+
         benchmark:  benchmark name filter, e.g. "jetstream3.slipstream" or
-                    "jetstream2.slipstream". Omit to scan all benchmarks.
+                    "jetstream2.slipstream". Omit to scan all benchmarks (large).
         engine:     engine filter, "v8" or "jsc". Omit to include all engines.
         bot:        bot name filter (default "mac-m3-jgruber").
         since:      only include commits after this date. Plain-text dates work,
@@ -144,6 +150,125 @@ def register(mcp: FastMCP) -> None:
         finally:
             commit_store.close()
 
+        return _text_result(text)
+
+    @mcp.tool()
+    def pd_at(
+        commit: str,
+        benchmark: str | None = None,
+        variant: str | None = None,
+        engine: str | None = None,
+        bot: str = "mac-m3-jgruber",
+        metric: str | None = None,
+        history: int = 20,
+        min_change: float = 3.0,
+        show_all: bool = False,
+        source: str = "skiz",
+    ) -> CallToolResult:
+        """Assess what changed at a specific commit (before vs after).
+
+        For a known, usually very recent commit, compares the measurements just
+        before it against those at/after it, per series. The noise scale is
+        estimated from the surrounding history (robust lag-1 differences), so
+        the verdict holds even with only a point or two after the commit, where
+        change-point detection (pd_detect) cannot work. The target is snapped to
+        the nearest measured commit >= it.
+
+        Each row reports before/after levels, percent change, SNR (step over the
+        series' own noise), a z-score and FDR-adjusted significance, the
+        before/after sample counts, a confidence tag, and a sparkline of the
+        surrounding series with the commit marked. A `*` on the confidence tag
+        means the commit is the newest measured point, so the change is
+        unconfirmed and may be transient (re-run as more data lands).
+
+        Typically narrow to one engine/variant/benchmark (and optionally
+        metric); without filters this assesses every series around the commit.
+
+        commit:     target commit position (numeric id) or git hash prefix.
+        benchmark:  benchmark name filter, e.g. "jetstream3.slipstream".
+        variant:    variant filter, e.g. "default" or "turbolev".
+        engine:     engine filter, "v8" or "jsc".
+        bot:        bot name filter (default "mac-m3-jgruber").
+        metric:     metric/test glob filter, e.g. "Total*" (optional).
+        history:    commits of history for the noise estimate (default 20).
+        min_change: minimum percent change to flag (default 3 = 3%).
+        show_all:   include below-threshold series (default False).
+        source:     data source name (default "skiz").
+        """
+        cfg = _load_config()
+        adaptor = _make_adaptor(source, cfg)
+        commit_engine = _engine_for_source(source, cfg)
+        store = CommitStore()
+        try:
+            if commit.isdigit():
+                target_id = int(commit)
+                info = store.get(commit_engine, target_id) if commit_engine else None
+            elif commit_engine:
+                info = store.get_by_hash(commit_engine, commit)
+                if info is None:
+                    raise ValueError(
+                        f"commit {commit!r} not found for engine {commit_engine!r}"
+                        " (run `pd sync` to populate commit metadata)"
+                    )
+                target_id = info.id
+            else:
+                raise ValueError(
+                    f"commit {commit!r} is a hash but source {source!r} has no engine"
+                    " for lookup; pass a numeric commit position instead"
+                )
+
+            since_date = _parse_date("6 months ago")
+            if info and info.date:
+                from datetime import datetime, timedelta
+
+                try:
+                    base = datetime.strptime(info.date, "%Y-%m-%d")
+                    since_date = (base - timedelta(days=90)).strftime("%Y-%m-%d")
+                except ValueError:
+                    pass
+
+            config = AtConfig(history=history, min_pct_change=min_change)
+
+            filter_kwargs: dict[str, str] = {}
+            if bot:
+                filter_kwargs["bot"] = bot
+            if benchmark:
+                filter_kwargs["benchmark"] = benchmark
+
+            fetched = adaptor.fetch(since=since_date, until=None, **filter_kwargs)
+
+            if metric:
+                fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
+            if variant:
+                fetched = fetched[fetched["variant"] == variant]
+            if engine:
+                if "engine" not in fetched.columns:
+                    raise ValueError(
+                        f"source {source!r} does not expose an engine column"
+                    )
+                fetched = fetched[fetched["engine"] == engine]
+
+            deltas = at_from_df(fetched, target_id, config)
+        finally:
+            store.close()
+
+        header = [f"At commit {commit} (snap >= {target_id})"]
+        filt = " ".join(
+            f"{k}={v}"
+            for k, v in {
+                "bot": bot,
+                "benchmark": benchmark,
+                "variant": variant,
+                "engine": engine,
+                "metric": metric,
+            }.items()
+            if v
+        )
+        if filt:
+            header.append(filt)
+
+        snapped = deltas[0].snapped_commit_id if deltas else target_id
+        text = _render(report.print_at_report, deltas, snapped, header, show_all)
         return _text_result(text)
 
     @mcp.tool()

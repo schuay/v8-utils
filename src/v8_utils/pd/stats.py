@@ -53,6 +53,33 @@ def cohens_d(
     return d, float(p)
 
 
+def lag1_mad_sigma(values: list[float]) -> float:
+    """Robust commit-to-commit noise scale from lag-1 differences.
+
+    Estimates the per-step standard deviation of a series using the MAD of
+    successive differences. Differencing removes slow trends; an isolated real
+    step survives as a single outlier the MAD discards. Returns 0.0 with fewer
+    than three points.
+    """
+    import numpy as np
+
+    arr = np.asarray(values, dtype=float)
+    if arr.size < 3:
+        return 0.0
+    diffs = np.diff(arr)
+    mad = np.median(np.abs(diffs - np.median(diffs)))
+    # 1.4826 scales MAD to a Gaussian sigma; the sqrt(2) undoes the variance
+    # doubling from differencing two independent points.
+    return float(1.4826 * mad / math.sqrt(2.0))
+
+
+def normal_two_sided_p(z: float) -> float:
+    """Two-sided p-value for a z-score under the standard normal."""
+    from scipy.stats import norm
+
+    return float(2.0 * norm.sf(abs(z)))
+
+
 def welch_p(m1: float, s1: float, n1: int, m2: float, s2: float, n2: int) -> float:
     """Welch's t-test p-value from summary statistics. Returns NaN if not computable."""
     if n1 < 2 or n2 < 2 or (s1 == 0 and s2 == 0):

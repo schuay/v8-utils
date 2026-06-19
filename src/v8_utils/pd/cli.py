@@ -280,6 +280,155 @@ def compare(
     print_compare_report(result_df, key_cols, header, show_all=show_all)
 
 
+# ── at ───────────────────────────────────────────────────────────────────────
+
+
+def _resolve_target(
+    commit: str, engine: str | None, store: CommitStore
+) -> tuple[int, str | None]:
+    """Resolve a commit arg (id or hash prefix) to (commit_id, label)."""
+    if commit.isdigit():
+        cid = int(commit)
+        info = store.get(engine, cid) if engine else None
+        label = info.date if info else None
+        return cid, label
+    if not engine:
+        raise typer.BadParameter(
+            f"commit {commit!r} is a hash but the source has no engine for lookup;"
+            " pass a numeric commit position instead"
+        )
+    info = store.get_by_hash(engine, commit)
+    if info is None:
+        raise typer.BadParameter(
+            f"commit {commit!r} not found for engine {engine!r}"
+            " (run `pd sync` to populate commit metadata)"
+        )
+    return info.id, info.date
+
+
+@app.command()
+def at(
+    source: Annotated[str, typer.Argument(help="Data source name")],
+    commit: Annotated[
+        str, typer.Argument(help="Target commit position (id) or git hash prefix")
+    ],
+    bot: Annotated[Optional[str], typer.Option("--bot", help="Bot name filter")] = None,
+    benchmark: Annotated[
+        Optional[str], typer.Option("--benchmark", "-b", help="Benchmark name filter")
+    ] = None,
+    variant: Annotated[
+        Optional[str], typer.Option("--variant", help="Variant filter")
+    ] = None,
+    engine_filter: Annotated[
+        Optional[str], typer.Option("--engine", help="Engine filter (e.g. v8, jsc)")
+    ] = None,
+    metric: Annotated[
+        Optional[str], typer.Option("--metric", "-m", help="Metric/test glob filter")
+    ] = None,
+    history: Annotated[
+        int, typer.Option("--history", help="Commits of history for the noise estimate")
+    ] = 20,
+    min_change: Annotated[
+        Optional[float],
+        typer.Option("--min-change", help="Min percent change (e.g. 3 = 3%)"),
+    ] = None,
+    min_z: Annotated[
+        Optional[float], typer.Option("--min-z", help="Min |z| to flag")
+    ] = None,
+    since: Annotated[
+        Optional[str], typer.Option(help="Fetch window start (default: derived from C)")
+    ] = None,
+    show_all: Annotated[
+        bool, typer.Option("--show-all", help="Include below-threshold series")
+    ] = False,
+    verbose: Annotated[
+        bool, typer.Option("--verbose", "-v", help="Show timing and progress info")
+    ] = False,
+):
+    """Assess what changed at a specific commit (before vs after)."""
+    from .at import at_from_df
+    from .models import AtConfig
+    from .report import print_at_report
+
+    cfg = _load_config()
+    adaptor = _make_adaptor(source, cfg)
+    engine = _engine_for_source(source, cfg)
+    store = CommitStore()
+
+    def _log(msg: str) -> None:
+        if verbose:
+            typer.echo(msg, err=True)
+
+    target_id, target_date = _resolve_target(commit, engine, store)
+    _log(f"target commit_id={target_id}" + (f" ({target_date})" if target_date else ""))
+
+    # Default the fetch window to a span ending well before C so the history is
+    # covered; derive from the commit date when known.
+    if since:
+        since_date = _parse_date(since)
+    else:
+        since_date = _parse_date("6 months ago")
+        if target_date:
+            from datetime import datetime, timedelta
+
+            try:
+                base = datetime.strptime(target_date, "%Y-%m-%d")
+                since_date = (base - timedelta(days=90)).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+    analysis_cfg = cfg.get("analysis", {})
+    config = AtConfig(
+        history=history,
+        min_pct_change=min_change or analysis_cfg.get("min_pct_change", 1.0),
+        min_z=min_z if min_z is not None else 2.0,
+    )
+
+    filter_kwargs: dict[str, str] = {}
+    if bot:
+        filter_kwargs["bot"] = bot
+    if benchmark:
+        filter_kwargs["benchmark"] = benchmark
+
+    t0 = time.monotonic()
+    _log(f"fetching data since {since_date}...")
+    fetched = adaptor.fetch(since=since_date, until=None, **filter_kwargs)
+    _log(f"fetch: {len(fetched)} rows in {time.monotonic() - t0:.1f}s")
+
+    if metric:
+        fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
+    if variant:
+        fetched = fetched[fetched["variant"] == variant]
+    if engine_filter:
+        if "engine" not in fetched.columns:
+            typer.echo(
+                f"Error: source '{source}' does not expose an engine column", err=True
+            )
+            raise typer.Exit(1)
+        fetched = fetched[fetched["engine"] == engine_filter]
+
+    deltas = at_from_df(fetched, target_id, config)
+    store.close()
+
+    header = [f"At commit {commit} (snap >= {target_id})"]
+    filt = " ".join(
+        f"{k}={v}"
+        for k, v in {
+            "bot": bot,
+            "benchmark": benchmark,
+            "variant": variant,
+            "engine": engine_filter,
+            "metric": metric,
+        }.items()
+        if v
+    )
+    if filt:
+        header.append(filt)
+
+    snapped = deltas[0].snapped_commit_id if deltas else target_id
+    print_at_report(deltas, snapped, header, show_all=show_all)
+
+
 # ── sync ─────────────────────────────────────────────────────────────────────
 
 
