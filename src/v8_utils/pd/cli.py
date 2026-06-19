@@ -280,7 +280,7 @@ def compare(
     print_compare_report(result_df, key_cols, header, show_all=show_all)
 
 
-# ── at ───────────────────────────────────────────────────────────────────────
+# ── commit-impact ────────────────────────────────────────────────────────────
 
 
 def _resolve_target(
@@ -307,7 +307,7 @@ def _resolve_target(
 
 
 @app.command()
-def at(
+def commit_impact(
     source: Annotated[str, typer.Argument(help="Data source name")],
     commit: Annotated[
         str, typer.Argument(help="Target commit position (id) or git hash prefix")
