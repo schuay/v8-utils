@@ -359,33 +359,6 @@ def get_gerrit_issue_url(cwd: str | None = None) -> str | None:
     return f"{url}/{patchset}" if patchset else url
 
 
-def chat_notify_watching(job_url: str) -> None:
-    """Send a 'Watching' notification to Google Chat if configured."""
-    cfg = config.load()
-    if cfg.chat_app_space and cfg.chat_service_account_email:
-        try:
-            from . import chat
-
-            chat.notify(
-                cfg.chat_app_space,
-                cfg.chat_service_account_email,
-                f"\U0001f440 Watching: {job_url}",
-            )
-        except Exception:
-            pass
-    elif cfg.chat_webhook:
-        try:
-            import httpx
-
-            httpx.post(
-                cfg.chat_webhook,
-                json={"text": f"\U0001f440 Watching: {job_url}"},
-                timeout=10,
-            )
-        except Exception:
-            pass
-
-
 def _resolve_patch_sentinel(value: str, cwd: str | None = None) -> str | None:
     """Resolve a single patch sentinel: "auto" -> detect from branch, "none" -> None.
 
@@ -569,7 +542,6 @@ def create_pinpoint_jobs(
                 daemon.start_background()
             for url in urls:
                 daemon.send_job(url)
-                chat_notify_watching(url)
                 if on_watching:
                     on_watching(url)
 

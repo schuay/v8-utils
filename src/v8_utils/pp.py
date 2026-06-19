@@ -29,7 +29,6 @@ from .tools import (
     _fetch_jobs_list,
     _format_results_table,
     _run_concurrent,
-    chat_notify_watching,
     create_pinpoint_jobs,
     resolve_exp_patches,
     resolve_patch_filter,
@@ -343,7 +342,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     progress = _make_progress()
 
     if args.recent or has_filters:
-        since_str = args.since or ("one month ago" if has_filters else None)
+        since_str = args.since or ("24 hours ago" if has_filters else None)
         since = pinpoint.parse_since(since_str) if since_str else None
         count = args.recent or 20
         user = _resolve_user(args)
@@ -501,7 +500,6 @@ def _cmd_watch(args: argparse.Namespace) -> None:
         daemon.start_background()
     for job_url in args.job_urls:
         daemon.send_job(job_url)
-        chat_notify_watching(job_url)
         job_id = job_url.split("/")[-1]
         print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 
@@ -659,8 +657,8 @@ def main() -> None:
     )
     p.add_argument(
         "--since",
-        default="one month ago",
-        help='Only show jobs after this date (default: "one month ago"). '
+        default="24 hours ago",
+        help='Only show jobs after this date (default: "24 hours ago"). '
         'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
     )
     p.set_defaults(func=_cmd_list_jobs)
@@ -715,7 +713,7 @@ def main() -> None:
     p.add_argument(
         "--since",
         default=None,
-        help='Only include jobs after this date (default: "one month ago" when filters are used). '
+        help='Only include jobs after this date (default: "24 hours ago" when filters are used). '
         'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
     )
     p.add_argument(
