@@ -542,11 +542,14 @@ def print_at_report(
     header_lines: list[str],
     show_all: bool = False,
     chart_only: bool = False,
+    show_levels: bool = True,
 ):
     """Print at-commit before/after assessments.
 
     Default is a compact table; chart_only emits one plain line per series
     (sparkline first) with no table borders, which survives relaying intact.
+    show_levels controls the absolute before/after column (dropped for the
+    width-constrained MCP surface, where CHG% and the chart already suffice).
     """
     for line in header_lines:
         console.print(f"[dim]{line}[/dim]")
@@ -592,7 +595,8 @@ def print_at_report(
         table.add_column("VARIANT")
     if show_submetric:
         table.add_column("SUBMETRIC")
-    table.add_column("BEFORE→AFTER", justify="right")
+    if show_levels:
+        table.add_column("BEFORE→AFTER", justify="right")
     table.add_column("CHG%", justify="right")
     table.add_column("SNR", justify="right")
     table.add_column("N", justify="right")
@@ -613,9 +617,10 @@ def print_at_report(
             row_cells.append(d.variant)
         if show_submetric:
             row_cells.append(d.submetric)
+        if show_levels:
+            row_cells.append(f"{d.before_level:.3f}→{d.after_level:.3f}")
         row_cells.extend(
             [
-                f"{d.before_level:.3f}→{d.after_level:.3f}",
                 f"[{color}]{d.pct_change * 100:+.2f}%[/{color}]",
                 snr_str,
                 f"{d.n_before}/{d.n_after}",

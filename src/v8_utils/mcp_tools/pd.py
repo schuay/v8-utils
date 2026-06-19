@@ -263,7 +263,13 @@ def register(mcp: FastMCP) -> None:
 
         snapped = deltas[0].snapped_commit_id if deltas else target_id
         text = _render(
-            report.print_at_report, deltas, snapped, header, show_all, chart_only
+            report.print_at_report,
+            deltas,
+            snapped,
+            header,
+            show_all,
+            chart_only,
+            show_levels=False,
         )
         return _text_result(text)
 
