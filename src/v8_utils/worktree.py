@@ -2,6 +2,7 @@
 
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -109,8 +110,33 @@ def _force_symbol_level(args_gn: Path) -> None:
         args_gn.write_text(new_text)
 
 
+def _force_remoteexec(args_gn: Path) -> None:
+    """Force remote build execution in args.gn.
+
+    gm.py only writes `use_remoteexec = true` when it detects reclient at gn-gen
+    time (via .gclient custom_vars), which is host-dependent. This pins it on so
+    worktree builds always run remotely regardless of that detection. Requires
+    the host to have reclient configs (buildtools/reclient_cfgs) and RBE auth.
+    """
+    text = args_gn.read_text()
+    new_text = re.sub(
+        r"^use_(?:remoteexec|goma)\s*=.*$",
+        "use_remoteexec = true",
+        text,
+        flags=re.MULTILINE,
+    )
+    if "use_remoteexec = true" not in new_text:
+        new_text = new_text if new_text.endswith("\n") else new_text + "\n"
+        new_text += "use_remoteexec = true\n"
+    if not re.search(r"^reclient_cfg_dir\s*=", new_text, re.MULTILINE):
+        new_text += 'reclient_cfg_dir = "../../buildtools/reclient_cfgs/linux"\n'
+    if new_text != text:
+        args_gn.write_text(new_text)
+
+
 def _setup_builds(wt_path: Path, builds: list[str]) -> list[str]:
-    """Prepare each build dir: write args.gn (gm.py), force symbol_level=2, run gn gen."""
+    """Prepare each build dir: write args.gn (gm.py), force symbol_level=2 and
+    remote execution, run gn gen."""
     gm = wt_path / "tools" / "dev" / "gm.py"
     if not gm.exists():
         return ["(gm.py not found, skipping build setup)"]
@@ -119,7 +145,9 @@ def _setup_builds(wt_path: Path, builds: list[str]) -> list[str]:
         label = f"  out/{build}"
         try:
             _run(["python3", str(gm), f"{build}.gn_args"], cwd=wt_path)
-            _force_symbol_level(wt_path / "out" / build / "args.gn")
+            args_gn = wt_path / "out" / build / "args.gn"
+            _force_symbol_level(args_gn)
+            _force_remoteexec(args_gn)
             _run(["gn", "gen", f"out/{build}"], cwd=wt_path)
             results.append(f"{label}: ok")
         except subprocess.CalledProcessError as e:
@@ -128,15 +156,62 @@ def _setup_builds(wt_path: Path, builds: list[str]) -> list[str]:
     return results
 
 
+def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
+    """Tear down any leftover state for a worktree so a re-create starts clean.
+
+    Handles each leftover independently and best-effort, so it is robust to the
+    partial states that make plain `create` brittle: a registered worktree, a
+    stray directory git no longer tracks, a stale registration whose dir is
+    gone, and a dangling same-named branch. Safe to call when nothing is left.
+    """
+    registered = any(
+        Path(wt["path"]).resolve() == wt_path.resolve() for wt in list_worktrees(main)
+    )
+    if registered:
+        _remove_external_symlinks(wt_path)
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(wt_path)],
+            cwd=main,
+            capture_output=True,
+            text=True,
+        )
+    if wt_path.exists():
+        # A stray directory not tracked by git (or one remove left behind).
+        _remove_external_symlinks(wt_path)
+        shutil.rmtree(wt_path, ignore_errors=True)
+    # Drop any registration whose directory is already gone.
+    subprocess.run(
+        ["git", "worktree", "prune"], cwd=main, capture_output=True, text=True
+    )
+    # Delete a dangling same-named branch, unless protected or in use elsewhere.
+    if branch not in ("main", "master") and _branch_exists(main, branch):
+        in_use = any(
+            wt.get("branch") == branch
+            and Path(wt["path"]).resolve() != wt_path.resolve()
+            for wt in list_worktrees(main)
+        )
+        if not in_use:
+            subprocess.run(
+                ["git", "branch", "-D", branch],
+                cwd=main,
+                capture_output=True,
+                text=True,
+            )
+
+
 def create(
     repo: Path,
     name: str,
     branch: str | None = None,
     upstream: str = "main",
+    force: bool = False,
 ) -> dict:
     """Create a worktree as a sibling of the main checkout, symlink gclient deps.
 
     upstream: base branch/ref for the new branch (default "main").
+    force: tear down any leftover worktree dir and dangling same-named branch
+    first, so re-creating is idempotent (a fresh attempt). Without it, an
+    existing path raises.
     Returns {path, builds} with the worktree path and build setup results.
     """
     _validate_name(name)
@@ -144,7 +219,9 @@ def create(
     gclient_root = _find_gclient_root(main)
     wt_path = gclient_root / name
 
-    if wt_path.exists():
+    if force:
+        _force_cleanup(main, wt_path, branch or name)
+    elif wt_path.exists():
         raise ValueError(f"path already exists: {wt_path}")
 
     # Create git worktree.

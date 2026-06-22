@@ -2,7 +2,7 @@
 
 Usage:
   vt list
-  vt create <name> [-b BRANCH] [-u UPSTREAM]
+  vt create <name> [-b BRANCH] [-u UPSTREAM] [-f]
   vt remove <name> [-f]
   vt refresh <name>
 """
@@ -46,8 +46,10 @@ def _cmd_list(repo: Path) -> None:
     console.print(table)
 
 
-def _cmd_create(repo: Path, name: str, branch: str | None, upstream: str) -> None:
-    result = worktree.create(repo, name, branch, upstream=upstream)
+def _cmd_create(
+    repo: Path, name: str, branch: str | None, upstream: str, force: bool
+) -> None:
+    result = worktree.create(repo, name, branch, upstream=upstream, force=force)
     console.print(f"[bold green]Created[/] {result['path']}")
     for line in result["builds"]:
         console.print(f"  {line.strip()}")
@@ -99,6 +101,13 @@ def main(argv: list[str] | None = None) -> None:
         default="main",
         help="Base ref for new branch (default: main)",
     )
+    cp.add_argument(
+        "-f",
+        "--force",
+        action="store_true",
+        help="Tear down any leftover worktree dir/branch of this name first "
+        "(idempotent re-create)",
+    )
 
     # remove
     rp = sub.add_parser("remove", aliases=["rm"], help="Remove worktree(s)")
@@ -128,7 +137,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.action in ("list", "ls"):
         _cmd_list(repo)
     elif args.action in ("create", "new"):
-        _cmd_create(repo, args.name, args.branch, args.upstream)
+        _cmd_create(repo, args.name, args.branch, args.upstream, args.force)
     elif args.action in ("remove", "rm"):
         failed = sum(
             not _cmd_remove(repo, n, args.force, args.remove_branch) for n in args.names
