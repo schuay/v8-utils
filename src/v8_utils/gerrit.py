@@ -80,7 +80,28 @@ def _gerrit_token() -> str | None:
     return None
 
 
+def _auth_error(status: int, detail: str = "") -> ValueError:
+    """Build an actionable error for a Gerrit 401/403.
+
+    These almost always mean the luci credentials are missing or expired, or
+    the configured account lacks access, so the message spells out the fix
+    rather than surfacing a bare HTTP status.
+    """
+    from . import config
+
+    body = f" Gerrit said: {detail}\n" if detail else "\n"
+    return ValueError(
+        f"Gerrit returned HTTP {status} (permission denied).{body}"
+        "Your luci credentials are likely missing or expired. To fix:\n"
+        "  1. Authenticate:  git-credential-luci login\n"
+        f"  2. Set your @chromium.org email in {config.CONFIG_PATH}:\n"
+        '       user = "you@chromium.org"'
+    )
+
+
 def _parse_json(r: httpx.Response) -> dict | list:
+    if r.status_code in (401, 403):
+        raise _auth_error(r.status_code, r.text.strip()[:200])
     r.raise_for_status()
     text = r.text
     if text.startswith(_XSSI):
@@ -141,6 +162,8 @@ def _put_json(api_base: str, path: str, body: dict) -> dict | list:
         headers={"Authorization": f"Bearer {token}"},
         timeout=30,
     )
+    if r.status_code in (401, 403):
+        raise _auth_error(r.status_code, r.text.strip()[:200])
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text.strip()}")
     return _parse_json(r)
