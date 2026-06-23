@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -47,9 +48,19 @@ def _cmd_list(repo: Path) -> None:
 
 
 def _cmd_create(
-    repo: Path, name: str, branch: str | None, upstream: str, force: bool
+    repo: Path,
+    name: str,
+    branch: str | None,
+    upstream: str,
+    force: bool,
+    json_out: bool = False,
 ) -> None:
     result = worktree.create(repo, name, branch, upstream=upstream, force=force)
+    if json_out:
+        # Machine-readable contract for callers (e.g. icompleteu). Plain stdout,
+        # never routed through rich, so the path is never width-wrapped.
+        print(json.dumps({"name": name, **result}))
+        return
     console.print(f"[bold green]Created[/] {result['path']}")
     for line in result["builds"]:
         console.print(f"  {line.strip()}")
@@ -108,6 +119,11 @@ def main(argv: list[str] | None = None) -> None:
         help="Tear down any leftover worktree dir/branch of this name first "
         "(idempotent re-create)",
     )
+    cp.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the result as a JSON object on stdout (machine-readable)",
+    )
 
     # remove
     rp = sub.add_parser("remove", aliases=["rm"], help="Remove worktree(s)")
@@ -137,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.action in ("list", "ls"):
         _cmd_list(repo)
     elif args.action in ("create", "new"):
-        _cmd_create(repo, args.name, args.branch, args.upstream, args.force)
+        _cmd_create(repo, args.name, args.branch, args.upstream, args.force, args.json)
     elif args.action in ("remove", "rm"):
         failed = sum(
             not _cmd_remove(repo, n, args.force, args.remove_branch) for n in args.names
