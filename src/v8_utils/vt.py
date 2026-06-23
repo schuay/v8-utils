@@ -58,8 +58,9 @@ def _cmd_create(
     result = worktree.create(repo, name, branch, upstream=upstream, force=force)
     if json_out:
         # Machine-readable contract for callers (e.g. icompleteu). Plain stdout,
-        # never routed through rich, so the path is never width-wrapped.
-        print(json.dumps({"name": name, **result}))
+        # never routed through rich, so the path is never width-wrapped. default=str
+        # renders the Path value in result["path"].
+        print(json.dumps({"name": name, **result}, default=str))
         return
     console.print(f"[bold green]Created[/] {result['path']}")
     for line in result["builds"]:
