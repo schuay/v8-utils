@@ -80,6 +80,7 @@ def register(mcp: FastMCP) -> None:
         penalty: float | None = None,
         min_effect: float | None = None,
         source: str = "skiz",
+        format: str = "text",
     ) -> CallToolResult:
         """Scan benchmark timelines for regressions/improvements (change points).
 
@@ -99,6 +100,9 @@ def register(mcp: FastMCP) -> None:
         metric:     test glob, e.g. "Total*".
         min_change: minimum percent change to report (default 3).
         source:     data source (default "skiz").
+        format:     "text" (default, human report) or "json" (structured change
+                    points with candidate probabilities and resolved git hashes,
+                    for programmatic consumers).
         """
         cfg = _load_config()
         since_date = _parse_date(since) if since else None
@@ -134,17 +138,26 @@ def register(mcp: FastMCP) -> None:
                 fetched = fetched[fetched["engine"] == engine]
 
             results = detect_from_df(fetched, config)
-            text = _render(
-                report.print_detect_report,
-                results,
-                group_by_commit=group,
-                commit_store=commit_store,
-                default_engine=default_engine,
-            )
+            if format == "json":
+                import json
+
+                from ..pd.serialize import changepoints_to_json
+
+                out = json.dumps(
+                    changepoints_to_json(results, commit_store, default_engine)
+                )
+            else:
+                out = _render(
+                    report.print_detect_report,
+                    results,
+                    group_by_commit=group,
+                    commit_store=commit_store,
+                    default_engine=default_engine,
+                )
         finally:
             commit_store.close()
 
-        return _text_result(text)
+        return _text_result(out)
 
     @mcp.tool()
     def pd_commit_impact(
