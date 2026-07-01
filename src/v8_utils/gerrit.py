@@ -258,6 +258,38 @@ def list_cls(query: str, limit: int = 25) -> list[dict]:
     return [_compact_change(c) for c in changes]
 
 
+def open_cls(query: str, limit: int = 50) -> list[dict]:
+    """Open CLs matching `query`, each with its current patchset's revision and
+    git-fetchable ref -- what a watcher needs to fetch and review a patchset, and
+    which list_cls (LABELS/DETAILED_ACCOUNTS only) does not carry.
+
+    query: a Gerrit search (e.g. "project:v8/v8 status:open owner:foo@google.com")
+    Returns [{number, project, subject, owner, revision, fetch_ref}]: owner is the
+    author email, revision the current patchset SHA, fetch_ref its refs/changes/...
+    ref.
+    """
+    query = _resolve_self(query)
+    params = (
+        f"?q={quote(query, safe=':+')}&n={limit}&o=CURRENT_REVISION&o=DETAILED_ACCOUNTS"
+    )
+    changes: list = _get(_GERRIT_HOST, f"/changes/{params}")
+    out: list[dict] = []
+    for c in changes:
+        rev = c.get("current_revision", "")
+        revinfo = (c.get("revisions") or {}).get(rev, {})
+        out.append(
+            {
+                "number": c.get("_number"),
+                "project": c.get("project", ""),
+                "subject": c.get("subject", ""),
+                "owner": c.get("owner", {}).get("email", ""),
+                "revision": rev,
+                "fetch_ref": revinfo.get("ref", ""),
+            }
+        )
+    return out
+
+
 # ── Comments ──────────────────────────────────────────────────────────────────
 
 
