@@ -320,7 +320,12 @@ def register(mcp: FastMCP) -> None:
             "path:   optional file path to show history for\n"
             "ref:    git ref to start from (default: HEAD)\n"
             f"limit:  max commits to return (default: 20, max: {_MAX_LOG_LINES})\n"
-            "grep:   optional pattern to filter commit messages"
+            "grep:   optional pattern to filter commit messages\n"
+            "author: optional author filter (git --author regex; matches name\n"
+            '        or email, e.g. "jgruber" or "@google.com")\n'
+            "since:  optional lower date bound (git --since; absolute like\n"
+            '        "2026-01-01" or relative like "2 weeks ago")\n'
+            "until:  optional upper date bound (git --until; same formats)"
         )
     )
     def repo_git_log(
@@ -329,17 +334,27 @@ def register(mcp: FastMCP) -> None:
         ref: str | None = None,
         limit: int = 20,
         grep: str | None = None,
+        author: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo)
         limit = max(1, min(limit, _MAX_LOG_LINES))
         cmd = [
             "git",
             "log",
-            f"-{limit}",
+            # Fetch one extra so we can tell the caller output was capped.
+            f"-{limit + 1}",
             "--format=%h %as %an  %s",
         ]
         if grep:
             cmd.extend(["--grep", grep, "-i"])
+        if author:
+            cmd.extend(["--author", author])
+        if since:
+            cmd.extend(["--since", since])
+        if until:
+            cmd.extend(["--until", until])
         if ref:
             cmd.extend(["--end-of-options", ref])
         if path:
@@ -353,9 +368,14 @@ def register(mcp: FastMCP) -> None:
         )
         if proc.returncode != 0:
             raise ValueError(f"git log failed: {proc.stderr.strip()[:500]}")
-        result = proc.stdout.strip()
-        if not result:
+        lines = proc.stdout.strip().split("\n") if proc.stdout.strip() else []
+        if not lines:
             return _text_result("No commits found.")
+        if len(lines) > limit:
+            result = "\n".join(lines[:limit])
+            result += f"\n(truncated — showing first {limit} commits)"
+        else:
+            result = "\n".join(lines)
         return _text_result(result)
 
     @mcp.tool(

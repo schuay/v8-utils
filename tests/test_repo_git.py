@@ -229,3 +229,57 @@ class TestRepoGitBlame:
     def test_unknown_repo_rejected(self, mcp):
         with pytest.raises(Exception, match="Unknown repo"):
             _blame(mcp, repo="nope", start=1, limit=3)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# repo_git_log tool
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _log(mcp, **args):
+    args.setdefault("repo", "demo")
+    result = asyncio.run(mcp.call_tool("repo_git_log", args))
+    return result.content[0].text
+
+
+class TestRepoGitLog:
+    def test_basic(self, mcp):
+        out = _log(mcp)
+        assert "first commit" in out
+        assert "second commit" in out
+
+    def test_author_filter_matches(self, mcp):
+        out = _log(mcp, author="Tester")
+        assert "first commit" in out
+        assert "second commit" in out
+
+    def test_author_filter_excludes(self, mcp):
+        out = _log(mcp, author="Nobody")
+        assert out == "No commits found."
+
+    def test_since_bounds_lower(self, mcp):
+        # Only the 2021 commit is after this cutoff.
+        out = _log(mcp, since="2021-01-01")
+        assert "second commit" in out
+        assert "first commit" not in out
+
+    def test_until_bounds_upper(self, mcp):
+        # Only the 2020 commit is before this cutoff.
+        out = _log(mcp, until="2021-01-01")
+        assert "first commit" in out
+        assert "second commit" not in out
+
+    def test_truncation_hint(self, mcp):
+        out = _log(mcp, limit=1)
+        assert "truncated — showing first 1 commits" in out
+        # Newest commit is shown; the older one is dropped.
+        assert "second commit" in out
+        assert "first commit" not in out
+
+    def test_no_truncation_when_limit_covers_all(self, mcp):
+        out = _log(mcp, limit=10)
+        assert "truncated" not in out
+
+    def test_unknown_repo_rejected(self, mcp):
+        with pytest.raises(Exception, match="Unknown repo"):
+            _log(mcp, repo="nope")
