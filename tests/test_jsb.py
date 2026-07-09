@@ -86,6 +86,18 @@ class TestParseJs2:
     def test_empty(self):
         assert parse_js2("") == {}
 
+    def test_total_skipped_for_single_bench(self):
+        output = "crypto-md5-SP Startup-Score: 195.787\nTotal Score:  195.787 \n"
+        assert parse_js2(output) == {"Startup-Score": 195.787}
+
+    def test_total_captured_with_full_names(self):
+        output = "crypto-md5-SP Startup-Score: 195.787\nTotal Score:  135.606 \n"
+        result = parse_js2(output, full_names=True)
+        assert result == {
+            "crypto-md5-SP/Startup-Score": 195.787,
+            "Overall/Score": 135.606,
+        }
+
 
 class TestParseJs3:
     def test_single_score(self):
@@ -104,6 +116,21 @@ class TestParseJs3:
             "chai-wtb Score          97.20 pts\nOverall Score          102.50 pts\n"
         )
         assert parse_js3(output) == {"Score": 97.2}
+
+    def test_overall_captured_with_full_names(self):
+        output = (
+            "chai-wtb Score          97.20 pts\n"
+            "gaussian-blur Score    976.61 pts\n"
+            "Overall First-Score    549.81 pts\n"
+            "Overall Score          102.50 pts\n"
+            "Overall Wall-Time      707.32 ms \n"
+        )
+        assert parse_js3(output, full_names=True) == {
+            "chai-wtb/Score": 97.2,
+            "gaussian-blur/Score": 976.61,
+            "Overall/First-Score": 549.81,
+            "Overall/Score": 102.5,
+        }
 
     def test_empty(self):
         assert parse_js3("") == {}
