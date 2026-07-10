@@ -86,16 +86,42 @@ class TestParseJs2:
     def test_empty(self):
         assert parse_js2("") == {}
 
-    def test_total_skipped_for_single_bench(self):
-        output = "crypto-md5-SP Startup-Score: 195.787\nTotal Score:  195.787 \n"
-        assert parse_js2(output) == {"Startup-Score": 195.787}
+    # Realistic multi-benchmark JS2 shell output (trimmed). Suite aggregates are
+    # indented under "Mean-Scores:" / "Totals:"; the "*-Time" lines must be
+    # ignored, and "Total-Score" is the suite geomean, not a "Total Score" line.
+    _REAL = (
+        "crypto-md5-SP Startup-Score: 403.812\n"
+        "crypto-md5-SP Worst-Case: 5.713 ms\n"
+        "crypto-md5-SP Worst-Case-Score: 557.553\n"
+        "crypto-md5-SP Total-Score: 677.494\n"
+        "crypto-md5-SP Wall-Time: 634.529 ms\n"
+        "\n"
+        "Mean-Times:\n"
+        "    Startup-Time: 2.597 ms\n"
+        "Mean-Scores:\n"
+        "    First-Score: 260.650\n"
+        "    Startup-Score: 1522.548\n"
+        "\n"
+        "Totals:\n"
+        "    Total-Time: 14.086 ms\n"
+        "    Total-Score: 353.812\n"
+    )
 
-    def test_total_captured_with_full_names(self):
-        output = "crypto-md5-SP Startup-Score: 195.787\nTotal Score:  135.606 \n"
-        result = parse_js2(output, full_names=True)
-        assert result == {
-            "crypto-md5-SP/Startup-Score": 195.787,
-            "Overall/Score": 135.606,
+    def test_aggregates_skipped_for_single_bench(self):
+        assert parse_js2(self._REAL) == {
+            "Startup-Score": 403.812,
+            "Worst-Case-Score": 557.553,
+            "Total-Score": 677.494,
+        }
+
+    def test_overall_captured_with_full_names(self):
+        # Only the suite total becomes Overall/Score; the "Mean-Scores:" block
+        # is ignored.
+        assert parse_js2(self._REAL, full_names=True) == {
+            "crypto-md5-SP/Startup-Score": 403.812,
+            "crypto-md5-SP/Worst-Case-Score": 557.553,
+            "crypto-md5-SP/Total-Score": 677.494,
+            "Overall/Score": 353.812,
         }
 
 
@@ -118,6 +144,7 @@ class TestParseJs3:
         assert parse_js3(output) == {"Score": 97.2}
 
     def test_overall_captured_with_full_names(self):
+        # Only "Overall Score" is kept; the per-category means are dropped.
         output = (
             "chai-wtb Score          97.20 pts\n"
             "gaussian-blur Score    976.61 pts\n"
@@ -128,7 +155,6 @@ class TestParseJs3:
         assert parse_js3(output, full_names=True) == {
             "chai-wtb/Score": 97.2,
             "gaussian-blur/Score": 976.61,
-            "Overall/First-Score": 549.81,
             "Overall/Score": 102.5,
         }
 
@@ -252,6 +278,47 @@ class TestFormatTable:
         names = [l.split()[0] for l in metric_lines]
         assert names.index("Score") < names.index("First-Score")
         assert names.index("First-Score") < names.index("Zzz-Score")
+
+    def test_aggregates_lead_with_score_first(self):
+        vs = [Variant(build="rel")]
+        results = [
+            {
+                "aa/Average-Score": [1.0],
+                "aa/Score": [2.0],
+                "bb/Score": [3.0],
+                "Overall/Score": [4.0],
+            }
+        ]
+        table = format_table(None, "JS3", 1, vs, results)
+        names = [
+            line.split()[0]
+            for line in table.splitlines()
+            if line.split() and "/" in line.split()[0]
+        ]
+        assert names == [
+            "Overall/Score",
+            "aa/Score",
+            "aa/Average-Score",
+            "bb/Score",
+        ]
+
+    def test_overall_obeys_significance_filter(self):
+        # The suite aggregate is just another row: omitted when its change is
+        # not significant, exactly like the per-benchmark rows.
+        vs = [Variant(build="a"), Variant(build="b")]
+        results = [
+            {
+                "Overall/Score": [100.0, 100.1, 99.9],
+                "bench/Score": [200.0, 201.0, 200.5],
+            },
+            {
+                "Overall/Score": [100.0, 100.2, 99.8],
+                "bench/Score": [300.0, 301.0, 300.5],
+            },
+        ]
+        table = format_table(None, "JS3", 3, vs, results, show_all=False)
+        assert "Overall/Score" not in table
+        assert "bench/Score" in table
 
     def test_significance_filtering(self):
         vs = [Variant(build="a"), Variant(build="b")]
