@@ -85,8 +85,10 @@ class Variant:
 # JS2: "crypto-md5-SP Startup-Score: 195.787"
 _JS2_SCORE = re.compile(r"^\S+\s+([\w-]+-Score):\s+([\d.]+)\s*$")
 
-# JS2: "Total Score:  135.606"
-_JS2_TOTAL = re.compile(r"^Total Score:\s+([\d.]+)\s*$")
+# JS2 suite total, indented under "Totals:": "    Total-Score: 353.812".
+# The "Mean-Scores:" block is deliberately ignored: those per-category geomeans
+# aggregate subscores that only some benchmarks report.
+_JS2_TOTAL = re.compile(r"^\s+Total-Score:\s+([\d.]+)\s*$")
 
 # JS3: "chai-wtb First-Score    61.50 pts"
 # JS3: "chai-wtb Score          97.20 pts"
@@ -102,7 +104,8 @@ def parse_js2(output: str, full_names: bool = False) -> dict[str, float]:
         if m := _JS2_SCORE.match(line):
             key = f"{line.split()[0]}/{m.group(1)}" if full_names else m.group(1)
             scores[key] = float(m.group(2))
-        # With a single benchmark the total is just that benchmark's score.
+        # The indented total only differs from the single benchmark's own score
+        # once more than one benchmark ran.
         elif full_names and (m := _JS2_TOTAL.match(line)):
             scores[OVERALL] = float(m.group(1))
     return scores
@@ -111,8 +114,12 @@ def parse_js2(output: str, full_names: bool = False) -> dict[str, float]:
 def parse_js3(output: str, full_names: bool = False) -> dict[str, float]:
     scores: dict[str, float] = {}
     for line in output.splitlines():
-        # With a single benchmark the "Overall *" lines duplicate its scores.
-        if not full_names and line.startswith("Overall"):
+        if line.startswith("Overall"):
+            # Keep only the headline suite Score. The per-category means
+            # aggregate subscores that only some benchmarks report, and with a
+            # single benchmark the whole block just duplicates its own scores.
+            if full_names and (m := _JS3_SCORE.match(line)) and m.group(1) == "Score":
+                scores[OVERALL] = float(m.group(2))
             continue
         if m := _JS3_SCORE.match(line):
             key = f"{line.split()[0]}/{m.group(1)}" if full_names else m.group(1)
@@ -235,6 +242,16 @@ _METRIC_ORDER = [
     "Worst-Case-Score",
     "Average-Score",
 ]
+_METRIC_RANK = {name: i for i, name in enumerate(_METRIC_ORDER)}
+
+
+def _metric_sort_key(metric: str) -> tuple[int, str, int, str]:
+    """Order rows: suite aggregates first, then grouped by benchmark, with the
+    headline Score leading each group. Applies to both "bench/sub" keys and the
+    bare sub-score keys used for a single benchmark."""
+    bench, _, sub = metric.rpartition("/")
+    rank = _METRIC_RANK.get(sub, len(_METRIC_ORDER))
+    return (0 if bench == "Overall" else 1, bench, rank, sub)
 
 
 def _fmt_stat(vals: list[float]) -> str:
@@ -280,14 +297,7 @@ def format_table(
     all_metrics: set[str] = set()
     for r in results:
         all_metrics.update(r.keys())
-    # Suite-wide aggregates lead the table, with the headline total first.
-    overall = sorted(
-        (m for m in all_metrics if m.startswith("Overall/")),
-        key=lambda m: (m != OVERALL, m),
-    )
-    rest = all_metrics - set(overall)
-    ordered = overall + [m for m in _METRIC_ORDER if m in rest]
-    ordered += sorted(rest - set(ordered))
+    ordered = sorted(all_metrics, key=_metric_sort_key)
 
     has_comparison = len(variants) >= 2
 
@@ -324,7 +334,7 @@ def format_table(
                     any_sig = True
             else:
                 cells.extend(["", "", ""])
-        if not has_comparison or show_all or any_sig or metric.startswith("Overall/"):
+        if not has_comparison or show_all or any_sig:
             table.add_row(*cells)
         else:
             omitted += 1
