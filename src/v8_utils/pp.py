@@ -48,6 +48,10 @@ else:
     _BOLD = _DIM = _RED = _GREEN = _YELLOW = _CYAN = _RESET = ""
 
 
+# Default lookback for job listings when no explicit --since is given.
+_DEFAULT_SINCE = "24 hours ago"
+
+
 def _status_color(status: str) -> str:
     s = status.lower()
     if "complet" in s:
@@ -334,15 +338,48 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
 
 def _cmd_show_results(args: argparse.Namespace) -> None:
-    job_urls = list(args.job_urls)
+    # Split positionals into Pinpoint job IDs and Gerrit patches, so that
+    # `pp s <gerrit-url>` is equivalent to `pp s -p <gerrit-url>` without an
+    # explicit flag. A query is either by job ID(s) or by a single patch.
+    job_urls: list[str] = []
+    patches: list[str] = []
+    for a in args.job_urls:
+        kind = pinpoint.classify_show_arg(a)
+        if kind == "pinpoint":
+            job_urls.append(a)
+        elif kind == "gerrit":
+            patches.append(a)
+        else:
+            raise ValueError(
+                f"unrecognized argument {a!r}: expected a Pinpoint job URL/ID "
+                "or a Gerrit CL URL/ID"
+            )
+
+    # A "-p none" clears the filter, so it does not count as a patch here; any
+    # other -p value joins the positional patches for the exclusivity check.
+    if args.patch is not None and args.patch.lower() != "none":
+        patches.append(args.patch)
+    if job_urls and patches:
+        raise ValueError(
+            "cannot combine Pinpoint job IDs with a patch; pass either one or "
+            "more job IDs, or a single patch"
+        )
+    if len(patches) > 1:
+        raise ValueError("only a single patch may be given")
+    if patches:
+        args.patch = patches[0]
 
     filters = _build_filters(args, extra=["status=Completed"])
     has_filters = len(filters) > 1 or args.recent or args.since
 
+    # Bare `pp s` (no jobs, no filters) lists recent jobs, matching `pp l`.
+    if not job_urls and not has_filters:
+        has_filters = True
+
     progress = _make_progress()
 
     if args.recent or has_filters:
-        since_str = args.since or ("24 hours ago" if has_filters else None)
+        since_str = args.since or (_DEFAULT_SINCE if has_filters else None)
         since = pinpoint.parse_since(since_str) if since_str else None
         count = args.recent or 20
         user = _resolve_user(args)
@@ -657,8 +694,8 @@ def main() -> None:
     )
     p.add_argument(
         "--since",
-        default="24 hours ago",
-        help='Only show jobs after this date (default: "24 hours ago"). '
+        default=_DEFAULT_SINCE,
+        help=f'Only show jobs after this date (default: "{_DEFAULT_SINCE}"). '
         'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
     )
     p.set_defaults(func=_cmd_list_jobs)
@@ -671,7 +708,8 @@ def main() -> None:
         "job_urls",
         nargs="*",
         metavar="job_url",
-        help="Pinpoint job URL(s) or job ID(s)",
+        help="Pinpoint job URL(s)/ID(s), or a single Gerrit CL URL/ID "
+        "(autodetected and used as --patch). With no args, lists recent jobs.",
     )
     p.add_argument(
         "--recent",
@@ -713,8 +751,9 @@ def main() -> None:
     p.add_argument(
         "--since",
         default=None,
-        help='Only include jobs after this date (default: "24 hours ago" when filters are used). '
-        'Accepts natural language ("2 weeks ago") or ISO dates. Use "all" for no limit.',
+        help=f'Only include jobs after this date (default: "{_DEFAULT_SINCE}" when '
+        'listing). Accepts natural language ("2 weeks ago") or ISO dates. '
+        'Use "all" for no limit.',
     )
     p.add_argument(
         "--show-all", action="store_true", help="Include non-significant results"

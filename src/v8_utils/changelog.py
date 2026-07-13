@@ -47,6 +47,7 @@ ENTRIES: list[str] = [
     "v8-utils mcp: `gerrit_comments` can now include your unpublished drafts with `include_drafts`",
     "v8-utils mcp: added `worktree` tool for V8 git worktree management _(create/list/remove with auto-configured build dirs)_",
     "v8-utils mcp: added `gerrit_create_comments` for batch draft creation; `gerrit_comments` now shows comment UUIDs",
+    "`pp s` autodetects a Gerrit CL URL/ID (no `-p` needed); bare `pp s` lists recent jobs like `pp l`",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

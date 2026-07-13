@@ -235,6 +235,47 @@ def job_id_from_url(job_url: str) -> str:
     return m.group(1) if m else job_url
 
 
+# A Pinpoint job ID is a fixed-width hex datastore key (currently 14 chars); a
+# Gerrit change number is a short decimal integer (currently ~7 digits). The
+# wide gap between the two formats lets a bare token be classified without
+# ambiguity: an all-decimal token long enough to also be valid hex (e.g.
+# "12096850490000") is far too large to be a change number, so the job-ID form
+# is tested first.
+_JOB_ID_RE = re.compile(r"[0-9a-f]{12,}", re.IGNORECASE)
+_CHANGE_ID_RE = re.compile(r"[0-9]{1,9}")
+_GERRIT_HOSTS = ("chromium-review.googlesource.com", "crrev.com")
+
+
+def classify_show_arg(arg: str) -> str:
+    """Classify a `pp s` positional as a Pinpoint job or a Gerrit patch.
+
+    Returns "pinpoint" for Pinpoint job URLs/IDs, "gerrit" for Gerrit CL URLs,
+    crrev URLs, and bare change IDs, or "unknown" when the argument matches
+    neither format (so the caller can report a clear error).
+    """
+    arg = arg.strip()
+    parsed = urlparse(arg)
+
+    if parsed.scheme in ("http", "https"):
+        host = parsed.hostname or ""
+        if "pinpoint" in host or "/job/" in parsed.path:
+            return "pinpoint"
+        if any(h in host for h in _GERRIT_HOSTS):
+            return "gerrit"
+        return "unknown"
+
+    # Bare token: strip an optional "c/" Gerrit prefix and any "/patchset" tail.
+    token = arg.lstrip("/")
+    if token.startswith("c/"):
+        token = token[2:]
+    token = token.split("/", 1)[0]
+    if _JOB_ID_RE.fullmatch(token):
+        return "pinpoint"
+    if _CHANGE_ID_RE.fullmatch(token):
+        return "gerrit"
+    return "unknown"
+
+
 def fetch_job(job_id: str) -> dict[str, Any]:
     """Fetch raw job JSON, using the cache for terminal jobs."""
     from . import pinpoint_cache

@@ -19,6 +19,7 @@ from v8_utils.pinpoint import (
     _job_matches_filter,
     _parse_change_patchset,
     _value_stats,
+    classify_show_arg,
     job_id_from_url,
     user_email_variants,
 )
@@ -170,6 +171,57 @@ class TestJobIdFromUrl:
         # no /job/ in path — returns input unchanged
         url = "https://example.com/other/abc123"
         assert job_id_from_url(url) == url
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# classify_show_arg
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestClassifyShowArg:
+    @pytest.mark.parametrize(
+        "arg",
+        [
+            "https://pinpoint-dot-chromeperf.appspot.com/job/14cc0d73090000",
+            "14cc0d73090000",
+            "12fd3dd7090000",
+        ],
+    )
+    def test_pinpoint(self, arg):
+        assert classify_show_arg(arg) == "pinpoint"
+
+    @pytest.mark.parametrize(
+        "arg",
+        [
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
+            "https://chromium-review.googlesource.com/7650974",
+            "https://crrev.com/c/7650974",
+            "7650974",
+            "7650974/3",
+            "c/7650974",
+        ],
+    )
+    def test_gerrit(self, arg):
+        assert classify_show_arg(arg) == "gerrit"
+
+    @pytest.mark.parametrize(
+        "arg",
+        [
+            "https://example.com/foo",
+            "not-a-number",
+            "deadbeefxyz",
+            "",
+        ],
+    )
+    def test_unknown(self, arg):
+        assert classify_show_arg(arg) == "unknown"
+
+    def test_all_decimal_job_id_is_pinpoint(self):
+        # A 14-digit all-decimal token is a valid job ID, not a change number.
+        assert classify_show_arg("12096850490000") == "pinpoint"
+
+    def test_whitespace_stripped(self):
+        assert classify_show_arg("  7650974  ") == "gerrit"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
