@@ -1,6 +1,7 @@
 """MCP tools for pd — perf data analysis (change-point detection and AB compare)."""
 
 import io
+import logging
 from fnmatch import fnmatch
 
 from mcp.server.fastmcp import FastMCP
@@ -14,8 +15,54 @@ from ..pd.at import at_from_df
 from ..pd.commits import CommitStore
 from ..pd.compare import compare_snapshots
 from ..pd.detect import detect_from_df
+from ..pd.engines import sync_engine
 from ..pd.models import AnalysisConfig, AtConfig
 from ._shared import _text_result
+
+log = logging.getLogger(__name__)
+
+
+def _autosync_commits(commit_store, results, default_engine) -> None:
+    """Refresh the commit store when a change point outruns it.
+
+    pd_detect resolves each change point's commit_id to a git hash via the store;
+    a point past the store's newest synced commit resolves to "" and the consumer
+    (airc's perf subscriber) drops it as unlocalized. That happens whenever new
+    commits have landed since the last sync -- which, without this, only a manual
+    `pd sync` fixed. Sync the affected engine once, in place, so the very call
+    that surfaced the gap can resolve the hash.
+
+    Keyed on "id exceeds the store's max", not "id absent from store": the max
+    advances past the trigger after one sync, so a genuinely old commit below the
+    window does not re-trigger a fruitless sync on every poll. Best-effort: any
+    failure leaves the store as-is and the point renders unlocalized, exactly as
+    before.
+    """
+    # Group the highest referenced id per engine; a point's own engine wins, else
+    # the source's default (mirrors serialize's engine resolution).
+    needed: dict[str, int] = {}
+    for cp in results:
+        engine = cp.engine or default_engine
+        if not engine:
+            continue
+        top = max(cp.commit_id, cp.prev_commit_id)
+        needed[engine] = max(needed.get(engine, 0), top)
+
+    for engine, top_id in needed.items():
+        have = commit_store.max_commit_id(engine)
+        if have is not None and top_id <= have:
+            continue
+        log.info(
+            "pd: auto-sync %s: change point at %d exceeds stored max %s",
+            engine,
+            top_id,
+            have,
+        )
+        try:
+            n = sync_engine(commit_store, engine)
+            log.info("pd: auto-sync %s: %d commits processed", engine, n)
+        except Exception:
+            log.warning("pd: auto-sync %s failed", engine, exc_info=True)
 
 
 def _load_config() -> v8_config.Config:
@@ -138,6 +185,7 @@ def register(mcp: FastMCP) -> None:
                 fetched = fetched[fetched["engine"] == engine]
 
             results = detect_from_df(fetched, config)
+            _autosync_commits(commit_store, results, default_engine)
             if format == "json":
                 import json
 

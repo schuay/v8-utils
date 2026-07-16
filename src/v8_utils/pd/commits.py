@@ -85,6 +85,16 @@ class CommitStore:
             author=row["author"],
         )
 
+    def max_commit_id(self, engine: str) -> int | None:
+        """The highest synced commit_id for an engine, or None when the engine
+        has no rows. The staleness signal auto-sync keys on: a change point that
+        references an id above this is beyond what the store has seen."""
+        row = self.conn.execute(
+            "SELECT MAX(commit_id) AS m FROM commits WHERE engine=?",
+            (engine,),
+        ).fetchone()
+        return row["m"] if row and row["m"] is not None else None
+
     def get_range(self, engine: str, after_id: int, up_to_id: int) -> list[CommitInfo]:
         """All commits with after_id < commit_id <= up_to_id."""
         rows = self.conn.execute(

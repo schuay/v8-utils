@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import time
 from fnmatch import fnmatch
 from typing import Annotated, Optional
@@ -12,7 +11,7 @@ import typer
 from .adaptor import discover
 from .commits import CommitStore
 from .detect import detect_from_df
-from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir
+from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir, sync_engine
 from .models import AnalysisConfig
 from .report import print_compare_report, print_detect_report
 
@@ -448,8 +447,9 @@ def sync(
     ] = True,
 ):
     """Populate commit metadata from an engine's git repo."""
-    id_regex = get_id_regex(engine)
-    if not id_regex:
+    # Validate here for a clear CLI error + exit code; sync_engine itself is
+    # best-effort (it logs and returns 0) since it also runs on the detect path.
+    if not get_id_regex(engine):
         typer.echo(f"Error: unknown engine '{engine}'", err=True)
         typer.echo(f"Available: {', '.join(sorted(ENGINES))}", err=True)
         raise typer.Exit(1)
@@ -463,27 +463,14 @@ def sync(
         )
         raise typer.Exit(1)
 
-    if fetch:
-        typer.echo(f"Fetching origin/main in {src_dir}...")
-        res = subprocess.run(
-            "git fetch origin main",
-            shell=True,
-            cwd=src_dir,
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode != 0:
-            typer.echo(f"  fetch failed: {res.stderr.strip()}", err=True)
-
     since_date = since or "6 months ago"
-
-    store = CommitStore()
     path = get_path_filter(engine)
     suffix = f" path={path}" if path else ""
     typer.echo(
         f"Syncing {engine} commits from {src_dir} (since {since_date}){suffix}..."
     )
-    count = store.populate(engine, src_dir, id_regex, since=since_date, path=path)
+    store = CommitStore()
+    count = sync_engine(store, engine, since=since_date, fetch=fetch)
     typer.echo(f"  {count} commits processed.")
     store.close()
 
