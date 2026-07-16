@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import pytest
+
 from v8_utils.mcp_tools import pd as pd_tools
 from v8_utils.pd.commits import CommitStore
 from v8_utils.pd.models import ChangePoint
+
+
+@pytest.fixture(autouse=True)
+def _reset_sync_ceiling():
+    # The ceiling is process-local by design (survives across polls in the
+    # long-lived MCP server); reset it per test so cases do not leak state.
+    pd_tools._SYNC_CEILING.clear()
+    yield
+    pd_tools._SYNC_CEILING.clear()
 
 
 def _store(tmp_path) -> CommitStore:
@@ -134,3 +145,47 @@ def test_autosync_swallows_sync_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(pd_tools, "sync_engine", boom)
     # Best-effort: a sync failure must not propagate into the detect call.
     pd_tools._autosync_commits(store, [_cp(200)], "v8")
+
+
+def test_autosync_unreachable_point_syncs_once_not_every_poll(tmp_path, monkeypatch):
+    # skiz ahead of the local mirror (or fetch failing): the sync never lifts the
+    # store max to the point's id, so the store gap persists across polls. The
+    # ceiling must still cap it at one attempt, not one per poll.
+    store = _store(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        pd_tools, "sync_engine", lambda s, engine: calls.append(engine) or 0
+    )
+    for _ in range(5):  # five polls, same unresolved point
+        pd_tools._autosync_commits(store, [_cp(108483, 108480)], "v8")
+    assert calls == ["v8"]
+
+
+def test_autosync_higher_point_retriggers_after_stuck(tmp_path, monkeypatch):
+    # A stuck point suppresses re-sync for its id, but a genuinely newer (higher)
+    # point must still trigger -- that is the live case the guard must not break.
+    store = _store(tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        pd_tools, "sync_engine", lambda s, engine: calls.append(engine) or 0
+    )
+    pd_tools._autosync_commits(store, [_cp(108483, 108480)], "v8")
+    pd_tools._autosync_commits(store, [_cp(108483, 108480)], "v8")  # suppressed
+    pd_tools._autosync_commits(store, [_cp(108600, 108590)], "v8")  # higher: fires
+    assert calls == ["v8", "v8"]
+
+
+def test_autosync_ceiling_records_before_sync_raises(tmp_path, monkeypatch):
+    # The attempt is recorded before the sync runs, so even a raising sync
+    # suppresses the retry storm for that id rather than re-firing next poll.
+    store = _store(tmp_path)
+    calls = []
+
+    def boom(s, engine):
+        calls.append(engine)
+        raise RuntimeError("git exploded")
+
+    monkeypatch.setattr(pd_tools, "sync_engine", boom)
+    pd_tools._autosync_commits(store, [_cp(200)], "v8")
+    pd_tools._autosync_commits(store, [_cp(200)], "v8")
+    assert calls == ["v8"]  # second poll suppressed despite the first raising

@@ -21,6 +21,20 @@ from ._shared import _text_result
 
 log = logging.getLogger(__name__)
 
+# Per-engine ceiling: the highest change-point id this process has already
+# attempted a sync for. Anti-thrash guard -- a change point can reference an id
+# the local checkout never reaches (skiz runs ahead of our origin/main mirror,
+# or fetch is failing), and since detection is stateless that same unresolved
+# point recurs on every poll. Without this, each recurrence re-runs a full fetch
+# + full-window git-log populate, piling that cost onto every poll exactly when
+# the remote is flaky. Keyed on the attempted id (not the store max, which never
+# reaches an unreachable id), so a stuck point syncs once and is then suppressed
+# until a genuinely higher point appears -- whose sync also pulls in the older
+# one if it has since become reachable. Process-local: the MCP server is
+# long-lived across polls, and a restart resets it, which is the right moment to
+# retry anyway.
+_SYNC_CEILING: dict[str, int] = {}
+
 
 def _autosync_commits(commit_store, results, default_engine) -> None:
     """Refresh the commit store when a change point outruns it.
@@ -32,11 +46,12 @@ def _autosync_commits(commit_store, results, default_engine) -> None:
     `pd sync` fixed. Sync the affected engine once, in place, so the very call
     that surfaced the gap can resolve the hash.
 
-    Keyed on "id exceeds the store's max", not "id absent from store": the max
-    advances past the trigger after one sync, so a genuinely old commit below the
-    window does not re-trigger a fruitless sync on every poll. Best-effort: any
-    failure leaves the store as-is and the point renders unlocalized, exactly as
-    before.
+    Two gates decide whether to sync a given engine, both required:
+    - the top referenced id exceeds the store's current max (there is a gap), and
+    - it also exceeds this process's sync ceiling (we have not already tried, and
+      failed, to close a gap this large -- see _SYNC_CEILING).
+    Best-effort: any failure leaves the store as-is and the point renders
+    unlocalized, exactly as before.
     """
     # Group the highest referenced id per engine; a point's own engine wins, else
     # the source's default (mirrors serialize's engine resolution).
@@ -51,7 +66,12 @@ def _autosync_commits(commit_store, results, default_engine) -> None:
     for engine, top_id in needed.items():
         have = commit_store.max_commit_id(engine)
         if have is not None and top_id <= have:
-            continue
+            continue  # already resolvable; no gap
+        if top_id <= _SYNC_CEILING.get(engine, 0):
+            continue  # already attempted this gap (or larger) and it did not help
+        # Record the attempt before syncing, so a raised/timed-out sync still
+        # suppresses the retry storm rather than re-firing next poll.
+        _SYNC_CEILING[engine] = top_id
         log.info(
             "pd: auto-sync %s: change point at %d exceeds stored max %s",
             engine,

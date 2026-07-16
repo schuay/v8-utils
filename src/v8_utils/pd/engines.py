@@ -8,6 +8,13 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
+# Upper bound on the origin/main fetch. sync_engine runs on the pd_detect path
+# (inside a watcher poll), so an unbounded fetch against a black-holed remote
+# would wedge perf detection with no recovery. An incremental fetch of an
+# already-close mirror is seconds; this is the "give up and use the checkout
+# as-is" ceiling, not the expected duration.
+_FETCH_TIMEOUT_S = 120.0
+
 ENGINES: dict[str, dict] = {
     "v8": {
         "id_regex": r"^ *Cr-Commit-Position:.*#([0-9]+)",
@@ -74,13 +81,22 @@ def sync_engine(
         return 0
 
     if fetch:
-        res = subprocess.run(
-            ["git", "-C", str(src_dir), "fetch", "origin", "main"],
-            capture_output=True,
-            text=True,
-        )
-        if res.returncode != 0:
-            log.warning("pd sync: fetch failed for %s: %s", engine, res.stderr.strip())
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(src_dir), "fetch", "origin", "main"],
+                capture_output=True,
+                text=True,
+                timeout=_FETCH_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
+            # A hung remote must not stall detection: give up on the fetch and
+            # populate from the checkout as-is, exactly as a non-zero fetch does.
+            log.warning("pd sync: fetch timed out for %s; using checkout as-is", engine)
+        else:
+            if res.returncode != 0:
+                log.warning(
+                    "pd sync: fetch failed for %s: %s", engine, res.stderr.strip()
+                )
 
     return store.populate(
         engine,
