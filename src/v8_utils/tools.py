@@ -94,6 +94,7 @@ def _fetch_job_detail(job_url: str) -> dict:
         "story": args.get("story"),
         "base_git_hash": args.get("base_git_hash"),
         "end_git_hash": args.get("end_git_hash"),
+        "base_patch": args.get("base_patch"),
         "experiment_patch": args.get("experiment_patch"),
         "base_extra_args": args.get("base_extra_args"),
         "experiment_extra_args": args.get("experiment_extra_args"),
@@ -122,8 +123,17 @@ def _fetch_jobs_list(
 
 def _results_header(job: dict, ansi: bool = False) -> str:
     """Build the header lines (bot/benchmark/patch/flags) for a results table."""
-    patch_url = job.get("experiment_patch")
-    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+    experiment_patch_url = job.get("experiment_patch")
+    experiment_patch_subject = (
+        pinpoint.fetch_gerrit_subject(experiment_patch_url)
+        if experiment_patch_url
+        else None
+    )
+    base_patch_url = job.get("base_patch")
+    base_patch_subject = (
+        pinpoint.fetch_gerrit_subject(base_patch_url) if base_patch_url else None
+    )
+    base_hash = job.get("base_git_hash")
     base_flags = job.get("base_extra_args")
     exp_flags = job.get("experiment_extra_args")
 
@@ -149,10 +159,16 @@ def _results_header(job: dict, ansi: bool = False) -> str:
     if header_parts:
         sep = f" {d}│{r} " if ansi else "  "
         lines.append(sep.join(header_parts))
-    if patch_url:
-        patch_line = f"{d}patch:{r} {c}{patch_url}{r}"
-        if patch_subject:
-            patch_line += f'  "{patch_subject}"'
+    lines.append(f"{d}base:{r} {c}{base_hash}{r}")
+    if base_patch_url:
+        base_patch_line = f"{d}base-patch:{r} {c}{base_patch_url}{r}"
+        if base_patch_subject:
+            base_patch_line += f'  "{base_patch_subject}"'
+        lines.append(base_patch_line)
+    if experiment_patch_url:
+        patch_line = f"{d}patch:{r} {c}{experiment_patch_url}{r}"
+        if experiment_patch_subject:
+            patch_line += f'  "{experiment_patch_subject}"'
         lines.append(patch_line)
     if base_flags:
         lines.append(f"{d}base-flags:{r} {c}{base_flags}{r}")
