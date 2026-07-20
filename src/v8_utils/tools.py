@@ -1,6 +1,5 @@
 """Shared tool implementations for v8-utils (used by both CLI and MCP)."""
 
-import concurrent.futures
 import logging
 import subprocess
 from collections.abc import Callable
@@ -12,40 +11,13 @@ from rich.table import Table
 
 from . import config
 from . import pinpoint
+from .concurrency import _run_concurrent
 
 # ── ANSI escape codes ─────────────────────────────────────────────────────────
 _BOLD = "\033[1m"
 _DIM = "\033[2m"
 _CYAN = "\033[36m"
 _RESET = "\033[0m"
-
-
-def _run_concurrent(
-    fns: list[Callable[[], object]],
-    on_progress: Callable[[int, int], None] | None = None,
-) -> list:
-    """Run callables concurrently, returning results in input order.
-
-    on_progress(done, total) is called after each completion.
-    Ctrl-C cancels pending futures and re-raises KeyboardInterrupt.
-    """
-    if len(fns) <= 1:
-        return [fn() for fn in fns]
-    with concurrent.futures.ThreadPoolExecutor() as ex:
-        future_to_idx = {ex.submit(fn): i for i, fn in enumerate(fns)}
-        results = [None] * len(fns)
-        try:
-            done = 0
-            for future in concurrent.futures.as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                results[idx] = future.result()
-                done += 1
-                if on_progress:
-                    on_progress(done, len(fns))
-        except KeyboardInterrupt:
-            ex.shutdown(wait=False, cancel_futures=True)
-            raise
-    return results
 
 
 def _fetch_job_details_sorted(

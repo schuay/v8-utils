@@ -22,9 +22,9 @@ def main() -> None:
             "Each tool group can be enabled or disabled independently."
         ),
     )
-    for name, (_register, default) in GROUPS.items():
+    for name, group in GROUPS.items():
         flag = name.replace("_", "-")
-        state = "on" if default else "off"
+        state = "on" if group.default else "off"
         parser.add_argument(
             f"--enable-{flag}",
             dest=name,

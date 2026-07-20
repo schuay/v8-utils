@@ -8,7 +8,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 
 from .. import gerrit as gerrit_tools
-from ..tools import _run_concurrent
+from ..concurrency import _run_concurrent
 from ._shared import _paginate_result, _resolve_repo, _text_result
 
 

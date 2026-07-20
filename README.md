@@ -12,10 +12,29 @@ CLI and MCP tools for [V8](https://v8.dev/) JavaScript engine developers.
 ## Installation
 
 ```bash
-uv tool install git+https://github.com/schuay/v8-utils.git
+# Full developer install (all CLIs and MCP tool groups):
+uv tool install "v8-utils[all] @ git+https://github.com/schuay/v8-utils.git"
 # Upgrade:
 uv tool upgrade v8-utils
 ```
+
+The base install (no extras) is intentionally light -- only the MCP server core
+and the tool groups that shell out to `git` (`repo_git_*`), manage worktrees, and
+talk to Gerrit. The heavy scientific/cloud stack lives in optional extras that
+the MCP server loads lazily; groups whose extra is missing are skipped at startup
+with a warning naming the extra to install:
+
+| Extra | Enables |
+|-------|---------|
+| `analysis` | the `pd` MCP group and the `pd` / `jsb` CLIs (numpy/pandas/scipy/ruptures) |
+| `pinpoint` | the `pinpoint` MCP group and the `pp` CLI |
+| `gchat` | the Google Chat frontend (`pp` daemon) |
+| `spanner` | the Spanner-backed perf timeseries adaptor |
+| `all` | everything above -- the full developer surface |
+
+A minimal MCP-only deployment that just needs the git-backed repo tools can
+install the base package (`uv tool install git+...`); everyone else wants
+`[all]`.
 
 ## Configuration
 

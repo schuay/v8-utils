@@ -1,12 +1,23 @@
 """MCP tool registration for v8-utils, split into opt-in/opt-out groups.
 
-Each group module exports a ``register(mcp)`` function that defines and
-decorates its tools. ``build_server`` constructs a FastMCP and registers
-the enabled groups; ``GROUPS`` is the authoritative list of group names,
-their register callables, and their default-on/off state.
+Each group is a module under this package exporting a ``register(mcp)`` function
+that defines and decorates its tools. ``build_server`` constructs a FastMCP and
+registers the enabled groups; ``GROUPS`` is the authoritative table of group
+names, the module that implements each, its default-on/off state, and the pip
+extra that supplies its dependencies (None for groups that need only the base
+install).
+
+Group modules are imported lazily inside ``build_server`` rather than at package
+import time: the heavy scientific/cloud dependencies live in optional extras, so
+a base-only install (v8-utils with no extras) must still start the server with
+the groups it can satisfy -- repo_git, worktree, gerrit -- and skip the rest with
+an actionable warning instead of failing to import. Install v8-utils[all] to get
+every group.
 """
 
-from typing import Callable
+import importlib
+import logging
+from typing import NamedTuple
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
@@ -14,17 +25,27 @@ from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 # Reject unknown tool parameters instead of silently ignoring them.
 ArgModelBase.model_config["extra"] = "forbid"
 
-from . import gerrit, pd, performance, pinpoint, repo_git, worktree
+# REPOS_LINE lives in repo_git, a base group with no heavy deps, so importing it
+# eagerly for the server instructions string costs nothing extra.
 from .repo_git import REPOS_LINE
 
 
-GROUPS: dict[str, tuple[Callable[[FastMCP], None], bool]] = {
-    "gerrit": (gerrit.register, True),
-    "pd": (pd.register, False),
-    "performance": (performance.register, True),
-    "pinpoint": (pinpoint.register, True),
-    "repo_git": (repo_git.register, True),
-    "worktree": (worktree.register, False),
+_log = logging.getLogger(__name__)
+
+
+class Group(NamedTuple):
+    module: str  # submodule under v8_utils.mcp_tools exporting register(mcp)
+    default: bool  # registered unless overridden
+    extra: str | None  # pip extra supplying its deps; None means base install
+
+
+GROUPS: dict[str, Group] = {
+    "gerrit": Group("gerrit", True, None),
+    "pd": Group("pd", False, "analysis"),
+    "performance": Group("performance", True, "analysis"),
+    "pinpoint": Group("pinpoint", True, "pinpoint"),
+    "repo_git": Group("repo_git", True, None),
+    "worktree": Group("worktree", False, None),
 }
 
 
@@ -67,12 +88,28 @@ def build_server(
             "gerrit_* (Chromium Gerrit code review)."
         ),
     )
-    for name, (register, default) in GROUPS.items():
-        if overrides.get(name, default):
-            if name == "gerrit":
-                register(mcp, drafts_enabled=gerrit_drafts, default_user=default_user)
-            elif name == "pinpoint":
-                register(mcp, default_user=default_user)
-            else:
-                register(mcp)
+    for name, group in GROUPS.items():
+        if not overrides.get(name, group.default):
+            continue
+        try:
+            module = importlib.import_module(f".{group.module}", __package__)
+        except ImportError as exc:
+            # A group whose optional extra is not installed is skipped, not fatal:
+            # the base install intentionally omits the heavy deps. Name the fix so
+            # the operator can restore the group if they want it.
+            hint = (
+                f"install v8-utils[{group.extra}]"
+                if group.extra
+                else "the base install looks incomplete; reinstall v8-utils"
+            )
+            _log.warning("skipping MCP tool group %r: %s (%s)", name, exc, hint)
+            continue
+        if name == "gerrit":
+            module.register(
+                mcp, drafts_enabled=gerrit_drafts, default_user=default_user
+            )
+        elif name == "pinpoint":
+            module.register(mcp, default_user=default_user)
+        else:
+            module.register(mcp)
     return mcp

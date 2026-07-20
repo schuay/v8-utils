@@ -4,12 +4,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 
 from .. import pinpoint as pinpoint_mod
+from ..concurrency import _run_concurrent
 from ..tools import (
     _fetch_job_details_sorted,
     _fetch_jobs_list,
     _format_job_detail,
     _format_results_table,
-    _run_concurrent,
     create_pinpoint_jobs,
     resolve_base_patch,
     resolve_exp_patches,
