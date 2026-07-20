@@ -1590,8 +1590,8 @@ name = "uvicorn"
 version = "0.41.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "click", marker = "sys_platform != 'emscripten'" },
-    { name = "h11", marker = "sys_platform != 'emscripten'" },
+    { name = "click" },
+    { name = "h11" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/32/ce/eeb58ae4ac36fe09e3842eb02e0eb676bf2c53ae062b98f1b2531673efdd/uvicorn-0.41.0.tar.gz", hash = "sha256:09d11cf7008da33113824ee5a1c6422d89fbc2ff476540d69a34c87fab8b571a", size = 82633, upload-time = "2026-02-16T23:07:24.1Z" }
 wheels = [
@@ -1603,20 +1603,38 @@ name = "v8-utils"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "mcp", extra = ["cli"] },
+    { name = "platformdirs" },
+]
+
+[package.optional-dependencies]
+all = [
     { name = "dateparser" },
     { name = "google-auth" },
     { name = "google-cloud-spanner" },
-    { name = "httpx" },
-    { name = "mcp", extra = ["cli"] },
     { name = "numpy" },
     { name = "pandas" },
-    { name = "platformdirs" },
     { name = "protobuf" },
-    { name = "requests" },
-    { name = "rich" },
     { name = "ruptures" },
     { name = "scipy" },
-    { name = "typer" },
+]
+analysis = [
+    { name = "dateparser" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "ruptures" },
+    { name = "scipy" },
+]
+gchat = [
+    { name = "google-auth" },
+]
+pinpoint = [
+    { name = "dateparser" },
+    { name = "protobuf" },
+    { name = "scipy" },
+]
+spanner = [
+    { name = "google-cloud-spanner" },
 ]
 
 [package.dev-dependencies]
@@ -1627,21 +1645,21 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dateparser", specifier = ">=1.3.0" },
-    { name = "google-auth", specifier = ">=2.0" },
-    { name = "google-cloud-spanner", specifier = ">=3.63.0" },
-    { name = "httpx", specifier = ">=0.27" },
+    { name = "dateparser", marker = "extra == 'analysis'", specifier = ">=1.3.0" },
+    { name = "dateparser", marker = "extra == 'pinpoint'", specifier = ">=1.3.0" },
+    { name = "google-auth", marker = "extra == 'gchat'", specifier = ">=2.0" },
+    { name = "google-cloud-spanner", marker = "extra == 'spanner'", specifier = ">=3.63.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
-    { name = "numpy", specifier = ">=1.24" },
-    { name = "pandas", specifier = ">=2.0" },
+    { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.24" },
+    { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
     { name = "platformdirs", specifier = ">=4.0" },
-    { name = "protobuf", specifier = ">=5.0" },
-    { name = "requests", specifier = ">=2.32.5" },
-    { name = "rich", specifier = ">=13" },
-    { name = "ruptures", specifier = ">=1.1" },
-    { name = "scipy", specifier = ">=1.13" },
-    { name = "typer", specifier = ">=0.12" },
+    { name = "protobuf", marker = "extra == 'pinpoint'", specifier = ">=5.0" },
+    { name = "ruptures", marker = "extra == 'analysis'", specifier = ">=1.1" },
+    { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.13" },
+    { name = "scipy", marker = "extra == 'pinpoint'", specifier = ">=1.13" },
+    { name = "v8-utils", extras = ["analysis", "pinpoint", "gchat", "spanner"], marker = "extra == 'all'" },
 ]
+provides-extras = ["analysis", "pinpoint", "gchat", "spanner", "all"]
 
 [package.metadata.requires-dev]
 dev = [
