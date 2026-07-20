@@ -3,13 +3,10 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
-from unittest.mock import patch
-
 import pytest
 
 from v8_utils import changelog
 from v8_utils import daemon
-from v8_utils import pinpoint
 from v8_utils.pinpoint import (
     _apply_significance,
     _extract_change_and_patchset,
@@ -586,3 +583,108 @@ class TestFormatEntry:
     def test_plain_text_unchanged(self):
         assert changelog._format_entry("hello", color=False) == "hello"
         assert changelog._format_entry("hello", color=True) == "hello"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# resolve_base_patch / get_gerrit_parent_url  (stacked-branch base detection)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _git(cwd, *args):
+    import subprocess
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True)
+
+
+def _make_stacked_repo(tmp_path):
+    """Build a repo with a parent branch (with a CL) and a stacked child branch."""
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@t")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f").write_text("x")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "init")
+
+    # Parent branch carries a Gerrit CL.
+    _git(repo, "checkout", "-q", "-b", "parent")
+    _git(repo, "config", "branch.parent.gerritissue", "8073958")
+    _git(repo, "config", "branch.parent.gerritpatchset", "15")
+
+    # Child branch is stacked on top of parent (its upstream) and has its own CL.
+    _git(repo, "checkout", "-q", "-b", "child", "--track", "parent")
+    _git(repo, "config", "branch.child.gerritissue", "8118572")
+    _git(repo, "config", "branch.child.gerritpatchset", "4")
+    return str(repo)
+
+
+class TestResolveBasePatch:
+    def test_parent_resolves_to_upstream_cl(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        assert (
+            resolve_base_patch("parent", cwd=repo)
+            == "https://chromium-review.googlesource.com/8073958/15"
+        )
+
+    def test_parent_case_insensitive(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        assert (
+            resolve_base_patch("PARENT", cwd=repo)
+            == "https://chromium-review.googlesource.com/8073958/15"
+        )
+
+    def test_none_returns_none(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        assert resolve_base_patch(None, cwd=repo) is None
+        assert resolve_base_patch("none", cwd=repo) is None
+
+    def test_explicit_url_passthrough(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/999"
+        assert resolve_base_patch(url, cwd=repo) == url
+
+    def test_parent_without_upstream_raises(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        # 'parent' branch has no upstream of its own.
+        _git(repo, "checkout", "-q", "parent")
+        with pytest.raises(ValueError, match="No parent Gerrit CL"):
+            resolve_base_patch("parent", cwd=repo)
+
+    def test_parent_upstream_without_cl_raises(self, tmp_path):
+        from v8_utils.tools import resolve_base_patch
+
+        repo = _make_stacked_repo(tmp_path)
+        # Strip the parent branch's CL so the upstream has no gerritissue.
+        _git(repo, "config", "--unset", "branch.parent.gerritissue")
+        with pytest.raises(ValueError, match="No parent Gerrit CL"):
+            resolve_base_patch("parent", cwd=repo)
+
+
+class TestGetGerritParentUrl:
+    def test_detects_parent_cl(self, tmp_path):
+        from v8_utils.tools import get_gerrit_parent_url
+
+        repo = _make_stacked_repo(tmp_path)
+        assert (
+            get_gerrit_parent_url(cwd=repo)
+            == "https://chromium-review.googlesource.com/8073958/15"
+        )
+
+    def test_no_upstream_returns_none(self, tmp_path):
+        from v8_utils.tools import get_gerrit_parent_url
+
+        repo = _make_stacked_repo(tmp_path)
+        _git(repo, "checkout", "-q", "parent")
+        assert get_gerrit_parent_url(cwd=repo) is None

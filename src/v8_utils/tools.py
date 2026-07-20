@@ -346,9 +346,12 @@ def _format_job_detail(j: dict) -> str:
     return "\n".join(lines)
 
 
-def get_gerrit_issue_url(cwd: str | None = None) -> str | None:
-    """Read the Gerrit CL URL for the current git branch from git config.
+def get_gerrit_issue_url(
+    cwd: str | None = None, branch: str | None = None
+) -> str | None:
+    """Read the Gerrit CL URL for a git branch from git config.
 
+    Defaults to the current branch (HEAD) when branch is None.
     Returns a full URL including patchset, e.g.:
       https://chromium-review.googlesource.com/7650974/1
     Returns None if not inside a git repo or the branch has no associated CL.
@@ -360,7 +363,8 @@ def get_gerrit_issue_url(cwd: str | None = None) -> str | None:
         )
         return r.stdout.strip() if r.returncode == 0 else ""
 
-    branch = _git("rev-parse", "--abbrev-ref", "HEAD")
+    if branch is None:
+        branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     if not branch or branch == "HEAD":
         return None
     issue = _git("config", f"branch.{branch}.gerritissue")
@@ -373,6 +377,24 @@ def get_gerrit_issue_url(cwd: str | None = None) -> str | None:
     patchset = _git("config", f"branch.{branch}.gerritpatchset")
     url = f"{server}/{issue}"
     return f"{url}/{patchset}" if patchset else url
+
+
+def get_gerrit_parent_url(cwd: str | None = None) -> str | None:
+    """Read the Gerrit CL URL of the current branch's upstream (parent) branch.
+
+    For a stacked branch, the upstream branch is the parent CL it builds on.
+    Returns None if there is no upstream branch or it has no associated CL.
+    """
+    r = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
+    parent = r.stdout.strip() if r.returncode == 0 else ""
+    if not parent:
+        return None
+    return get_gerrit_issue_url(cwd=cwd, branch=parent)
 
 
 def _resolve_patch_sentinel(value: str, cwd: str | None = None) -> str | None:
@@ -423,6 +445,31 @@ def resolve_exp_patches(
     Raises ValueError if "auto" is used but no CL is found on the current branch.
     """
     return [_resolve_patch_sentinel(p, cwd=cwd) for p in exp_patches]
+
+
+def resolve_base_patch(value: str | None, cwd: str | None = None) -> str | None:
+    """Resolve a base_patch value, additionally supporting the "parent" sentinel.
+
+    "parent" detects the CL of the current branch's upstream (parent) branch,
+    which is the base for a stacked CL.  "none"/None -> None, "auto" -> current
+    branch CL, anything else is passed through unchanged.
+
+    Raises ValueError if "parent" is used but no parent CL can be found.
+    """
+    if value is None:
+        return None
+    if value.lower() == "parent":
+        detected = get_gerrit_parent_url(cwd=cwd)
+        if detected is None:
+            raise ValueError(
+                "No parent Gerrit CL found for --base-patch=parent.\n"
+                "The current branch's upstream branch has no associated CL.\n"
+                "Either:\n"
+                "  - pass --base-patch with an explicit CL URL\n"
+                "  - check the upstream branch with: git branch -vv"
+            )
+        return detected
+    return _resolve_patch_sentinel(value, cwd=cwd)
 
 
 def create_pinpoint_jobs(

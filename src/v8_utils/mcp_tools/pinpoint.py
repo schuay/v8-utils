@@ -11,6 +11,7 @@ from ..tools import (
     _format_results_table,
     _run_concurrent,
     create_pinpoint_jobs,
+    resolve_base_patch,
     resolve_exp_patches,
     resolve_patch_filter,
 )
@@ -298,7 +299,9 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         story_tags:     comma-separated story tags to select stories
         base_git_hash:  git hash for the base build (default: auto-detected latest CI build)
         exp_git_hash:   git hash for the experiment build (default: auto-detected latest CI build)
-        base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL
+        base_patch:     Gerrit patch for base — change ID, crrev/c/12345, or full URL.
+                        "parent" detects the parent CL from the current branch's
+                        upstream branch (for measuring a stacked CL vs its parent)
         base_js_flags:  V8 flags for base, passed as --js-flags="...", e.g. "--turbofan"
         exp_js_flags:   V8 flags for experiment, same format
         repeat:         number of bot runs per variant (default: 150)
@@ -315,7 +318,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             story_tags=story_tags,
             base_git_hash=base_git_hash,
             exp_git_hash=exp_git_hash,
-            base_patch=base_patch,
+            base_patch=resolve_base_patch(base_patch, cwd=repo_path),
             exp_patches=resolve_exp_patches([exp_patch], cwd=repo_path),
             base_js_flags=base_js_flags,
             exp_js_flags_list=[exp_js_flags],

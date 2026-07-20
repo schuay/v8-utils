@@ -30,6 +30,7 @@ from .tools import (
     _format_results_table,
     _run_concurrent,
     create_pinpoint_jobs,
+    resolve_base_patch,
     resolve_exp_patches,
     resolve_patch_filter,
 )
@@ -471,6 +472,13 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
                 f"{_DIM}autodetected exp-patch: {resolved} (from current branch){_RESET}"
             )
 
+    # Resolve base-patch, supporting the "parent" sentinel for stacked branches.
+    base_patch = resolve_base_patch(args.base_patch)
+    if args.base_patch and args.base_patch.lower() == "parent" and base_patch:
+        print(
+            f"{_DIM}autodetected base-patch: {base_patch} (from parent branch){_RESET}"
+        )
+
     def on_auto_hash(cfg, commit, build_num_or_err):
         if commit:
             print(
@@ -514,7 +522,7 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         story_tags=args.story_tags,
         base_git_hash=args.base_git_hash,
         exp_git_hash=args.exp_git_hash,
-        base_patch=args.base_patch,
+        base_patch=base_patch,
         exp_patches=exp_patches,
         base_js_flags=args.base_js_flags,
         exp_js_flags_list=args.exp_js_flags or [None],
@@ -825,7 +833,9 @@ def main() -> None:
         "--base-patch",
         default=None,
         dest="base_patch",
-        help="Gerrit patch for base (change ID, crrev/c/N, or URL)",
+        help="Gerrit patch for base (change ID, crrev/c/N, or URL). "
+        '"parent" detects the parent CL from the upstream branch '
+        "(for stacked branches)",
     )
     p.add_argument(
         "--exp-patch",
