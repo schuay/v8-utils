@@ -158,7 +158,8 @@ def register(mcp: FastMCP) -> None:
         configurations use pd_compare.
 
         Narrow with benchmark/engine/metric; omitting benchmark scans all series
-        (large). Shows only significant shifts.
+        (large). Shows only significant shifts. An unknown bot/benchmark value is
+        rejected with the list of valid names, so a wrong guess is self-correcting.
 
         benchmark:  filter, e.g. "jetstream3.slipstream"; omit to scan all (large).
         engine:     "v8" or "jsc".
@@ -260,7 +261,8 @@ def register(mcp: FastMCP) -> None:
         unconfirmed and may be transient. Significant-only unless show_all.
 
         Narrow with engine/variant/benchmark/metric; variant encodes the engine
-        (e.g. "v8_default", "v8_turbolev"), so it pins the engine on its own.
+        (e.g. "v8_default", "v8_turbolev_future"), so it pins the engine on its
+        own. An unknown bot/benchmark/variant is rejected with the valid names.
 
         commit:     commit position (numeric id) or git hash prefix.
         benchmark:  e.g. "jetstream3.slipstream".
@@ -380,10 +382,11 @@ def register(mcp: FastMCP) -> None:
         bot/benchmark/test/variant; dimensions left unoverridden become the join
         keys. Reports per-key A vs B means, percent change, and FDR-corrected
         significance. To find changes over time use pd_detect; for one specific
-        commit's effect, pd_commit_impact.
+        commit's effect, pd_commit_impact. An unknown bot/benchmark/variant on
+        either side is rejected with the list of valid names.
 
         a:          A-side (base) overrides, e.g. ["variant=v8_default"].
-        b:          B-side overrides, e.g. ["variant=v8_turbolev"].
+        b:          B-side overrides, e.g. ["variant=v8_turbolev_future"].
         benchmark:  filter both sides, e.g. "jetstream3.slipstream".
         bot:        filter both sides (default "mac-m3-jgruber").
         since:      window start, natural language ok (default "two weeks ago").
