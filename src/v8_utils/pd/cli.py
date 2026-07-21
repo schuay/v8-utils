@@ -8,7 +8,7 @@ from typing import Annotated, Optional
 
 import typer
 
-from .adaptor import discover
+from .adaptor import check_dimension_values, discover
 from .commits import CommitStore
 from .detect import detect_from_df
 from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir, sync_engine
@@ -58,6 +58,15 @@ def _make_adaptor(source: str, cfg: dict):
 def _engine_for_source(source: str, cfg: dict) -> str | None:
     sources = cfg.get("sources", {})
     return sources.get(source, {}).get("engine")
+
+
+def _validate_dimensions(adaptor, filters: dict[str, str]) -> None:
+    """CLI wrapper: turn a bad-name ValueError into echo+Exit(1)."""
+    try:
+        check_dimension_values(adaptor, filters)
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(1) from e
 
 
 def _parse_date(value: str) -> str:
@@ -147,6 +156,8 @@ def detect(
     _log("fetching data...")
     fetched = adaptor.fetch(since=since_date, until=until_date, **filter_kwargs)
     _log(f"fetch: {len(fetched)} rows in {time.monotonic() - t0:.1f}s")
+    if fetched.empty:
+        _validate_dimensions(adaptor, filter_kwargs)
 
     # Apply --metric glob filter
     if metric:
@@ -258,6 +269,10 @@ def compare(
     _log(f"fetching B: {filters_b}")
     df_b = adaptor.fetch(since=since_date, until=until_date, **filters_b)
     _log(f"fetch: {len(df_a)} + {len(df_b)} rows in {time.monotonic() - t0:.1f}s")
+    if df_a.empty:
+        _validate_dimensions(adaptor, filters_a)
+    if df_b.empty:
+        _validate_dimensions(adaptor, filters_b)
 
     # Determine key columns: all dimension columns NOT mentioned in overrides
     all_override_keys = set(a_overrides) | set(b_overrides)
@@ -396,10 +411,14 @@ def commit_impact(
     _log(f"fetching data since {since_date}...")
     fetched = adaptor.fetch(since=since_date, until=None, **filter_kwargs)
     _log(f"fetch: {len(fetched)} rows in {time.monotonic() - t0:.1f}s")
+    if fetched.empty:
+        _validate_dimensions(adaptor, filter_kwargs)
 
     if metric:
         fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
     if variant:
+        if fetched.empty or variant not in set(fetched["variant"]):
+            _validate_dimensions(adaptor, {"variant": variant})
         fetched = fetched[fetched["variant"] == variant]
     if engine_filter:
         if "engine" not in fetched.columns:

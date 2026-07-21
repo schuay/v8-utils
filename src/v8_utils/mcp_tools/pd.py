@@ -10,7 +10,7 @@ from rich.console import Console
 
 from .. import config as v8_config
 from ..pd import report
-from ..pd.adaptor import discover
+from ..pd.adaptor import check_dimension_values, discover
 from ..pd.at import at_from_df
 from ..pd.commits import CommitStore
 from ..pd.compare import compare_snapshots
@@ -193,6 +193,8 @@ def register(mcp: FastMCP) -> None:
         commit_store = CommitStore()
         try:
             fetched = adaptor.fetch(since=since_date, until=until_date, **filter_kwargs)
+            if fetched.empty:
+                check_dimension_values(adaptor, filter_kwargs)
 
             if metric:
                 fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
@@ -312,9 +314,14 @@ def register(mcp: FastMCP) -> None:
 
             fetched = adaptor.fetch(since=since_date, until=None, **filter_kwargs)
 
+            if fetched.empty:
+                check_dimension_values(adaptor, filter_kwargs)
+
             if metric:
                 fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
             if variant:
+                if fetched.empty or variant not in set(fetched["variant"]):
+                    check_dimension_values(adaptor, {"variant": variant})
                 fetched = fetched[fetched["variant"] == variant]
             if engine:
                 if "engine" not in fetched.columns:
@@ -410,6 +417,10 @@ def register(mcp: FastMCP) -> None:
         filters_b = {**common, **b_overrides}
         df_a = adaptor.fetch(since=since_date, until=until_date, **filters_a)
         df_b = adaptor.fetch(since=since_date, until=until_date, **filters_b)
+        if df_a.empty:
+            check_dimension_values(adaptor, filters_a)
+        if df_b.empty:
+            check_dimension_values(adaptor, filters_b)
 
         all_override_keys = set(a_overrides) | set(b_overrides)
         dimension_cols = ["bot", "benchmark", "test", "variant"]

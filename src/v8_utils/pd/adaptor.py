@@ -59,6 +59,65 @@ class Adaptor(Protocol):
         """
         ...
 
+    def distinct_values(self, column: str) -> list[str]:
+        """Return every value a dimension column takes across the source.
+
+        Optional: callers reach it via getattr and skip validation when an
+        adaptor does not implement it. Used to turn a mistyped bot/benchmark/
+        variant (which otherwise just matches zero rows) into an actionable
+        error listing the real names. All-time on purpose -- the check must
+        separate a typo from a valid-but-absent-in-window name.
+
+        column: one of the dimension columns (bot, benchmark, test, variant).
+        """
+        ...
+
+
+# Dimension filters whose values are a fixed vocabulary in the source, so a
+# mistyped one is a nameable error rather than a legitimate empty result. `test`
+# is excluded: callers treat it as a glob, not an exact name.
+VALIDATED_DIMENSIONS = ("bot", "benchmark", "variant")
+
+
+def check_dimension_values(
+    adaptor,
+    filters: dict[str, str],
+    columns: tuple[str, ...] = VALIDATED_DIMENSIONS,
+) -> None:
+    """Raise ValueError naming any filter value the source does not have.
+
+    Meant to run only once a query has already come back empty, so the extra
+    DISTINCT lookups sit off the happy path. Each column is checked against its
+    own value set independently, so a second bad filter cannot mask the first.
+    Best-effort per column: an adaptor without distinct_values, a column with no
+    known values, or a lookup that errors just skips that column rather than
+    turning a soft empty result into a hard failure.
+    """
+    lookup = getattr(adaptor, "distinct_values", None)
+    if lookup is None:
+        return
+
+    problems: list[tuple[str, str, list[str]]] = []
+    for col in columns:
+        if col not in filters:
+            continue
+        try:
+            valid = lookup(col)
+        except Exception:
+            continue
+        if not valid:
+            continue
+        if filters[col] not in valid:
+            problems.append((col, filters[col], sorted(valid)))
+
+    if problems:
+        raise ValueError(
+            "\n".join(
+                f"Unknown {col} {val!r}. Available: {', '.join(valid)}"
+                for col, val, valid in problems
+            )
+        )
+
 
 def ensure_aggregated(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure the DataFrame has stdev/count columns.

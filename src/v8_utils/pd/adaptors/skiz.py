@@ -173,6 +173,24 @@ class SkizAdaptor:
             df["engine"] = df["variant"].map(_engine_from_variant)
         return df
 
+    # Columns exposed for value validation. Restricting to a known set keeps the
+    # interpolated identifier below (Spanner DBAPI has no param slot for a column
+    # name) off any caller-supplied string.
+    _DISTINCT_COLUMNS = frozenset({"bot", "benchmark", "test", "variant"})
+
+    def distinct_values(self, column: str) -> list[str]:
+        if column not in self._DISTINCT_COLUMNS:
+            raise ValueError(f"cannot enumerate column {column!r}")
+        df = _query(
+            self._con,
+            f"SELECT DISTINCT {column} FROM {_AGG_TABLE}"
+            f" WHERE submetric = '' ORDER BY {column}",
+            [],
+        )
+        if df.empty:
+            return []
+        return [v for v in df[column].tolist() if v]
+
 
 def create(**kwargs) -> SkizAdaptor:
     return SkizAdaptor(**kwargs)
