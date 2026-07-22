@@ -228,7 +228,7 @@ def register(mcp: FastMCP) -> None:
         finally:
             commit_store.close()
 
-        return _text_result(out)
+        return _text_result(out, stale_banner=format != "json")
 
     @mcp.tool()
     def pd_commit_impact(

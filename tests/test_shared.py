@@ -50,3 +50,21 @@ class TestTextResultCap:
         (content,) = result.content
         assert content.text.endswith("ok")
         assert "[truncated:" not in content.text
+
+
+class TestStaleBanner:
+    def test_stale_banner_prepended_by_default(self, monkeypatch):
+        monkeypatch.setattr(_shared, "_check_stale", lambda: "[WARNING: stale]\n\n")
+        (content,) = _text_result("body").content
+        assert content.text == "[WARNING: stale]\n\nbody"
+
+    def test_stale_banner_suppressed_for_json(self, monkeypatch):
+        # A machine-readable payload must parse verbatim: even a stale server
+        # must not corrupt the first char with a human banner.
+        import json
+
+        monkeypatch.setattr(_shared, "_check_stale", lambda: "[WARNING: stale]\n\n")
+        payload = json.dumps([{"series": {}}])
+        (content,) = _text_result(payload, stale_banner=False).content
+        assert content.text == payload
+        assert json.loads(content.text) == [{"series": {}}]

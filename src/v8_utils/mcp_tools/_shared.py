@@ -53,16 +53,22 @@ def _check_stale() -> str:
     return ""
 
 
-def _text_result(text: str) -> CallToolResult:
+def _text_result(text: str, *, stale_banner: bool = True) -> CallToolResult:
     """Return a CallToolResult with both content and structuredContent.
 
     Setting structuredContent.content makes Claude Code display the text
     with proper newlines instead of a collapsed JSON blob (see
     anthropics/claude-code#9962).
+
+    stale_banner=False omits the "v8-utils was upgraded" prefix. Pass it for
+    machine-readable payloads (format="json"): a programmatic consumer parses
+    the body verbatim, so a prepended human banner turns the first char into a
+    JSON syntax error rather than an advisory.
     """
     body = _truncate_to_bytes(text, _MAX_RESULT_BYTES)
+    prefix = _check_stale() if stale_banner else ""
     return CallToolResult(
-        content=[TextContent(type="text", text=_check_stale() + body)],
+        content=[TextContent(type="text", text=prefix + body)],
     )
 
 
