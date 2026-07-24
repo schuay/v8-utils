@@ -1613,6 +1613,7 @@ all = [
     { name = "google-auth" },
     { name = "google-cloud-spanner" },
     { name = "numpy" },
+    { name = "opentelemetry-resourcedetector-gcp" },
     { name = "pandas" },
     { name = "protobuf" },
     { name = "ruptures" },
@@ -1635,6 +1636,7 @@ pinpoint = [
 ]
 spanner = [
     { name = "google-cloud-spanner" },
+    { name = "opentelemetry-resourcedetector-gcp" },
 ]
 
 [package.dev-dependencies]
@@ -1651,6 +1653,7 @@ requires-dist = [
     { name = "google-cloud-spanner", marker = "extra == 'spanner'", specifier = ">=3.63.0" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
     { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.24" },
+    { name = "opentelemetry-resourcedetector-gcp", marker = "extra == 'spanner'", specifier = ">=1.8.0a0" },
     { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "protobuf", marker = "extra == 'pinpoint'", specifier = ">=5.0" },

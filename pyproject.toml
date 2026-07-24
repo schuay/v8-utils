@@ -40,6 +40,12 @@ gchat = [
 # Spanner-backed perf timeseries (the pd `skiz` adaptor, imported lazily).
 spanner = [
     "google-cloud-spanner>=3.63.0",
+    # TODO(jgruber): remove once PyPI has an unyanked stable release.
+    # google-cloud-spanner depends on opentelemetry-resourcedetector-gcp, whose
+    # only stable release is yanked (alphas only remain). uv enables
+    # pre-releases for a package only via a DIRECT pre-release-marked
+    # requirement, so this pin opts in exactly this one package.
+    "opentelemetry-resourcedetector-gcp>=1.8.0a0",
 ]
 # The full developer surface -- equivalent to the pre-split dependency set.
 # Recursive extras are resolved by uv and modern pip.
