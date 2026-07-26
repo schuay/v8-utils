@@ -2,12 +2,25 @@
 
 import datetime
 import subprocess
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 
 from .. import config
-from ._shared import _paginate_result, _resolve_repo, _text_result
+from .. import worktree as worktree_mod
+from ._shared import (
+    _clear_worktree,
+    _configured_repo,
+    _current_branch,
+    _paginate_result,
+    _repo_banner,
+    _resolve_repo,
+    _resolve_worktree,
+    _select_worktree,
+    _selected_worktree,
+    _text_result,
+)
 
 
 _MAX_READ_LINES = 2000
@@ -90,6 +103,27 @@ def _repo_summary() -> str:
 REPOS_LINE = _repo_summary()
 
 
+def _repo_names() -> str:
+    """Bare alias list for per-tool descriptions.
+
+    The server instructions carry the full name-and-description list once. A
+    tool's own description is read when the repo has already been chosen, so
+    repeating the prose five more times buys nothing; the valid names do.
+    """
+    cfg = config.load()
+    return ", ".join(a for a, e in cfg.repos.items() if e.path.is_dir())
+
+
+REPO_NAMES = _repo_names()
+
+WORKTREE_LINE = (
+    "worktree: git worktree to read instead of the main checkout (directory or\n"
+    "          branch name; repo_git_worktree_list). This call only. Prefer over\n"
+    "          `ref` for branch work: `ref` sees commits, `worktree` sees the\n"
+    "          working tree including uncommitted edits."
+)
+
+
 def _register_repo_resources(mcp: FastMCP) -> None:
     """Register MCP resources for configured repos."""
     cfg = config.load()
@@ -121,13 +155,13 @@ def register(mcp: FastMCP) -> None:
             "  2. Commit mode (path omitted, ref required): shows the commit message\n"
             "     and diff for the given ref (like `git show <ref>`).\n"
             "\n"
-            f"Configured repos: {REPOS_LINE}\n"
+            f"Repos: {REPO_NAMES}\n"
             "\n"
-            "repo:   repo name (see list above)\n"
             "path:   file path relative to the repo root (omit for commit mode)\n"
             "offset: 0-based line offset to start reading from (default: 0)\n"
             "limit:  max lines to return (default: 100)\n"
-            "ref:    git ref (commit hash, branch, tag). Required for commit mode."
+            "ref:    git ref (commit hash, branch, tag). Required for commit mode.\n"
+            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_show(
@@ -136,8 +170,10 @@ def register(mcp: FastMCP) -> None:
         offset: int = 0,
         limit: int = 100,
         ref: str | None = None,
+        worktree: str | None = None,
     ) -> CallToolResult:
-        root = _resolve_repo(repo)
+        root = _resolve_repo(repo, worktree)
+        banner = _repo_banner(repo, root)
 
         if path is None:
             # Commit mode: show commit message + diff
@@ -176,22 +212,24 @@ def register(mcp: FastMCP) -> None:
             if not target.is_file():
                 raise ValueError(f"File not found: {path} (in {root})")
             lines = target.read_text(errors="replace").splitlines()
-        return _text_result(_paginate_result(lines, offset, limit, numbered=True))
+        return _text_result(
+            banner + _paginate_result(lines, offset, limit, numbered=True)
+        )
 
     @mcp.tool(
         description=(
             "Search for a pattern in a related source repo using git grep.\n"
             "\n"
-            f"Configured repos: {REPOS_LINE}\n"
+            f"Repos: {REPO_NAMES}\n"
             "\n"
-            "repo:    repo name (see list above)\n"
             "pattern: regex pattern to search for\n"
             'glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"\n'
             "context: lines of context around each match (default: 0)\n"
             "ignore_case: case-insensitive matching (default: false)\n"
             "limit:   max matches to return (default: 100)\n"
             "ref:     git ref to search in (e.g. commit hash, branch, tag).\n"
-            "         If omitted, searches the working tree."
+            "         If omitted, searches the working tree.\n"
+            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_grep(
@@ -202,8 +240,10 @@ def register(mcp: FastMCP) -> None:
         ignore_case: bool = False,
         limit: int = _MAX_GREP_MATCHES,
         ref: str | None = None,
+        worktree: str | None = None,
     ) -> CallToolResult:
-        root = _resolve_repo(repo)
+        root = _resolve_repo(repo, worktree)
+        banner = _repo_banner(repo, root)
         cmd = ["git", "grep", "-n", "--no-color", "-E"]
         if ignore_case:
             cmd.append("-i")
@@ -236,7 +276,7 @@ def register(mcp: FastMCP) -> None:
             proc.wait()
 
         if not collected and proc.returncode == 1:
-            return _text_result("No matches found.")
+            return _text_result(banner + "No matches found.")
         if not collected and proc.returncode not in (0, 1, -9):
             stderr = proc.stderr.read() if proc.stderr else ""
             raise ValueError(f"git grep failed: {stderr.strip()[:500]}")
@@ -246,19 +286,19 @@ def register(mcp: FastMCP) -> None:
             result += f"\n(truncated — showing first {limit} matches)"
         else:
             result = "\n".join(collected)
-        return _text_result(result)
+        return _text_result(banner + result)
 
     @mcp.tool(
         description=(
             "List files in a related source repo matching a glob pattern (git ls-files).\n"
             "\n"
-            f"Configured repos: {REPOS_LINE}\n"
+            f"Repos: {REPO_NAMES}\n"
             "\n"
-            "repo:   repo name (see list above)\n"
             'glob:   file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"\n'
             "limit:  max files to return (default: 500)\n"
             "ref:    git ref to list from (e.g. commit hash, branch, tag).\n"
-            "        If omitted, lists from the working tree."
+            "        If omitted, lists from the working tree.\n"
+            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_find(
@@ -266,8 +306,10 @@ def register(mcp: FastMCP) -> None:
         glob: str,
         limit: int = _MAX_LS_FILES,
         ref: str | None = None,
+        worktree: str | None = None,
     ) -> CallToolResult:
-        root = _resolve_repo(repo)
+        root = _resolve_repo(repo, worktree)
+        banner = _repo_banner(repo, root)
         if ref:
             cmd = [
                 "git",
@@ -301,22 +343,21 @@ def register(mcp: FastMCP) -> None:
             proc.wait()
 
         if not collected:
-            return _text_result("No files found.")
+            return _text_result(banner + "No files found.")
 
         if len(collected) > limit:
             result = "\n".join(collected[:limit])
             result += f"\n(truncated — showing first {limit} files)"
         else:
             result = "\n".join(collected)
-        return _text_result(result)
+        return _text_result(banner + result)
 
     @mcp.tool(
         description=(
             "Show git log in a related source repo.\n"
             "\n"
-            f"Configured repos: {REPOS_LINE}\n"
+            f"Repos: {REPO_NAMES}\n"
             "\n"
-            "repo:   repo name (see list above)\n"
             "path:   optional file path to show history for\n"
             "ref:    git ref to start from (default: HEAD)\n"
             f"limit:  max commits to return (default: 20, max: {_MAX_LOG_LINES})\n"
@@ -325,7 +366,8 @@ def register(mcp: FastMCP) -> None:
             '        or email, e.g. "jgruber" or "@google.com")\n'
             "since:  optional lower date bound (git --since; absolute like\n"
             '        "2026-01-01" or relative like "2 weeks ago")\n'
-            "until:  optional upper date bound (git --until; same formats)"
+            "until:  optional upper date bound (git --until; same formats)\n"
+            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_log(
@@ -337,8 +379,10 @@ def register(mcp: FastMCP) -> None:
         author: str | None = None,
         since: str | None = None,
         until: str | None = None,
+        worktree: str | None = None,
     ) -> CallToolResult:
-        root = _resolve_repo(repo)
+        root = _resolve_repo(repo, worktree)
+        banner = _repo_banner(repo, root)
         limit = max(1, min(limit, _MAX_LOG_LINES))
         cmd = [
             "git",
@@ -370,13 +414,13 @@ def register(mcp: FastMCP) -> None:
             raise ValueError(f"git log failed: {proc.stderr.strip()[:500]}")
         lines = proc.stdout.strip().split("\n") if proc.stdout.strip() else []
         if not lines:
-            return _text_result("No commits found.")
+            return _text_result(banner + "No commits found.")
         if len(lines) > limit:
             result = "\n".join(lines[:limit])
             result += f"\n(truncated — showing first {limit} commits)"
         else:
             result = "\n".join(lines)
-        return _text_result(result)
+        return _text_result(banner + result)
 
     @mcp.tool(
         description=(
@@ -396,15 +440,15 @@ def register(mcp: FastMCP) -> None:
             "on every line. When more lines follow the window, a continuation\n"
             "hint gives the next `start`.\n"
             "\n"
-            f"Configured repos: {REPOS_LINE}\n"
+            f"Repos: {REPO_NAMES}\n"
             "\n"
-            "repo:   repo name (see list above)\n"
             "path:   file path relative to the repo root\n"
             "start:  first line to blame, 1-based (default: 1)\n"
             f"limit:  window size in lines (default: {_DEFAULT_BLAME_LINES}, "
             f"max: {_MAX_BLAME_LINES})\n"
             "ref:    git ref to blame at (commit hash, branch, tag).\n"
-            "        If omitted, blames the working tree."
+            "        If omitted, blames the working tree.\n"
+            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_blame(
@@ -413,8 +457,10 @@ def register(mcp: FastMCP) -> None:
         start: int = 1,
         limit: int = _DEFAULT_BLAME_LINES,
         ref: str | None = None,
+        worktree: str | None = None,
     ) -> CallToolResult:
-        root = _resolve_repo(repo)
+        root = _resolve_repo(repo, worktree)
+        banner = _repo_banner(repo, root)
         if start < 1:
             raise ValueError("start must be >= 1")
         limit = max(1, min(limit, _MAX_BLAME_LINES))
@@ -438,7 +484,9 @@ def register(mcp: FastMCP) -> None:
 
         lines, commits = _parse_blame_porcelain(proc.stdout)
         if not lines:
-            return _text_result("No lines to blame (file empty or range out of range).")
+            return _text_result(
+                banner + "No lines to blame (file empty or range out of range)."
+            )
 
         more = len(lines) > limit
         shown = lines[:limit]
@@ -455,7 +503,7 @@ def register(mcp: FastMCP) -> None:
             for h in seen
         )
 
-        out = body + "\n\nCommits:\n" + legend
+        out = banner + body + "\n\nCommits:\n" + legend
         if more:
             next_start = start + len(shown)
             out += (
@@ -463,3 +511,83 @@ def register(mcp: FastMCP) -> None:
                 f" more follow, continue at start={next_start})"
             )
         return _text_result(out)
+
+    @mcp.tool(
+        description=(
+            "Select the git worktree that repo_git_* tools read from.\n"
+            "\n"
+            "Call this first when asked to work in, investigate, or review a\n"
+            "specific worktree or branch checkout: otherwise repo_git_* read the\n"
+            "main checkout and silently return the wrong content for files the\n"
+            "branch changed. Sticky for the session; results are then prefixed\n"
+            "[repo @ name | branch ...]. Call with no name to return to main.\n"
+            "\n"
+            'Also redirects gerrit_fetch and Pinpoint exp_patch="auto" detection.\n'
+            "Does NOT affect run_d8 or jsb_run_bench (pass their paths explicitly).\n"
+            "\n"
+            "name: worktree directory or branch name (repo_git_worktree_list).\n"
+            "      Omit to return to the main checkout.\n"
+            "repo: repo to select within (default: v8)"
+        )
+    )
+    def repo_git_worktree_select(
+        name: str | None = None,
+        repo: str = "v8",
+    ) -> CallToolResult:
+        if name is None:
+            previous = _clear_worktree(repo)
+            root = _configured_repo(repo)
+            note = f" (was {previous.name})" if previous is not None else ""
+            return _text_result(
+                f"Using the main {repo} checkout{note}: {root}\n"
+                f"branch {_current_branch(root)}"
+            )
+
+        path = _resolve_worktree(repo, name)
+        _select_worktree(repo, path)
+
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=path,
+            capture_output=True,
+            text=True,
+        )
+        n_dirty = len([ln for ln in dirty.stdout.splitlines() if ln.strip()])
+        clean = "clean" if n_dirty == 0 else f"{n_dirty} uncommitted file(s)"
+        return _text_result(
+            f"repo_git_* now read {repo} worktree {path.name}: {path}\n"
+            f"branch {_current_branch(path)} | {clean}"
+        )
+
+    @mcp.tool(
+        description=(
+            "List the git worktrees of a configured repo, marking the selected\n"
+            "one. These names are what repo_git_worktree_select and the\n"
+            "`worktree` parameter accept.\n"
+            "\n"
+            "repo: repo to list worktrees for (default: v8)"
+        )
+    )
+    def repo_git_worktree_list(repo: str = "v8") -> CallToolResult:
+        root = _configured_repo(repo)
+        try:
+            worktrees = worktree_mod.list_worktrees(root)
+        except (subprocess.CalledProcessError, OSError) as exc:
+            raise ValueError(f"Cannot list worktrees for {root}: {exc}") from exc
+        if not worktrees:
+            return _text_result("No worktrees found.")
+
+        active = _selected_worktree(repo)
+        lines = [f"{'':2} {'path':<50} {'branch':<32} head"]
+        lines.append("-" * len(lines[0]))
+        for wt in worktrees:
+            mark = "*" if active is not None and Path(wt["path"]) == active else " "
+            lines.append(
+                f"{mark:2} {wt['path']:<50} {wt.get('branch', ''):<32}"
+                f" {wt.get('head', '')}"
+            )
+        if active is None:
+            lines.append("\nNo worktree selected; repo_git_* read the main checkout.")
+        else:
+            lines.append(f"\nSelected (*): repo_git_* read {active}")
+        return _text_result("\n".join(lines))

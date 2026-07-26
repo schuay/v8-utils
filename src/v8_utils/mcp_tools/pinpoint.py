@@ -307,8 +307,8 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         repeat:         number of bot runs per variant (default: 150)
         bug_id:         buganizer issue ID to associate with the job
         v8_repo_path:   absolute path to the v8 repo for "auto" patch detection
-                        (default: configured v8 repo).
-                        Must point to the correct worktree when using worktrees.
+                        (default: the worktree selected via
+                        repo_git_worktree_select, else the configured v8 repo)
         """
         repo_path = v8_repo_path or str(_resolve_repo("v8"))
         jobs = create_pinpoint_jobs(

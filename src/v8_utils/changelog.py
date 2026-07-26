@@ -49,6 +49,7 @@ ENTRIES: list[str] = [
     "v8-utils mcp: added `gerrit_create_comments` for batch draft creation; `gerrit_comments` now shows comment UUIDs",
     "`pp s` autodetects a Gerrit CL URL/ID (no `-p` needed); bare `pp s` lists recent jobs like `pp l`",
     "*create-job* `--base-patch parent` measures a stacked branch against its parent CL, autodetected from the upstream branch",
+    "v8-utils mcp: `repo_git_*` tools can now read *worktrees*, including uncommitted changes — pick one with `repo_git_worktree_select`",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

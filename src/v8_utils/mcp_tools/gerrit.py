@@ -477,7 +477,9 @@ def register(
         If no patchset is in the URL, the latest patchset is fetched.
 
         change_url:    Gerrit CL URL (with or without patchset suffix)
-        v8_repo_path:  local v8 git repo to fetch into (default: configured v8 repo)
+        v8_repo_path:  local v8 git repo to fetch into (default: the worktree
+                       selected via repo_git_worktree_select, else the
+                       configured v8 repo)
         fetch:         if False, return ref/remote without running git fetch
                        (useful for getting the ref name to fetch manually)
         """

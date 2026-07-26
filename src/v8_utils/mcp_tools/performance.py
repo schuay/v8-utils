@@ -426,7 +426,9 @@ def register(mcp: FastMCP) -> None:
         stdout and stderr are combined into a single stream.
 
         args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
-        d8_path:     absolute path to the d8 binary (default: main v8 build)
+        d8_path:     absolute path to the d8 binary (default: main v8 build).
+                     Not affected by repo_git_worktree_select -- to run a
+                     worktree's build, pass its d8 path explicitly.
         cwd:         working directory for d8 (default: repos["v8"])
         timeout:     max seconds before killing the process (default: 60)
         output_file: redirect combined output to this file path instead of capturing

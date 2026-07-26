@@ -4,7 +4,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 
 from .. import worktree as worktree_mod
-from ._shared import _resolve_repo, _text_result
+from ._shared import _configured_repo, _text_result
 
 
 def register(mcp: FastMCP) -> None:
@@ -17,26 +17,24 @@ def register(mcp: FastMCP) -> None:
         force: bool = False,
         remove_branch: bool = False,
     ) -> CallToolResult:
-        """Manage V8 git worktrees with automatic gclient dependency symlinking.
+        """Create, remove, and repair V8 git worktrees (gclient deps symlinked).
 
-        Worktrees are created as siblings of the main V8 checkout (e.g. name="foo"
-        creates ~/src/v8/foo). gclient-managed dependencies (build/, buildtools/,
-        third_party/*, etc.) are symlinked from the main checkout — no gclient sync
-        needed. To update shared deps, run gclient sync in the main checkout.
+        Manages worktrees on disk only. To read from one, select it with
+        repo_git_worktree_select (creating does not select); to see what
+        exists, repo_git_worktree_list.
 
-        Create produces three build-ready directories — out/x64.optdebug, out/x64.debug,
-        out/x64.release — each with symbol_level=2 forced and `gn gen` already run,
-        so `autoninja -C out/<build> d8` will start building without a gn step.
+        Create makes a sibling of the main checkout (name="foo" -> ~/src/v8/foo),
+        symlinks gclient deps from it (no gclient sync needed), and leaves three
+        build-ready dirs -- out/x64.{optdebug,debug,release} -- with
+        symbol_level=2 and `gn gen` done, so `autoninja -C out/<build> d8` runs
+        straight away. To update shared deps, gclient sync in the main checkout.
 
-        The symlink set is a snapshot from create time. After rebasing a worktree
-        onto a different main, DEPS may no longer match it (new deps unlinked,
-        removed deps left dangling). If a build breaks with missing/unexpected
-        dep directories after a rebase, use action="refresh" to rebuild the links.
-        Run gclient sync in the main checkout first if main has not synced the
-        new deps yet.
+        The symlink set is a create-time snapshot. If a build breaks after a
+        rebase with missing or dangling dep directories, action="refresh"
+        rebuilds it against current DEPS (gclient sync main first if needed).
 
-        action:        "create", "remove", "refresh", or "list"
-        name:          worktree directory name (required for create/remove/refresh)
+        action:        "create", "remove", or "refresh"
+        name:          worktree directory name (required for all actions)
         force:         force removal of dirty worktrees (remove only)
         remove_branch: also delete the underlying git branch (remove only).
                        Skipped for detached HEAD, main/master, or branches
@@ -46,19 +44,10 @@ def register(mcp: FastMCP) -> None:
                        Defaults to the worktree name.
         upstream:      base branch/ref for the new branch (default "main")
         """
-        repo = _resolve_repo("v8")
-
-        if action == "list":
-            wts = worktree_mod.list_worktrees(repo)
-            if not wts:
-                return _text_result("No worktrees found.")
-            lines = [f"{'path':<50} {'branch':<30} {'head'}"]
-            lines.append("-" * len(lines[0]))
-            for wt in wts:
-                lines.append(
-                    f"{wt['path']:<50} {wt.get('branch', ''):<30} {wt.get('head', '')}"
-                )
-            return _text_result("\n".join(lines))
+        # Worktree management always targets the main checkout: git worktree
+        # add/remove/prune operate on the repo as a whole, and the symlink
+        # helpers in v8_utils.worktree resolve the main worktree themselves.
+        repo = _configured_repo("v8")
 
         if not name:
             raise ValueError(f"'name' is required for action={action!r}")
@@ -104,5 +93,6 @@ def register(mcp: FastMCP) -> None:
             return _text_result(" ".join(lines))
 
         raise ValueError(
-            f"Unknown action {action!r}. Use 'create', 'remove', 'refresh', or 'list'."
+            f"Unknown action {action!r}. Use 'create', 'remove', or 'refresh'. "
+            f"To list worktrees, use repo_git_worktree_list."
         )
