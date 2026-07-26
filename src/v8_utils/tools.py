@@ -131,7 +131,8 @@ def _results_header(job: dict, ansi: bool = False) -> str:
     if header_parts:
         sep = f" {d}│{r} " if ansi else "  "
         lines.append(sep.join(header_parts))
-    lines.append(f"{d}base:{r} {c}{base_hash}{r}")
+    if base_hash:
+        lines.append(f"{d}base:{r} {c}{base_hash}{r}")
     if base_patch_url:
         base_patch_line = f"{d}base-patch:{r} {c}{base_patch_url}{r}"
         if base_patch_subject:

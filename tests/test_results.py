@@ -83,6 +83,18 @@ class TestResultsHeader:
         assert _results_header({}) == ""
 
     @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    def test_base_hash_shown_when_present(self, _mock):
+        h = _results_header(_job(base_git_hash="deadbeef"))
+        assert "base:" in h
+        assert "deadbeef" in h
+
+    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    def test_base_hash_omitted_when_missing(self, _mock):
+        # Real Pinpoint jobs always carry a base hash, but partial dicts reach
+        # this formatter too; rendering "base: None" helps nobody.
+        assert "base:" not in _results_header(_job())
+
+    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_ansi_header(self, _mock):
         h = _results_header(_job(), ansi=True)
         assert "\033[1m" in h  # bold values
