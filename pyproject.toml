@@ -53,11 +53,15 @@ all = [
     "v8-utils[analysis,pinpoint,gchat,spanner]",
 ]
 
+# The CLIs below import their dependencies at module scope, so a console script
+# is broken outright if its extra is missing -- unlike the MCP groups, which
+# build_server can skip with a warning. `uv tool install` cannot pick extras per
+# entry point, so anyone installing for the CLIs needs v8-utils[all].
 [project.scripts]
 v8-mcp = "v8_utils.server:main"
-pp = "v8_utils.pp:main"
-jsb = "v8_utils.jsb:main"
-pd = "v8_utils.pd.cli:app"
+pp = "v8_utils.cli_deps:pp"
+jsb = "v8_utils.cli_deps:jsb"
+pd = "v8_utils.cli_deps:pd"
 lv = "v8_utils.lv:main"
 vt = "v8_utils.vt:main"
 

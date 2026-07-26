@@ -688,3 +688,74 @@ class TestGetGerritParentUrl:
         repo = _make_stacked_repo(tmp_path)
         _git(repo, "checkout", "-q", "parent")
         assert get_gerrit_parent_url(cwd=repo) is None
+
+
+class TestParseSince:
+    """dateparser resolves relative values against UTC but labels them with the
+    local offset, which pushed recent cutoffs into the future in non-UTC zones."""
+
+    @pytest.mark.parametrize("expr,hours", [("1 hour ago", 1), ("2 hours ago", 2)])
+    def test_relative_is_that_far_back(self, expr, hours):
+        from datetime import datetime, timezone
+
+        from v8_utils.pinpoint import parse_since
+
+        delta = datetime.now(timezone.utc) - parse_since(expr)
+        assert abs(delta.total_seconds() / 3600 - hours) < 0.1
+
+    def test_relative_is_never_in_the_future(self):
+        from datetime import datetime, timezone
+
+        from v8_utils.pinpoint import parse_since
+
+        assert parse_since("1 hour ago") < datetime.now(timezone.utc)
+
+    def test_all_disables_cutoff(self):
+        from datetime import datetime
+
+        from v8_utils.pinpoint import parse_since
+
+        assert parse_since("all") == datetime.min
+
+    def test_rejects_garbage(self):
+        from v8_utils.pinpoint import parse_since
+
+        with pytest.raises(ValueError, match="Could not parse"):
+            parse_since("not a date at all")
+
+
+class TestConfigurationValidation:
+    """A bad config used to surface only when its job was reached, leaving the
+    earlier jobs of the batch already created."""
+
+    def test_unknown_configuration_rejected_before_creating_jobs(self, monkeypatch):
+        from v8_utils import pinpoint, tools
+
+        monkeypatch.setattr(
+            pinpoint, "known_configurations", lambda: frozenset({"linux-r350-perf"})
+        )
+        created = []
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kw: created.append(kw) or {}
+        )
+
+        with pytest.raises(ValueError, match="bogus"):
+            tools.create_pinpoint_jobs(
+                benchmarks=["js3"],
+                configurations=["linux", "bogus"],
+                exp_patches=[None],
+            )
+        assert created == [], "no job should be created when validation fails"
+
+    def test_aliases_all_resolve_to_real_configurations(self):
+        from v8_utils import pinpoint
+
+        known = pinpoint.known_configurations()
+        if not known:
+            pytest.skip("Pinpoint config endpoint unreachable")
+        unknown = {
+            alias: name
+            for alias, name in pinpoint.CONFIGURATION_ALIASES.items()
+            if name not in known
+        }
+        assert not unknown

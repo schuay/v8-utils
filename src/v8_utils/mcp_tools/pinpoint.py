@@ -138,6 +138,8 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
                      "m2"    → mac-m2-pro-perf
                      "m3"    → mac-m3-pro-perf
                      "m4"    → mac-m4-mini-perf
+                     "m4pro" → mac-m4-pro-perf
+                     "win10" → win-10-perf
         since:     only show jobs created after this date (default: "one month ago").
                    Accepts natural language ("2 weeks ago", "yesterday") or ISO dates.
                    Use "all" to disable the cutoff.
@@ -196,7 +198,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
                    "auto" detects from current branch; "none" clears the filter.
         status:    filter by status (in addition to the default Completed filter)
         benchmark: filter by benchmark name or alias (js3, js2, sp3)
-        bot:       filter by bot configuration name or alias (m1, m2, m3, m4, linux)
+        bot:       filter by bot configuration name or alias (m1, m2, m3, m4, m4pro, linux, win10, ...)
         since:     only include jobs after this date (default: "one month ago" when
                    filters are used). Accepts natural language or ISO dates.
                    Use "all" for no limit.
@@ -261,7 +263,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
     @mcp.tool()
     def pinpoint_create_job(
         benchmark: str = "js3 sp3",
-        configuration: str = "m1",
+        configuration: str = " ".join(pinpoint_mod.DEFAULT_CONFIGURATIONS),
         exp_patch: str = "auto",
         story: str | None = None,
         story_tags: str | None = None,
@@ -284,12 +286,17 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
                           "js3"  → jetstream-main.crossbench (story: JetStream)
                           "js2"  → jetstream2.crossbench     (story: JetStream2)
                           "sp3"  → speedometer3.crossbench   (story: Speedometer3)
-        configuration:  space-separated bot config(s) or alias(es) (default: "m1"):
+        configuration:  space-separated bot config(s) or alias(es)
+                        (default: "m1 m4", covering two arm generations):
                           "linux" → linux-r350-perf
                           "m1"    → mac-m1_mini_2020-perf
                           "m2"    → mac-m2-pro-perf
                           "m3"    → mac-m3-pro-perf
                           "m4"    → mac-m4-mini-perf
+                          "m4pro" → mac-m4-pro-perf
+                          "macintel" → mac-intel-perf
+                          "win10" → win-10-perf
+                          "win11" → win-11-perf (same R350 silicon as "linux")
         exp_patch:      REQUIRED — experiment patch. One of:
                           "auto"  → auto-detect from the current git branch's Gerrit CL
                                     (fails if no CL is found)

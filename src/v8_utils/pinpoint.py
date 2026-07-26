@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import json
 import re
 import statistics
@@ -365,6 +366,21 @@ def _parse_created(created: str) -> datetime:
 _DEFAULT_SINCE = timedelta(days=30)
 
 
+def _local_timezone_name() -> str:
+    """Local IANA zone name, falling back to a fixed UTC offset."""
+    try:
+        from tzlocal import get_localzone_name
+
+        if name := get_localzone_name():
+            return name
+    except Exception:
+        pass
+    offset = datetime.now().astimezone().utcoffset() or timedelta(0)
+    total_minutes = int(offset.total_seconds() // 60)
+    sign = "+" if total_minutes >= 0 else "-"
+    return f"UTC{sign}{abs(total_minutes) // 60:02d}:{abs(total_minutes) % 60:02d}"
+
+
 def parse_since(value: str) -> datetime:
     """Parse a --since value into a UTC datetime.
 
@@ -385,7 +401,19 @@ def parse_since(value: str) -> datetime:
     value = {"today": "midnight", "yesterday": "yesterday midnight"}.get(
         value.lower(), value
     )
-    dt = dateparser.parse(value, settings={"RETURN_AS_TIMEZONE_AWARE": True})
+    # dateparser resolves relative values against UTC but labels the result with
+    # the local offset, so in a non-UTC zone "2 hours ago" comes back offset by
+    # the zone on top of the 2 hours -- far enough forward to hide recent jobs
+    # entirely. Anchor the relative base to local time and normalize to UTC.
+    dt = dateparser.parse(
+        value,
+        settings={
+            "RETURN_AS_TIMEZONE_AWARE": True,
+            "RELATIVE_BASE": datetime.now(),
+            "TIMEZONE": _local_timezone_name(),
+            "TO_TIMEZONE": "UTC",
+        },
+    )
     if dt is None:
         raise ValueError(
             f"Could not parse --since value: {value!r}. "
@@ -1017,14 +1045,40 @@ BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
     "sp3": ("speedometer3.crossbench", "Speedometer3"),
 }
 
+# Despite the bot names, mac-m2-pro-perf and mac-m3-pro-perf run base M2/M3
+# chips (the "pro" is the MacBook Pro chassis); mac-m4-pro-perf is a real M4 Pro.
 CONFIGURATION_ALIASES: dict[str, str] = {
     "linux": "linux-r350-perf",
     "m1": "mac-m1_mini_2020-perf",
     "m2": "mac-m2-pro-perf",
     "m3": "mac-m3-pro-perf",
     "m4": "mac-m4-mini-perf",
+    "m4pro": "mac-m4-pro-perf",
+    "macintel": "mac-intel-perf",
+    "win10": "win-10-perf",
+    # Same PowerEdge R350 silicon as "linux": an OS comparison, not a
+    # microarchitecture one.
+    "win11": "win-11-perf",
     "macm4": "mac-m4-mini-perf",  # kept for backwards compatibility
 }
+
+# Two arm generations by default: the win on one is often not the win on the other.
+DEFAULT_CONFIGURATIONS = ["m1", "m4"]
+
+
+@functools.lru_cache(maxsize=1)
+def known_configurations() -> frozenset[str]:
+    """Bot configurations Pinpoint accepts, or an empty set if unreachable.
+
+    An empty set disables validation rather than rejecting everything, so a
+    transient outage cannot block job creation.
+    """
+    try:
+        r = httpx.post(f"{_PINPOINT_BASE}/api/config", timeout=30)
+        r.raise_for_status()
+        return frozenset(r.json().get("configurations", []))
+    except Exception:
+        return frozenset()
 
 
 def short_configuration(name: str) -> str:
@@ -1056,6 +1110,20 @@ def cancel_job(job_url: str, reason: str = "Cancelled") -> dict:
     )
     r.raise_for_status()
     return r.json()
+
+
+def _error_message(response: "httpx.Response") -> str:
+    """Extract Pinpoint's error text from a failed response."""
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if isinstance(body, dict):
+        for key in ("error", "message"):
+            if body.get(key):
+                return str(body[key])
+    text = response.text.strip()
+    return text[:500] if text else f"HTTP {response.status_code}"
 
 
 def create_job(
@@ -1122,7 +1190,10 @@ def create_job(
         follow_redirects=True,
         timeout=30,
     )
-    r.raise_for_status()
+    if r.is_error:
+        # Pinpoint reports the actual problem in the body ("Bot Config: foo
+        # doesn't exist."); the status line alone is not actionable.
+        raise ValueError(f"Pinpoint rejected the job: {_error_message(r)}")
     result = r.json()
     job_id = result.get("jobId") or result.get("job_id")
     if job_id:

@@ -805,8 +805,8 @@ def main() -> None:
         "--configuration",
         nargs="+",
         metavar="CONFIG",
-        default=["m1"],
-        help="Bot config(s) or alias(es) (default: m1)",
+        default=list(pinpoint.DEFAULT_CONFIGURATIONS),
+        help=f"Bot config(s) or alias(es) (default: {' '.join(pinpoint.DEFAULT_CONFIGURATIONS)})",
     )
     p.add_argument(
         "-s", "--story", default=None, help="Story within the benchmark (only with -b)"
