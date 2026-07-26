@@ -246,7 +246,7 @@ def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
                 suspicious.append(raw.rstrip())
 
     warnings: list[str] = []
-    n_instr = sum(1 for l in parsed if l["kind"] == "instr")
+    n_instr = sum(1 for ln in parsed if ln["kind"] == "instr")
 
     if suspicious:
         examples = "; ".join(f'"{s[:60]}"' for s in suspicious[:3])
@@ -332,11 +332,11 @@ def annotate(
     total = len(lines)
 
     # Top 20 hottest instructions
-    instr_lines = [l for l in lines if l["kind"] == "instr" and l["pct"] > 0]
-    top_instrs = sorted(instr_lines, key=lambda l: l["pct"], reverse=True)[:20]
+    instr_lines = [ln for ln in lines if ln["kind"] == "instr" and ln["pct"] > 0]
+    top_instrs = sorted(instr_lines, key=lambda ln: ln["pct"], reverse=True)[:20]
 
     # Find hot instruction indices (0-based into `lines`)
-    hot_idx = {i for i, l in enumerate(lines) if l["pct"] >= min_pct}
+    hot_idx = {i for i, ln in enumerate(lines) if ln["pct"] >= min_pct}
 
     # Merge nearby hot clusters (merge if gap <= 2*context)
     clusters: list[tuple[int, int]] = []
@@ -357,11 +357,11 @@ def annotate(
         blk_lo = max(0, c_lo - context)
         blk_hi = min(total - 1, c_hi + context)
         block_lines = lines[blk_lo : blk_hi + 1]
-        content = "\n".join(f"{l['lineno']:5d}  {l['raw']}" for l in block_lines)
+        content = "\n".join(f"{ln['lineno']:5d}  {ln['raw']}" for ln in block_lines)
         hot_blocks.append(
             {
                 "line_range": f"{lines[blk_lo]['lineno']}-{lines[blk_hi]['lineno']}",
-                "peak_pct": max(l["pct"] for l in block_lines),
+                "peak_pct": max(ln["pct"] for ln in block_lines),
                 "content": content,
             }
         )
@@ -374,12 +374,12 @@ def annotate(
         "min_pct_threshold": min_pct,
         "top_instructions": [
             {
-                "lineno": l["lineno"],
-                "addr": l["addr"],
-                "pct": l["pct"],
-                "asm": l["asm"],
+                "lineno": ln["lineno"],
+                "addr": ln["addr"],
+                "pct": ln["pct"],
+                "asm": ln["asm"],
             }
-            for l in top_instrs
+            for ln in top_instrs
         ],
         "hot_blocks": hot_blocks,
     }
@@ -410,7 +410,7 @@ def annotate_read_around(
         raise ValueError(f"Line {line} out of range (1–{total})")
     lo = max(0, center - context)
     hi = min(total - 1, center + context)
-    output = "\n".join(f"{l['lineno']:5d}  {l['raw']}" for l in lines[lo : hi + 1])
+    output = "\n".join(f"{ln['lineno']:5d}  {ln['raw']}" for ln in lines[lo : hi + 1])
     if parse_warnings:
         header = "\n".join(f"[parse warning] {w}" for w in parse_warnings)
         output = header + "\n" + output
@@ -675,7 +675,7 @@ def _evlist(perf_data: str) -> list[str]:
     """Return event names recorded in a perf.data file."""
     try:
         text = _run(["perf", "evlist", "-i", perf_data])
-        return [l.strip() for l in text.splitlines() if l.strip()]
+        return [ln.strip() for ln in text.splitlines() if ln.strip()]
     except RuntimeError:
         return []
 
@@ -762,7 +762,6 @@ def tma(
         }
 
     cycles = event_data["cycles"]
-    slots = event_data.get("topdown-total-slots", cycles)  # fallback to cycles
     fe_bub = event_data.get("topdown-fetch-bubbles", {})
     issued = event_data.get("topdown-slots-issued", {})
     retired = event_data.get("topdown-slots-retired", {})

@@ -301,7 +301,7 @@ _RE_INFRA_LOG = _re.compile(
 
 def _strip_infra(lines: list[str]) -> list[str]:
     """Remove infrastructure log lines everywhere, then trim blank edges."""
-    lines = [l for l in lines if not _RE_INFRA_LOG.match(l)]
+    lines = [ln for ln in lines if not _RE_INFRA_LOG.match(ln)]
     # Trim leading/trailing blank lines
     while lines and not lines[0].strip():
         lines.pop(0)
@@ -312,7 +312,7 @@ def _strip_infra(lines: list[str]) -> list[str]:
 
 def _clean_log(text: str) -> str:
     """Light cleanup of a build log: dedup lines, strip PASS/infra noise."""
-    lines = [l for l in text.splitlines() if not l.rstrip().endswith(": PASS")]
+    lines = [ln for ln in text.splitlines() if not ln.rstrip().endswith(": PASS")]
     lines = _strip_infra(lines)
     return _dedup_lines("\n".join(lines))
 

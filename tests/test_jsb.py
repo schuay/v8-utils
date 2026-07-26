@@ -211,14 +211,16 @@ class TestPConfidence:
 
 
 class TestFmtDelta:
+    # Samples carry a little spread: zero-variance runs make the t-test
+    # degenerate (p=0.0) and scipy warns about catastrophic cancellation.
     def test_positive_delta(self):
-        delta, p, conf = _fmt_delta([100.0, 100.0], [110.0, 110.0])
+        delta, p, conf = _fmt_delta([99.0, 101.0], [109.0, 111.0])
         assert delta == "+10.0%"
         assert p is not None
         assert conf in ("high", "medium", "low")
 
     def test_negative_delta(self):
-        delta, _, _ = _fmt_delta([110.0, 110.0], [100.0, 100.0])
+        delta, _, _ = _fmt_delta([109.0, 111.0], [99.0, 101.0])
         assert delta.startswith("-")
 
     def test_zero_base_mean(self):
@@ -233,7 +235,10 @@ class TestFmtDelta:
         assert p is None
         assert conf == ""
 
+    @pytest.mark.filterwarnings("ignore:Precision loss occurred:RuntimeWarning")
     def test_identical_samples(self):
+        # Zero variance on both sides is the degenerate case scipy warns about;
+        # here it is the point of the test, so the warning is expected.
         delta, p, _ = _fmt_delta([100.0, 100.0], [100.0, 100.0])
         assert delta == "0.0%"  # zero delta has no sign prefix
         assert p is not None
@@ -274,8 +279,10 @@ class TestFormatTable:
         results = [{"Zzz-Score": [1.0], "Score": [2.0], "First-Score": [3.0]}]
         table = format_table(["bench"], "JS3", 1, vs, results)
         lines = table.strip().splitlines()
-        metric_lines = [l for l in lines if "Score" in l and "metric" not in l.lower()]
-        names = [l.split()[0] for l in metric_lines]
+        metric_lines = [
+            ln for ln in lines if "Score" in ln and "metric" not in ln.lower()
+        ]
+        names = [ln.split()[0] for ln in metric_lines]
         assert names.index("Score") < names.index("First-Score")
         assert names.index("First-Score") < names.index("Zzz-Score")
 
@@ -332,7 +339,10 @@ class TestFormatTable:
         assert "non-significant" in table
         assert "--show-all" in table
 
+    @pytest.mark.filterwarnings("ignore:Precision loss occurred:RuntimeWarning")
     def test_show_all(self):
+        # "Nonsig" is identical across variants on purpose -- that is what makes
+        # it non-significant, and it trips scipy's zero-variance warning.
         vs = [Variant(build="a"), Variant(build="b")]
         results = [
             {"Sig": [100.0, 101.0], "Nonsig": [100.0, 100.0]},
@@ -392,8 +402,6 @@ class TestCliArgs:
 
     def _parse(self, argv):
         import argparse
-
-        from v8_utils.jsb import main
 
         # We can't call main() directly (it calls sys.exit), so replicate
         # the parser setup and just check args.lineitems.

@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
-from v8_utils import tools
 from v8_utils.tools import _format_results_table, _results_header
 
 
@@ -124,7 +121,7 @@ class TestFormatResultsTable:
             "j1", show_all=True, use_cas=False, compact=True, job=_job()
         )
         lines = t.splitlines()
-        header = [l for l in lines if "chg%" in l][0]
+        header = [ln for ln in lines if "chg%" in ln][0]
         assert "sig" not in header
         assert "direction" not in header
 
@@ -179,7 +176,7 @@ class TestFormatResultsTable:
         ]
         t = _format_results_table("j1", show_all=True, use_cas=False, job=_job())
         lines = t.splitlines()
-        data = [l for l in lines if any(n in l for n in ("low", "mid", "high"))]
+        data = [ln for ln in lines if any(n in ln for n in ("low", "mid", "high"))]
         assert "high" in data[0]
         assert "mid" in data[1]
         assert "low" in data[2]

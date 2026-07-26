@@ -592,7 +592,7 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
         print(
             f"{_YELLOW}Note:{_RESET} restart the daemon so it picks up the new config:"
         )
-        print(f"  pp daemon-stop && pp watch <job_url>")
+        print("  pp daemon-stop && pp watch <job_url>")
 
 
 def _cmd_config(args: argparse.Namespace) -> None:

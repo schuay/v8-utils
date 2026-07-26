@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import math
 
-import pandas as pd
 from scipy.stats import ttest_ind_from_stats
 
 
