@@ -13,7 +13,11 @@ requires-python = ">=3.12"
 # clear warning (see mcp_tools.build_server). Install v8-utils[all] for the full
 # developer surface.
 dependencies = [
-    "mcp[cli]>=1.0",
+    # Capped below 2.0: the whole mcp_tools surface is built on
+    # mcp.server.fastmcp, which 2.0 removed outright (along with
+    # mcp.shared.context.RequestContext, which langchain-mcp-adapters still
+    # imports). Porting is a real migration, not a version bump.
+    "mcp[cli]>=1.0,<2",
     "platformdirs>=4.0",
     "httpx>=0.27",
     "typer>=0.16",

@@ -1655,7 +1655,7 @@ requires-dist = [
     { name = "google-auth", marker = "extra == 'gchat'", specifier = ">=2.0" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'", specifier = ">=3.63.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.0,<2" },
     { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.24" },
     { name = "opentelemetry-resourcedetector-gcp", marker = "extra == 'spanner'", specifier = ">=1.8.0a0" },
     { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
