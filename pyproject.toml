@@ -5,15 +5,19 @@ description = "CLI and MCP tools for V8 JavaScript engine developers"
 readme = "README.md"
 requires-python = ">=3.12"
 # Base install: only what the MCP server core and its light tool groups need.
-# mcp[cli] pulls httpx (used by gerrit/pinpoint/cas) and typer+rich (the CLIs and
-# rich tables) transitively, so those are guaranteed without listing them here.
-# The heavy scientific/cloud stack lives in the extras below and is imported
-# lazily per tool group -- a base-only install runs the server with the repo_git,
-# worktree, and gerrit groups and skips the rest with a clear warning (see
-# mcp_tools.build_server). Install v8-utils[all] for the full developer surface.
+# httpx, typer and rich are listed explicitly even though mcp[cli] happens to
+# pull them in today: mcp 2.0 switched to httpx2, and rich only arrives via
+# typer's own dependencies. The heavy scientific/cloud stack lives in the extras
+# below and is imported lazily per tool group -- a base-only install runs the
+# server with the repo_git, worktree, and gerrit groups and skips the rest with a
+# clear warning (see mcp_tools.build_server). Install v8-utils[all] for the full
+# developer surface.
 dependencies = [
     "mcp[cli]>=1.0",
     "platformdirs>=4.0",
+    "httpx>=0.27",
+    "typer>=0.16",
+    "rich>=13.9",
 ]
 
 [project.optional-dependencies]

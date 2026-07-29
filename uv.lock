@@ -1603,8 +1603,11 @@ name = "v8-utils"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
     { name = "platformdirs" },
+    { name = "rich" },
+    { name = "typer" },
 ]
 
 [package.optional-dependencies]
@@ -1651,15 +1654,18 @@ requires-dist = [
     { name = "dateparser", marker = "extra == 'pinpoint'", specifier = ">=1.3.0" },
     { name = "google-auth", marker = "extra == 'gchat'", specifier = ">=2.0" },
     { name = "google-cloud-spanner", marker = "extra == 'spanner'", specifier = ">=3.63.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0" },
     { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.24" },
     { name = "opentelemetry-resourcedetector-gcp", marker = "extra == 'spanner'", specifier = ">=1.8.0a0" },
     { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "protobuf", marker = "extra == 'pinpoint'", specifier = ">=5.0" },
+    { name = "rich", specifier = ">=13.9" },
     { name = "ruptures", marker = "extra == 'analysis'", specifier = ">=1.1" },
     { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.13" },
     { name = "scipy", marker = "extra == 'pinpoint'", specifier = ">=1.13" },
+    { name = "typer", specifier = ">=0.16" },
     { name = "v8-utils", extras = ["analysis", "pinpoint", "gchat", "spanner"], marker = "extra == 'all'" },
 ]
 provides-extras = ["analysis", "pinpoint", "gchat", "spanner", "all"]

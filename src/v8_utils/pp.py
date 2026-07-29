@@ -600,11 +600,13 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:
+    # The [all] extra is required: uv tool install cannot pick extras per entry
+    # point, and the CLIs import their extras at module scope.
     cmd = [
         "uv",
         "tool",
         "install",
-        "git+https://github.com/schuay/v8-utils.git",
+        "v8-utils[all] @ git+https://github.com/schuay/v8-utils.git",
         "--reinstall",
         "--index-url",
         "https://pypi.org/simple/",
