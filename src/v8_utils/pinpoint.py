@@ -115,7 +115,11 @@ def resolve_patch(patch: str) -> str:
     patch = patch.strip()
 
     def _resolve_change_id(change_id: str, patchset: str | None) -> str:
-        r = httpx.get(f"{_GERRIT_BASE}/changes/v8%2Fv8~{change_id}", timeout=15)
+        # Change numbers are allocated per host, not per project, so the bare
+        # /changes/{id} form resolves a CL in any project on the host.  Scoping
+        # the query to a project can only narrow it, and 404s for every CL
+        # outside that project.
+        r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
         text = r.text[r.text.find("{") :]  # strip Gerrit's XSSI prefix ")]}'"
         project = json.loads(text)["project"]

@@ -3,6 +3,8 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from v8_utils import changelog
@@ -18,6 +20,7 @@ from v8_utils.pinpoint import (
     _value_stats,
     classify_show_arg,
     job_id_from_url,
+    resolve_patch,
     user_email_variants,
 )
 
@@ -62,6 +65,10 @@ class TestGerritChangeIdFromUrl:
     def test_canonical_url_without_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
         assert _gerrit_change_id_from_url(url) == "v8%2Fv8~1234567"
+
+    def test_canonical_chromium_url(self):
+        url = "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        assert _gerrit_change_id_from_url(url) == "chromium%2Fsrc~8174803"
 
     def test_short_url(self):
         url = "https://chromium-review.googlesource.com/1234567"
@@ -113,6 +120,43 @@ class TestExtractChangeId:
 
     def test_whitespace_stripped(self):
         assert _extract_change_id("  1234567  ") == "1234567"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# resolve_patch
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _gerrit_response(project: str) -> MagicMock:
+    """A Gerrit /changes/ response body, XSSI prefix included."""
+    resp = MagicMock()
+    resp.text = ')]}\'\n{"project": "' + project + '"}'
+    return resp
+
+
+class TestResolvePatch:
+    def test_canonical_url_passthrough(self):
+        url = "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        assert resolve_patch(url) == url
+
+    @patch("httpx.get")
+    def test_short_url_resolves_foreign_project(self, mock_get):
+        mock_get.return_value = _gerrit_response("chromium/src")
+        url = "https://chromium-review.googlesource.com/8174803/1"
+        assert resolve_patch(url) == (
+            "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        )
+        # Queried unscoped: a v8/v8-scoped lookup 404s for a Chromium CL.
+        mock_get.assert_called_once_with(
+            "https://chromium-review.googlesource.com/changes/8174803", timeout=15
+        )
+
+    @patch("httpx.get")
+    def test_bare_change_id_resolves_v8(self, mock_get):
+        mock_get.return_value = _gerrit_response("v8/v8")
+        assert resolve_patch("7650974") == (
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

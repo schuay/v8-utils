@@ -544,7 +544,10 @@ def register(
             else:
                 return _text_result(f"Error: cannot parse CL number from {change!r}")
 
-        cl_spec = f"chromium-review.googlesource.com/c/v8/v8/+/{cl_number}/{patchset}"
+        # bb matches CLs on host, change number and patchset only, so the
+        # project segment is omitted rather than guessed; hardcoding one would
+        # be silently wrong for CLs outside it.
+        cl_spec = f"chromium-review.googlesource.com/c/{cl_number}/{patchset}"
 
         try:
             r = _bb_run(["ls", "-cl", cl_spec, "-json", "-steps"])
