@@ -101,7 +101,41 @@ def _parse_change_patchset(path: str) -> tuple[str, str | None] | None:
     return None
 
 
-def resolve_patch(patch: str) -> str:
+def _default_gerrit_project(cwd: str | None = None) -> str | None:
+    """Detect the Gerrit project name of the current git repository."""
+    try:
+        r = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+        )
+        url = r.stdout.strip()
+        if not url:
+            return None
+        p = urlparse(url)
+        path = p.path.strip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        if path.startswith("a/"):
+            path = path[2:]
+        if "googlesource.com" in (p.hostname or ""):
+            return path or None
+        if p.scheme in ("sso", "rpc"):
+            parts = [seg for seg in path.split("/") if seg]
+            if len(parts) >= 2:
+                return "/".join(parts[-2:])
+            if p.hostname and parts:
+                return f"{p.hostname}/{parts[0]}"
+        for known in ("chromium/src", "v8/v8"):
+            if known in url:
+                return known
+    except Exception:
+        pass
+    return None
+
+
+def resolve_patch(patch: str, cwd: str | None = None) -> str:
     """Resolve a Gerrit patch shorthand to a full chromium-review URL.
 
     Accepts:
@@ -115,7 +149,18 @@ def resolve_patch(patch: str) -> str:
     patch = patch.strip()
 
     def _resolve_change_id(change_id: str, patchset: str | None) -> str:
-        r = httpx.get(f"{_GERRIT_BASE}/changes/v8%2Fv8~{change_id}", timeout=15)
+        project_hint = _default_gerrit_project(cwd=cwd)
+        r = None
+        if project_hint:
+            encoded_proj = project_hint.replace("/", "%2F")
+            r = httpx.get(
+                f"{_GERRIT_BASE}/changes/{encoded_proj}~{change_id}",
+                timeout=15,
+            )
+            if r.status_code != 200:
+                r = None
+        if r is None:
+            r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
         r.raise_for_status()
         text = r.text[r.text.find("{") :]  # strip Gerrit's XSSI prefix ")]}'"
         project = json.loads(text)["project"]
@@ -220,6 +265,10 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
         return None
     try:
         r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
+        if r.status_code != 200 and "~" in change_id:
+            bare_id = _extract_change_id(patch_url)
+            if bare_id:
+                r = httpx.get(f"{_GERRIT_BASE}/changes/{bare_id}", timeout=15)
         r.raise_for_status()
         text = r.text[r.text.find("{") :]
         return json.loads(text).get("subject")

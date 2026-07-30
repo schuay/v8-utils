@@ -3,12 +3,15 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from v8_utils import changelog
 from v8_utils import daemon
 from v8_utils.pinpoint import (
     _apply_significance,
+    _default_gerrit_project,
     _extract_change_and_patchset,
     _extract_change_id,
     _gerrit_change_id_from_url,
@@ -18,6 +21,7 @@ from v8_utils.pinpoint import (
     _value_stats,
     classify_show_arg,
     job_id_from_url,
+    resolve_patch,
     user_email_variants,
 )
 
@@ -62,6 +66,10 @@ class TestGerritChangeIdFromUrl:
     def test_canonical_url_without_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
         assert _gerrit_change_id_from_url(url) == "v8%2Fv8~1234567"
+
+    def test_canonical_chromium_url(self):
+        url = "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        assert _gerrit_change_id_from_url(url) == "chromium%2Fsrc~8174803"
 
     def test_short_url(self):
         url = "https://chromium-review.googlesource.com/1234567"
@@ -113,6 +121,81 @@ class TestExtractChangeId:
 
     def test_whitespace_stripped(self):
         assert _extract_change_id("  1234567  ") == "1234567"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# _default_gerrit_project
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestDefaultGerritProject:
+    @patch("subprocess.run")
+    def test_chromium_src(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="https://chromium.googlesource.com/chromium/src\n",
+            returncode=0,
+        )
+        assert _default_gerrit_project() == "chromium/src"
+
+    @patch("subprocess.run")
+    def test_v8(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="https://chromium.googlesource.com/v8/v8.git\n",
+            returncode=0,
+        )
+        assert _default_gerrit_project() == "v8/v8"
+
+    @patch("subprocess.run")
+    def test_sso_chromium(self, mock_run):
+        mock_run.return_value = MagicMock(
+            stdout="sso://chromium/chromium/src\n",
+            returncode=0,
+        )
+        assert _default_gerrit_project() == "chromium/src"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# resolve_patch
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestResolvePatch:
+    def test_canonical_url_passthrough(self):
+        url = "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        assert resolve_patch(url) == url
+
+    @patch("v8_utils.pinpoint._default_gerrit_project")
+    @patch("httpx.get")
+    def test_short_url_with_chromium_project(self, mock_get, mock_default_proj):
+        mock_default_proj.return_value = "chromium/src"
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.text = ')]}\'\n{"project": "chromium/src"}'
+        mock_get.return_value = mock_resp
+
+        url = "https://chromium-review.googlesource.com/8174803/1"
+        res = resolve_patch(url)
+        assert res == "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        mock_get.assert_called_with(
+            "https://chromium-review.googlesource.com/changes/chromium%2Fsrc~8174803",
+            timeout=15,
+        )
+
+    @patch("v8_utils.pinpoint._default_gerrit_project")
+    @patch("httpx.get")
+    def test_fallback_when_project_hint_404s(self, mock_get, mock_default_proj):
+        mock_default_proj.return_value = "v8/v8"
+        mock_404 = MagicMock()
+        mock_404.status_code = 404
+        mock_200 = MagicMock()
+        mock_200.status_code = 200
+        mock_200.text = ')]}\'\n{"project": "chromium/src"}'
+        mock_get.side_effect = [mock_404, mock_200]
+
+        url = "https://chromium-review.googlesource.com/8174803/1"
+        res = resolve_patch(url)
+        assert res == "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
+        assert mock_get.call_count == 2
 
 
 # ══════════════════════════════════════════════════════════════════════════════
