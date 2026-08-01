@@ -4,9 +4,11 @@ import re as _re
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 
 from .. import config
 from .. import jsb as jsb_module
@@ -20,6 +22,15 @@ _MAX_D8_OUTPUT = 5_000
 # Symbol cache: perf_hotspots stores its most recent result per perf_data path
 # so that downstream tools can accept "#3" instead of the raw symbol name.
 _symbol_cache: dict[str, list[dict]] = {}
+
+# Argument documentation lives on the argument (Annotated[..., Field(...)]), so
+# a client sends it as the parameter's own schema description instead of leaving
+# the model to match a prose line against a signature by name. These four recur
+# across the perf tools; the rest are inline at their parameter.
+PERF_DATA_ARG = "path to a perf.data file"
+DSO_ARG = 'restrict to a specific shared object, e.g. "libv8.so" or "d8"'
+SYMBOL_ARG = "symbol name, unique substring, or #N from perf_hotspots"
+CONTEXT_ARG = "lines of context around each hot cluster"
 
 
 def _resolve_symbol(perf_data: str, symbol: str, **_kw: object) -> str:
@@ -413,11 +424,35 @@ def _godbolt_infer_arch(compiler_id: str, language: str) -> str:
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def run_d8(
-        args: list[str],
-        d8_path: str | None = None,
-        cwd: str | None = None,
-        timeout: int = 60,
-        output_file: str | None = None,
+        args: Annotated[
+            list[str],
+            Field(description='arguments to pass to d8, e.g. ["--prof", "script.js"]'),
+        ],
+        d8_path: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "absolute path to the d8 binary (default: main v8 build). Not"
+                    " affected by repo_git_worktree_select -- to run a worktree's"
+                    " build, pass its d8 path explicitly."
+                )
+            ),
+        ] = None,
+        cwd: Annotated[
+            str | None,
+            Field(description='working directory for d8 (default: repos["v8"])'),
+        ] = None,
+        timeout: Annotated[
+            int, Field(description="max seconds before killing the process")
+        ] = 60,
+        output_file: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "redirect combined output to this file path instead of capturing"
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Run the d8 JavaScript shell with the given arguments.
 
@@ -425,15 +460,7 @@ def register(mcp: FastMCP) -> None:
 
         stdout and stderr are combined into a single stream.
 
-        args:        arguments to pass to d8 (e.g. ["--prof", "script.js"])
-        d8_path:     absolute path to the d8 binary (default: main v8 build).
-                     Not affected by repo_git_worktree_select -- to run a
-                     worktree's build, pass its d8 path explicitly.
-        cwd:         working directory for d8 (default: repos["v8"])
-        timeout:     max seconds before killing the process (default: 60)
-        output_file: redirect combined output to this file path instead of capturing
-
-        Example — run a JetStream3 line item:
+        Example -- run a JetStream3 line item:
           args: ["cli.js", "--", "regexp-octane"]
           cwd:  "/absolute/path/to/JetStream3"
         """
@@ -486,31 +513,46 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def jsb_run_bench(
-        lineitems: list[str] | None = None,
-        binaries: list[str] = [],
-        runs: int = 5,
-        suite: str = "js3",
-        record: str | None = None,
+        lineitems: Annotated[
+            list[str] | None,
+            Field(
+                description=(
+                    'benchmark story names, e.g. ["regexp-octane", "chai-wtb"].'
+                    " Omit to run the full suite."
+                )
+            ),
+        ] = None,
+        binaries: Annotated[
+            list[str],
+            Field(
+                description=(
+                    "absolute paths to JS shell binaries (d8, jsc, etc.), each"
+                    ' optionally followed by ":flags". Pass the executable file'
+                    " itself, NOT a build directory. Examples:"
+                    ' ["/home/user/src/v8/v8/out/x64.release/d8",'
+                    ' "/home/user/src/v8/feature-wt/out/x64.release/d8:--turbolev-future",'
+                    ' "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]'
+                )
+            ),
+        ] = [],
+        runs: Annotated[int, Field(description="number of runs per variant")] = 5,
+        suite: Annotated[str, Field(description='"js2" or "js3"')] = "js3",
+        record: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "profiling mode -- omit to run for scores (the default)."
+                    ' Options: "perf" records a linux-perf trace and returns the'
+                    " perf.data path for perf_hotspots/perf_annotate;"
+                    ' "perf_upload" does the same and uploads it via pprof;'
+                    ' "v8log" records a v8.log and returns its path for'
+                    " v8log_analyze. Every record mode requires exactly one"
+                    " binary."
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
-
-        lineitems: benchmark story names, e.g. ["regexp-octane", "chai-wtb"].
-                   Omit to run the full suite.
-        binaries: list of absolute paths to JS shell binaries (d8, jsc, etc.),
-                  optionally followed by ":flags". Pass the executable file itself,
-                  NOT build directories. Examples:
-                    ["/home/user/src/v8/v8/out/x64.release/d8",
-                     "/home/user/src/v8/feature-wt/out/x64.release/d8:--turbolev-future",
-                     "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]
-        runs:   number of runs per variant (default: 5)
-        suite:  "js2" or "js3" (default: "js3")
-        record: profiling mode — omit to run for scores (default). Options:
-                  "perf"        → record a linux-perf trace; returns perf.data path
-                                  for use with perf_hotspots, perf_annotate, etc.
-                  "perf_upload" → same, and upload the trace via pprof
-                  "v8log"       → record a v8.log profiling trace; returns the log
-                                  path for use with v8log_analyze
-                All record modes require exactly one binary.
 
         Returns a comparison table with mean, stdev, delta, p-value
         (Welch's t-test), and confidence (high/medium/low) per metric.
@@ -571,11 +613,18 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    def perf_stat(stat_file: str) -> CallToolResult:
+    def perf_stat(
+        stat_file: Annotated[
+            str,
+            Field(
+                description=(
+                    "path to a file containing `perf stat` text output, saved via"
+                    " `perf stat -o <file>` or stderr redirection"
+                )
+            ),
+        ],
+    ) -> CallToolResult:
         """Parse a saved `perf stat` output file into structured counter data.
-
-        stat_file: path to a file containing `perf stat` text output
-                   (saved via `perf stat -o <file>` or stderr redirection)
 
         Returns elapsed_seconds and a list of counters with their values and
         human-readable notes (e.g. "3.45 CPUs utilized").
@@ -594,9 +643,9 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_hotspots(
-        perf_data: str,
-        dso: str | None = None,
-        n: int = 30,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        dso: Annotated[str | None, Field(description=DSO_ARG)] = None,
+        n: Annotated[int, Field(description="number of symbols to return")] = 30,
     ) -> CallToolResult:
         """Return the top N hot symbols from a perf.data file.
 
@@ -604,11 +653,7 @@ def register(mcp: FastMCP) -> None:
         time including callees), plus the symbol name and shared object.
         Sorted by self_pct descending.
 
-        Typical workflow: perf_hotspots → perf_flamegraph → perf_annotate.
-
-        perf_data: path to perf.data file
-        dso:       restrict to a specific shared object, e.g. "libv8.so" or "d8"
-        n:         number of symbols to return (default 30)
+        Typical workflow: perf_hotspots -> perf_flamegraph -> perf_annotate.
         """
         rows = perf_tools.hotspots(perf_data, dso=dso, n=n)
         if not rows:
@@ -626,9 +671,11 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_callers(
-        perf_data: str,
-        symbol: str,
-        n: int = 20,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        symbol: Annotated[str, Field(description=SYMBOL_ARG)],
+        n: Annotated[
+            int, Field(description="max lines of call-graph detail to return")
+        ] = 20,
     ) -> CallToolResult:
         """Show who calls a hot symbol and with what sample weight.
 
@@ -636,35 +683,29 @@ def register(mcp: FastMCP) -> None:
         caller mode, so the tree reads upward (direct callers nearest, then
         their callers above).  Use this to understand whether hotness is
         self-time or propagated from a call site.
-
-        perf_data: path to perf.data file
-        symbol:    symbol name, unique substring, or #N from perf_hotspots
-        n:         max lines of call-graph detail to return (default 20)
         """
         symbol = _resolve_symbol(perf_data, symbol)
         return _text_result(perf_tools.callers(perf_data, symbol, n=n))
 
     @mcp.tool()
     def perf_annotate(
-        perf_data: str,
-        symbol: str,
-        dso: str | None = None,
-        min_pct: float = 0.5,
-        context: int = 8,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        symbol: Annotated[
+            str, Field(description="exact symbol name or #N from perf_hotspots")
+        ],
+        dso: Annotated[str | None, Field(description=DSO_ARG)] = None,
+        min_pct: Annotated[
+            float, Field(description="minimum sample % to qualify as hot")
+        ] = 0.5,
+        context: Annotated[int, Field(description=CONTEXT_ARG)] = 8,
     ) -> CallToolResult:
         """Annotated disassembly for a symbol, with smart hot-region extraction.
 
         Shows the 20 hottest instructions and contiguous hot code blocks
-        (>= min_pct), each expanded by ±context lines and sorted by peak heat.
+        (>= min_pct), each expanded by +/-context lines and sorted by peak heat.
 
         Line numbers are included so you can call perf_annotate_read_around
         to explore surrounding code.
-
-        perf_data: path to perf.data file
-        symbol:    exact symbol name or #N from perf_hotspots
-        dso:       shared object filter, e.g. "libv8.so"
-        min_pct:   minimum sample % to qualify as hot (default 0.5)
-        context:   lines of context around each hot cluster (default 8)
         """
         symbol = _resolve_symbol(perf_data, symbol, dso=dso)
         data = perf_tools.annotate(
@@ -696,11 +737,25 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_annotate_read_around(
-        perf_data: str,
-        symbol: str,
-        line: int,
-        context: int = 30,
-        dso: str | None = None,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        symbol: Annotated[
+            str, Field(description="symbol name or #N from perf_hotspots")
+        ],
+        line: Annotated[
+            int, Field(description="1-based line number to centre the window on")
+        ],
+        context: Annotated[
+            int, Field(description="lines before and after to include")
+        ] = 30,
+        dso: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "shared object filter; must match the perf_annotate call if"
+                    " one was used"
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Read a window of annotated disassembly around a specific line number.
 
@@ -708,12 +763,6 @@ def register(mcp: FastMCP) -> None:
         numbers are as reported in perf_annotate's top_instructions and
         hot_blocks fields.  Each output line is prefixed with its line number
         for further navigation.
-
-        perf_data: path to perf.data file
-        symbol:    symbol name or #N from perf_hotspots
-        line:      1-based line number to centre the window on
-        context:   lines before and after to include (default 30)
-        dso:       shared object filter (must match perf_annotate call if used)
         """
         symbol = _resolve_symbol(perf_data, symbol, dso=dso)
         return _text_result(
@@ -724,35 +773,40 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_flamegraph(
-        perf_data: str,
-        focus_symbol: str | None = None,
-        dso: str | None = None,
-        min_pct: float = 0.5,
-        depth: int = 8,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        focus_symbol: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "restrict to call trees whose root matches this substring, or"
+                    ' #N from perf_hotspots, e.g. "RegExpPrototypeExec" or "#3"'
+                )
+            ),
+        ] = None,
+        dso: Annotated[str | None, Field(description=DSO_ARG)] = None,
+        min_pct: Annotated[
+            float, Field(description="omit paths below this % of total samples")
+        ] = 0.5,
+        depth: Annotated[
+            int, Field(description="maximum call-chain depth to expand")
+        ] = 8,
     ) -> CallToolResult:
         """Aggregated text flamegraph: all hot call paths in one view.
 
-        Shows root→leaf call chains sorted by absolute sample percentage, so
+        Shows root-to-leaf call chains sorted by absolute sample percentage, so
         the dominant execution paths are immediately visible without iterative
         perf_callers traversal.
 
         Typical workflow:
-          1. perf_hotspots  — find the hottest symbols
-          2. perf_flamegraph(focus_symbol=X)  — understand full call context
-          3. perf_annotate  — drill into hot instructions
+          1. perf_hotspots  -- find the hottest symbols
+          2. perf_flamegraph(focus_symbol=X)  -- understand full call context
+          3. perf_annotate  -- drill into hot instructions
 
         When focus_symbol is set, shows the *inclusive* (total) cost breakdown
-        for that symbol — where its children spend time.  Percentages are
+        for that symbol -- where its children spend time.  Percentages are
         absolute (% of total samples).  This is the primary use case.
 
         Without focus_symbol, shows self-time callee paths for all symbols.
-
-        focus_symbol: restrict to call trees whose root matches this substring,
-                      or #N from perf_hotspots.
-                      e.g. "RegExpPrototypeExec" or "#3"
-        dso:          restrict to a specific shared object, e.g. "libv8.so"
-        min_pct:      omit paths below this % of total samples (default 0.5)
-        depth:        maximum call-chain depth to expand (default 8)
         """
         if focus_symbol is not None:
             focus_symbol = _resolve_symbol(perf_data, focus_symbol, dso=dso)
@@ -768,31 +822,38 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_tma(
-        perf_data: str,
-        symbol: str | None = None,
-        n: int = 20,
+        perf_data: Annotated[str, Field(description=PERF_DATA_ARG)],
+        symbol: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "filter to symbols containing this substring, or #N from"
+                    " perf_hotspots"
+                )
+            ),
+        ] = None,
+        n: Annotated[
+            int, Field(description="max symbols to return, sorted by cycles_pct")
+        ] = 20,
     ) -> CallToolResult:
         """Microarchitecture bottleneck analysis (TMA Level 1) per symbol.
 
-        Always safe to call — returns a message when the perf.data was not
+        Always safe to call -- returns a message when the perf.data was not
         recorded with TMA events.
 
         Intensity fields = event_pct / cycles_pct for each symbol:
           ~1.0  proportional to cycle share (average)
-          >1.0  disproportionately high — likely bottleneck
+          >1.0  disproportionately high -- likely bottleneck
           <1.0  below average
 
         To enable: re-record with linux-perf-d8.py --topdown
         (Intel Skylake-SP; requires topdown-* kernel PMU events)
 
         Recommended workflow:
-          1. perf_hotspots       — rank hot symbols
-          2. perf_tma            — characterise bottleneck (works or tells you how)
-          3. perf_flamegraph     — understand call context
-          4. perf_annotate       — inspect hot instructions
-
-        symbol:  filter to symbols containing this substring, or #N from perf_hotspots
-        n:       max symbols to return, sorted by cycles_pct (default 20)
+          1. perf_hotspots       -- rank hot symbols
+          2. perf_tma            -- characterise bottleneck (works or tells you how)
+          3. perf_flamegraph     -- understand call context
+          4. perf_annotate       -- inspect hot instructions
         """
         if symbol is not None:
             symbol = _resolve_symbol(perf_data, symbol)
@@ -822,20 +883,17 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def perf_diff(
-        baseline: str,
-        experiment: str,
-        dso: str | None = None,
-        n: int = 30,
+        baseline: Annotated[str, Field(description="path to the baseline perf.data")],
+        experiment: Annotated[
+            str, Field(description="path to the experiment perf.data")
+        ],
+        dso: Annotated[str | None, Field(description=DSO_ARG)] = None,
+        n: Annotated[int, Field(description="number of symbols to return")] = 30,
     ) -> CallToolResult:
         """Compare two perf profiles: what got hotter or cooler?
 
         Returns the top N symbols sorted by |delta_pct|, so the biggest
         changes appear first regardless of direction.
-
-        baseline:   path to the baseline perf.data
-        experiment: path to the experiment perf.data
-        dso:        restrict to a specific shared object
-        n:          number of symbols to return (default 30)
         """
         rows = perf_tools.diff(baseline, experiment, dso=dso, n=n)
         if not rows:
@@ -859,14 +917,14 @@ def register(mcp: FastMCP) -> None:
         return _text_result("\n".join(lines))
 
     @mcp.tool()
-    def d8_trace_index(path: str) -> CallToolResult:
+    def d8_trace_index(
+        path: Annotated[str, Field(description="path to the trace file")],
+    ) -> CallToolResult:
         """Build a table of contents for a V8 trace file.
 
         Recognizes sections from --trace-turbo-graph, --print-maglev-graphs,
         --trace-maglev-graph-building, --trace-opt, --trace-deopt, and
         --print-code. Use the line numbers to navigate with read_around.
-
-        path: path to the trace file
         """
         try:
             return _text_result(_build_trace_index(path))
@@ -875,27 +933,49 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def llvm_mca(
-        assembly: str,
-        arch: str = "x64",
-        cpu: str | None = None,
-        syntax: str = "intel",
-        bottleneck: bool = True,
-        timeline: bool = False,
+        assembly: Annotated[
+            str,
+            Field(description="assembly text (from V8 JIT / perf / GDB disassemble)"),
+        ],
+        arch: Annotated[
+            str, Field(description='target architecture: "x64" or "arm64"')
+        ] = "x64",
+        cpu: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "CPU model for scheduling simulation. x64: skylake, znver3,"
+                    " alderlake, znver4, ... arm64: neoverse-n1, neoverse-v2,"
+                    " cortex-a76, cortex-x2, ..."
+                )
+            ),
+        ] = None,
+        syntax: Annotated[
+            str,
+            Field(
+                description=(
+                    'x64 only: "intel" (default) or "att"; auto-detected from'
+                    " GDB/perf output. Ignored for arm64."
+                )
+            ),
+        ] = "intel",
+        bottleneck: Annotated[
+            bool,
+            Field(
+                description=(
+                    "include bottleneck analysis showing what limits throughput"
+                )
+            ),
+        ] = True,
+        timeline: Annotated[
+            bool,
+            Field(description="include cycle-by-cycle pipeline timeline (verbose)"),
+        ] = False,
     ) -> CallToolResult:
         """Run llvm-mca pipeline analysis on raw assembly (e.g. from perf_annotate).
 
         Simulates how the CPU pipeline would execute the given instructions and
         reports throughput, latency, bottlenecks, and port pressure.
-
-        assembly:    assembly text (from V8 JIT / perf / GDB disassemble)
-        arch:        target architecture — "x64" or "arm64"
-        cpu:         CPU model for scheduling simulation.
-                     x64: skylake, znver3, alderlake, znver4, ...
-                     arm64: neoverse-n1, neoverse-v2, cortex-a76, cortex-x2, ...
-        syntax:      x64 only — "intel" (default) or "att"; auto-detected from
-                     GDB/perf output. Ignored for arm64.
-        bottleneck:  include bottleneck analysis showing what limits throughput
-        timeline:    include cycle-by-cycle pipeline timeline (verbose)
         """
         mca = shutil.which("llvm-mca")
         if mca is None:
@@ -966,29 +1046,44 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def godbolt_compile(
-        source: str,
-        arch: str = "x64",
-        compiler: str | None = None,
-        language: str = "c++",
-        flags: str = "-O3 -fno-strict-aliasing -fno-omit-frame-pointer",
-        mca: bool = True,
-        opt_remarks: bool = False,
+        source: Annotated[str, Field(description="the source code to compile")],
+        arch: Annotated[str, Field(description='"x64" or "arm64"')] = "x64",
+        compiler: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "exact Godbolt compiler ID (default: clang_trunk for x64,"
+                    " armv8-clang-trunk for arm64). Use godbolt_list_compilers"
+                    " to find other IDs."
+                )
+            ),
+        ] = None,
+        language: Annotated[str, Field(description='"c++" or "c"')] = "c++",
+        flags: Annotated[
+            str, Field(description="compiler flags (default: V8 release flags)")
+        ] = "-O3 -fno-strict-aliasing -fno-omit-frame-pointer",
+        mca: Annotated[
+            bool,
+            Field(
+                description=(
+                    "run llvm-mca pipeline analysis (clang only). Shows"
+                    " throughput, bottlenecks, and port pressure per instruction."
+                )
+            ),
+        ] = True,
+        opt_remarks: Annotated[
+            bool,
+            Field(
+                description=(
+                    "include LLVM optimization pass remarks (clang only). Shows"
+                    " which optimizations fired or failed and why."
+                )
+            ),
+        ] = False,
     ) -> CallToolResult:
         """Compile a code snippet on Godbolt and return the assembly output.
 
         By default uses the latest clang trunk and runs llvm-mca analysis.
-
-        source:      the source code to compile
-        arch:        "x64" (default) or "arm64"
-        compiler:    exact Godbolt compiler ID (default: clang_trunk for x64,
-                     armv8-clang-trunk for arm64).
-                     Use godbolt_list_compilers to find other IDs.
-        language:    "c++" or "c" (default: "c++")
-        flags:       compiler flags (default: V8 release flags)
-        mca:         run llvm-mca pipeline analysis (default: True, clang only).
-                     Shows throughput, bottlenecks, and port pressure per instruction.
-        opt_remarks: include LLVM optimization pass remarks (default: False, clang only).
-                     Shows which optimizations fired or failed and why.
         """
         import httpx
 
@@ -1080,14 +1175,17 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def godbolt_list_compilers(
-        language: str = "c++",
-        filter: str | None = None,
+        language: Annotated[str, Field(description='"c++", "c", "rust", etc.')] = "c++",
+        filter: Annotated[
+            str | None,
+            Field(
+                description=(
+                    'substring match on name/instructionSet, e.g. "clang 19" or "arm64"'
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
-        """List available compilers on Godbolt for a language. Use filter to narrow results.
-
-        language: "c++", "c", "rust", etc. (default: "c++")
-        filter:   substring match on name/instructionSet, e.g. "clang 19" or "arm64"
-        """
+        """List available compilers on Godbolt for a language. Use filter to narrow results."""
         compilers = _godbolt_get_compilers(language)
 
         if filter:
@@ -1114,29 +1212,36 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def v8log_analyze(
-        log_path: str,
-        command: str = "deopts",
-        top: int = 20,
-        filter: str | None = None,
-        pattern: str | None = None,
-        verbose: bool = False,
+        log_path: Annotated[str, Field(description="path to a v8.log file")],
+        command: Annotated[
+            str,
+            Field(description="one of deopts, ics, maps, fn, profile, vms"),
+        ] = "deopts",
+        top: Annotated[int, Field(description="max rows to show")] = 20,
+        filter: Annotated[
+            str | None,
+            Field(description='function name glob to filter results, e.g. "parse*"'),
+        ] = None,
+        pattern: Annotated[
+            str | None,
+            Field(
+                description=("function name glob for the fn command (required for fn)")
+            ),
+        ] = None,
+        verbose: Annotated[
+            bool,
+            Field(description="show full map-details strings (maps command only)"),
+        ] = False,
     ) -> CallToolResult:
         """Analyze a V8 log file (v8.log) produced by d8 --prof --log-ic --log-maps.
 
         Commands:
-          deopts   — deoptimization summary (uses: top, filter)
-          ics      — inline cache summary (uses: top, filter)
-          maps     — map transition summary (uses: top, verbose)
-          fn       — function drill-down (requires: pattern)
-          profile  — tick profile flat view (uses: top, filter)
-          vms      — VM state breakdown
-
-        log_path: path to a v8.log file
-        command: one of deopts, ics, maps, fn, profile, vms
-        top: max rows to show (default 20)
-        filter: function name glob to filter results (e.g. "parse*")
-        pattern: function name glob for the fn command (required for fn)
-        verbose: show full map-details strings (maps command only)
+          deopts   -- deoptimization summary (uses: top, filter)
+          ics      -- inline cache summary (uses: top, filter)
+          maps     -- map transition summary (uses: top, verbose)
+          fn       -- function drill-down (requires: pattern)
+          profile  -- tick profile flat view (uses: top, filter)
+          vms      -- VM state breakdown
         """
         path = Path(log_path).expanduser()
         if not path.exists():

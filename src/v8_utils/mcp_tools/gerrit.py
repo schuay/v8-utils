@@ -3,13 +3,24 @@
 import re as _re
 import shutil
 import subprocess
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 
 from .. import gerrit as gerrit_tools
 from ..concurrency import _run_concurrent
 from ._shared import _paginate_result, _resolve_repo, _text_result
+
+# Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
+# client sends it as the parameter's own schema description rather than leaving
+# the model to match a prose line against a signature by name.
+CHANGE_URL_ARG = (
+    "Gerrit CL URL, e.g."
+    " https://chromium-review.googlesource.com/c/v8/v8/+/7650974 or"
+    " https://chromium-review.googlesource.com/7650974"
+)
 
 
 def _format_gerrit_comments(threads: list[dict]) -> str:
@@ -369,7 +380,16 @@ def register(
 
         @mcp.tool()
         def gerrit_comments(
-            change_url: str, include_drafts: bool = False
+            change_url: Annotated[str, Field(description=CHANGE_URL_ARG)],
+            include_drafts: Annotated[
+                bool,
+                Field(
+                    description=(
+                        "also fetch your unpublished draft comments (requires"
+                        " authentication via `luci-auth login`)"
+                    )
+                ),
+            ] = False,
         ) -> CallToolResult:
             """Fetch comments on a Gerrit CL, threaded by file and line.
 
@@ -384,18 +404,15 @@ def register(
             Threads are sorted by file path then line number.  Use this to understand
             reviewer feedback or the current state of a code review.
 
-            change_url:     Gerrit CL URL, e.g.:
-              https://chromium-review.googlesource.com/c/v8/v8/+/7650974
-              https://chromium-review.googlesource.com/7650974
-            include_drafts: also fetch your unpublished draft comments (requires
-              authentication via `luci-auth login`)
             """
             return _comments_result(change_url, include_drafts)
 
     else:
 
         @mcp.tool()
-        def gerrit_comments(change_url: str) -> CallToolResult:
+        def gerrit_comments(
+            change_url: Annotated[str, Field(description=CHANGE_URL_ARG)],
+        ) -> CallToolResult:
             """Fetch published comments on a Gerrit CL, threaded by file and line.
 
             Each entry represents a comment thread showing file:line, the short
@@ -406,54 +423,91 @@ def register(
             Threads are sorted by file path then line number.  Use this to understand
             reviewer feedback or the current state of a code review.
 
-            change_url:     Gerrit CL URL, e.g.:
-              https://chromium-review.googlesource.com/c/v8/v8/+/7650974
-              https://chromium-review.googlesource.com/7650974
             """
             return _comments_result(change_url, include_drafts=False)
 
     @mcp.tool()
     def gerrit_create_comments(
-        change_url: str,
-        comments: list[dict],
-        patchset: int | str | None = None,
+        change_url: Annotated[
+            str,
+            Field(
+                description=(
+                    f"{CHANGE_URL_ARG} A patchset suffix in the URL is honored"
+                    " unless the `patchset` argument overrides it."
+                )
+            ),
+        ],
+        comments: Annotated[
+            list[dict],
+            Field(
+                description=(
+                    "per-comment dicts with these fields: message (required)"
+                    " comment text; path (optional) file path, omit for a"
+                    " top-level CL comment; line (optional) 1-based line number,"
+                    " omit with no range for a file-level comment; side"
+                    ' (optional) "REVISION" (default, the new patch) or "PARENT"'
+                    " (the base it is diffed against); in_reply_to (optional)"
+                    " UUID of an existing comment to reply to, from"
+                    " `gerrit_comments` (shown as `[id]` in the output);"
+                    " unresolved (optional) bool, default True; range (optional)"
+                    " {start_line, start_character, end_line, end_character} for"
+                    " a multi-line or character-range selection, which makes"
+                    " `line` ignored"
+                )
+            ),
+        ],
+        patchset: Annotated[
+            int | str | None,
+            Field(
+                description=(
+                    'revision id ("current", commit SHA, or patchset number).'
+                    ' Default: the patchset from the URL, else "current".'
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Create one or more draft comments on a Gerrit CL revision.
 
-        Drafts are private to you until published — review them in the Gerrit UI
+        Drafts are private to you until published -- review them in the Gerrit UI
         or via `gerrit_comments` with `include_drafts=True`, then publish via
         Gerrit's "Reply" button.  Requires authentication via `luci-auth login`.
 
-        change_url: Gerrit CL URL (patchset suffix in URL is honored unless the
-                    `patchset` argument overrides it)
-        comments:   list of per-comment dicts with these fields:
-          message     (required) comment text
-          path        (optional) file path. Omit for a top-level CL comment.
-          line        (optional) 1-based line number; omit + no range for a
-                      file-level comment
-          side        (optional) "REVISION" (default, the new patch) or
-                      "PARENT" (the base it's diffed against)
-          in_reply_to (optional) UUID of an existing comment to reply to.
-                      Get UUIDs from `gerrit_comments` (shown as `[id]` in
-                      the output)
-          unresolved  (optional) bool, default True
-          range       (optional) {start_line, start_character, end_line,
-                      end_character} for multi-line / character-range selection.
-                      When set, `line` is ignored.
-        patchset:   revision id ("current", commit SHA, or patchset number).
-                    Default: patchset from URL, else "current".
-
         Returns one result line per input, in order.  Each draft is created
-        independently — failures don't stop later ones.
+        independently -- failures don't stop later ones.
         """
         results = gerrit_tools.create_drafts(change_url, comments, patchset=patchset)
         return _text_result(_format_draft_results(results))
 
     @mcp.tool()
     def gerrit_fetch(
-        change_url: str,
-        v8_repo_path: str | None = None,
-        fetch: bool = True,
+        change_url: Annotated[
+            str,
+            Field(
+                description=(
+                    f"{CHANGE_URL_ARG} With or without a patchset suffix; if"
+                    " none is given, the latest patchset is fetched."
+                )
+            ),
+        ],
+        v8_repo_path: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "local v8 git repo to fetch into (default: the worktree"
+                    " selected via repo_git_worktree_select, else the configured"
+                    " v8 repo)"
+                )
+            ),
+        ] = None,
+        fetch: Annotated[
+            bool,
+            Field(
+                description=(
+                    "if False, return ref/remote without running git fetch --"
+                    " useful for getting the ref name to fetch manually"
+                )
+            ),
+        ] = True,
     ) -> dict:
         """Return the git ref for a Gerrit CL patchset, optionally fetching it.
 
@@ -474,20 +528,26 @@ def register(
           git diff <fetch_head>^..<fetch_head>     # diff introduced by the commit
           git log <fetch_head>                     # history up to the patchset
 
-        If no patchset is in the URL, the latest patchset is fetched.
-
-        change_url:    Gerrit CL URL (with or without patchset suffix)
-        v8_repo_path:  local v8 git repo to fetch into (default: the worktree
-                       selected via repo_git_worktree_select, else the
-                       configured v8 repo)
-        fetch:         if False, return ref/remote without running git fetch
-                       (useful for getting the ref name to fetch manually)
         """
         repo_path = v8_repo_path or str(_resolve_repo("v8"))
         return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
 
     @mcp.tool()
-    def gerrit_list_cls(query: str, limit: int = 25) -> CallToolResult:
+    def gerrit_list_cls(
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    'Gerrit search query, e.g. "owner:self status:open'
+                    ' project:v8/v8", "reviewer:self -owner:self status:open'
+                    ' project:v8/v8", "owner:self status:merged'
+                    ' after:2026-03-01", "hashtag:compiler project:v8/v8'
+                    ' status:open"'
+                )
+            ),
+        ],
+        limit: Annotated[int, Field(description="max results")] = 25,
+    ) -> CallToolResult:
         """Search for Gerrit CLs on chromium-review.googlesource.com.
 
         Returns a compact summary of matching CLs: number, subject, status,
@@ -496,12 +556,6 @@ def register(
 
         "self" in queries is resolved to the configured user email.
 
-        query: Gerrit search query, e.g.:
-          "owner:self status:open project:v8/v8"
-          "reviewer:self -owner:self status:open project:v8/v8"
-          "owner:self status:merged after:2026-03-01"
-          "hashtag:compiler project:v8/v8 status:open"
-        limit: max results (default 25)
         """
         if not default_user and _re.search(r"\bself\b", query):
             return _text_result(
@@ -515,22 +569,35 @@ def register(
 
     @mcp.tool()
     def gerrit_cq(
-        change: str,
-        patchset: int,
-        builder: str = "",
-        offset: int = 0,
-        limit: int = 200,
+        change: Annotated[
+            str,
+            Field(
+                description=('CL number or Gerrit URL, e.g. "7706944" or a full URL')
+            ),
+        ],
+        patchset: Annotated[int, Field(description="patchset number")],
+        builder: Annotated[
+            str,
+            Field(
+                description=(
+                    "builder name to zoom into (substring match, e.g."
+                    ' "linux64_rel"). Omit for a pass/fail overview of every'
+                    " bot."
+                )
+            ),
+        ] = "",
+        offset: Annotated[
+            int, Field(description="line offset into builder detail output")
+        ] = 0,
+        limit: Annotated[
+            int, Field(description="max lines to return for builder detail")
+        ] = 200,
     ) -> CallToolResult:
         """Show CQ bot results for a Gerrit CL.
 
         Without builder: returns a compact overview of which bots passed/failed.
         With builder: zooms into that bot's failure logs (with backtraces).
 
-        change:    CL number or Gerrit URL (e.g. "7706944" or full URL)
-        patchset:  patchset number
-        builder:   builder name to zoom into (substring match, e.g. "linux64_rel")
-        offset:    line offset into builder detail output (default 0)
-        limit:     max lines to return for builder detail (default 200)
         """
         from ..pinpoint_cache import parse_patch_fields
 

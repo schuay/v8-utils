@@ -1,7 +1,10 @@
 """MCP tool for V8 git worktree management."""
 
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 
 from .. import worktree as worktree_mod
 from ._shared import _configured_repo, _text_result
@@ -10,12 +13,38 @@ from ._shared import _configured_repo, _text_result
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def worktree(
-        action: str,
-        name: str | None = None,
-        branch: str | None = None,
-        upstream: str = "main",
-        force: bool = False,
-        remove_branch: bool = False,
+        action: Annotated[str, Field(description='"create", "remove", or "refresh"')],
+        name: Annotated[
+            str | None,
+            Field(description="worktree directory name (required for all actions)"),
+        ] = None,
+        branch: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "branch to check out (create only). If it exists, checks it"
+                    " out; otherwise creates a new branch. Defaults to the"
+                    " worktree name."
+                )
+            ),
+        ] = None,
+        upstream: Annotated[
+            str, Field(description="base branch/ref for the new branch")
+        ] = "main",
+        force: Annotated[
+            bool,
+            Field(description="force removal of dirty worktrees (remove only)"),
+        ] = False,
+        remove_branch: Annotated[
+            bool,
+            Field(
+                description=(
+                    "also delete the underlying git branch (remove only)."
+                    " Skipped for detached HEAD, main/master, or branches checked"
+                    " out in another worktree."
+                )
+            ),
+        ] = False,
     ) -> CallToolResult:
         """Create, remove, and repair V8 git worktrees (gclient deps symlinked).
 
@@ -33,16 +62,6 @@ def register(mcp: FastMCP) -> None:
         rebase with missing or dangling dep directories, action="refresh"
         rebuilds it against current DEPS (gclient sync main first if needed).
 
-        action:        "create", "remove", or "refresh"
-        name:          worktree directory name (required for all actions)
-        force:         force removal of dirty worktrees (remove only)
-        remove_branch: also delete the underlying git branch (remove only).
-                       Skipped for detached HEAD, main/master, or branches
-                       checked out in another worktree.
-        branch:        branch to check out (create only, optional).
-                       If it exists, checks it out. Otherwise creates a new branch.
-                       Defaults to the worktree name.
-        upstream:      base branch/ref for the new branch (default "main")
         """
         # Worktree management always targets the main checkout: git worktree
         # add/remove/prune operate on the repo as a whole, and the symlink

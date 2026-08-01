@@ -4,8 +4,11 @@ import io
 import logging
 from fnmatch import fnmatch
 
+from typing import Annotated
+
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 from rich.console import Console
 
 from .. import config as v8_config
@@ -18,6 +21,16 @@ from ..pd.detect import detect_from_df
 from ..pd.engines import sync_engine
 from ..pd.models import AnalysisConfig, AtConfig
 from ._shared import _text_result
+
+# Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
+# client sends it as the parameter's own schema description rather than leaving
+# the model to match a prose line against a signature by name.
+BENCHMARK_ARG = 'benchmark filter, e.g. "jetstream3.slipstream"'
+BOT_ARG = "bot to filter on"
+SOURCE_ARG = "data source"
+SINCE_ARG = "window start; natural language is accepted"
+METRIC_ARG = 'test glob, e.g. "Total*"'
+MIN_CHANGE_ARG = "minimum percent change to report"
 
 log = logging.getLogger(__name__)
 
@@ -136,18 +149,40 @@ def _render(fn, *args, **kwargs) -> str:
 def register(mcp: FastMCP) -> None:
     @mcp.tool()
     def pd_detect(
-        benchmark: str | None = None,
-        engine: str | None = None,
-        bot: str = "mac-m3-jgruber",
-        since: str = "two weeks ago",
-        until: str | None = None,
-        metric: str | None = None,
-        min_change: float = 3.0,
-        group: bool = True,
-        penalty: float | None = None,
-        min_effect: float | None = None,
-        source: str = "skiz",
-        format: str = "text",
+        benchmark: Annotated[
+            str | None,
+            Field(description=f"{BENCHMARK_ARG}; omit to scan all (large)"),
+        ] = None,
+        engine: Annotated[str | None, Field(description='"v8" or "jsc"')] = None,
+        bot: Annotated[str, Field(description=BOT_ARG)] = "mac-m3-jgruber",
+        since: Annotated[str, Field(description=SINCE_ARG)] = "two weeks ago",
+        until: Annotated[
+            str | None, Field(description="window end; natural language ok")
+        ] = None,
+        metric: Annotated[str | None, Field(description=METRIC_ARG)] = None,
+        min_change: Annotated[float, Field(description=MIN_CHANGE_ARG)] = 3.0,
+        group: Annotated[
+            bool, Field(description="group related series in the report")
+        ] = True,
+        penalty: Annotated[
+            float | None,
+            Field(description="PELT penalty override (default: from config)"),
+        ] = None,
+        min_effect: Annotated[
+            float | None,
+            Field(description="minimum effect size override (default: from config)"),
+        ] = None,
+        source: Annotated[str, Field(description=SOURCE_ARG)] = "skiz",
+        format: Annotated[
+            str,
+            Field(
+                description=(
+                    '"text" for a human report, or "json" for structured change'
+                    " points with candidate probabilities and resolved git"
+                    " hashes, for programmatic consumers"
+                )
+            ),
+        ] = "text",
     ) -> CallToolResult:
         """Scan benchmark timelines for regressions/improvements (change points).
 
@@ -161,16 +196,6 @@ def register(mcp: FastMCP) -> None:
         (large). Shows only significant shifts. An unknown bot/benchmark value is
         rejected with the list of valid names, so a wrong guess is self-correcting.
 
-        benchmark:  filter, e.g. "jetstream3.slipstream"; omit to scan all (large).
-        engine:     "v8" or "jsc".
-        bot:        default "mac-m3-jgruber".
-        since:      window start, natural language ok (default "two weeks ago").
-        metric:     test glob, e.g. "Total*".
-        min_change: minimum percent change to report (default 3).
-        source:     data source (default "skiz").
-        format:     "text" (default, human report) or "json" (structured change
-                    points with candidate probabilities and resolved git hashes,
-                    for programmatic consumers).
         """
         cfg = _load_config()
         since_date = _parse_date(since) if since else None
@@ -232,17 +257,31 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pd_commit_impact(
-        commit: str,
-        benchmark: str | None = None,
-        variant: str | None = None,
-        engine: str | None = None,
-        bot: str = "mac-m3-jgruber",
-        metric: str | None = None,
-        history: int = 20,
-        min_change: float = 3.0,
-        show_all: bool = False,
-        chart_only: bool = False,
-        source: str = "skiz",
+        commit: Annotated[
+            str, Field(description="commit position (numeric id) or git hash prefix")
+        ],
+        benchmark: Annotated[str | None, Field(description=BENCHMARK_ARG)] = None,
+        variant: Annotated[
+            str | None,
+            Field(description='e.g. "v8_default"; encodes the engine'),
+        ] = None,
+        engine: Annotated[str | None, Field(description='"v8" or "jsc"')] = None,
+        bot: Annotated[str, Field(description=BOT_ARG)] = "mac-m3-jgruber",
+        metric: Annotated[str | None, Field(description=METRIC_ARG)] = None,
+        history: Annotated[
+            int, Field(description="commits of history for the noise estimate")
+        ] = 20,
+        min_change: Annotated[
+            float, Field(description="minimum percent change to flag")
+        ] = 3.0,
+        show_all: Annotated[
+            bool, Field(description="include below-threshold series")
+        ] = False,
+        chart_only: Annotated[
+            bool,
+            Field(description="emit one sparkline line per series, no table"),
+        ] = False,
+        source: Annotated[str, Field(description=SOURCE_ARG)] = "skiz",
     ) -> CallToolResult:
         """Assess one specific commit's impact on benchmarks: before vs after.
 
@@ -264,15 +303,6 @@ def register(mcp: FastMCP) -> None:
         (e.g. "v8_default", "v8_turbolev_future"), so it pins the engine on its
         own. An unknown bot/benchmark/variant is rejected with the valid names.
 
-        commit:     commit position (numeric id) or git hash prefix.
-        benchmark:  e.g. "jetstream3.slipstream".
-        variant:    e.g. "v8_default" (encodes engine).
-        metric:     test glob, e.g. "Total*".
-        history:    commits of history for the noise estimate (default 20).
-        min_change: minimum percent change to flag (default 3).
-        show_all:   include below-threshold series (default False).
-        chart_only: emit one sparkline line per series, no table (default False).
-        bot/source: default "mac-m3-jgruber" / "skiz".
         """
         cfg = _load_config()
         adaptor = _make_adaptor(source, cfg)
@@ -365,15 +395,31 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool()
     def pd_compare(
-        a: list[str],
-        b: list[str],
-        benchmark: str | None = None,
-        bot: str = "mac-m3-jgruber",
-        since: str = "two weeks ago",
-        until: str | None = None,
-        show_all: bool = False,
-        alpha: float = 0.05,
-        source: str = "skiz",
+        a: Annotated[
+            list[str],
+            Field(description='A-side (base) overrides, e.g. ["variant=v8_default"]'),
+        ],
+        b: Annotated[
+            list[str],
+            Field(
+                description=('B-side overrides, e.g. ["variant=v8_turbolev_future"]')
+            ),
+        ],
+        benchmark: Annotated[
+            str | None, Field(description=f"{BENCHMARK_ARG}; filters both sides")
+        ] = None,
+        bot: Annotated[
+            str, Field(description=f"{BOT_ARG}; filters both sides")
+        ] = "mac-m3-jgruber",
+        since: Annotated[str, Field(description=SINCE_ARG)] = "two weeks ago",
+        until: Annotated[
+            str | None, Field(description="window end; natural language ok")
+        ] = None,
+        show_all: Annotated[
+            bool, Field(description="include non-significant results")
+        ] = False,
+        alpha: Annotated[float, Field(description="FDR significance level")] = 0.05,
+        source: Annotated[str, Field(description=SOURCE_ARG)] = "skiz",
     ) -> CallToolResult:
         """Compare two fixed benchmark configurations head to head (A vs B).
 
@@ -385,13 +431,6 @@ def register(mcp: FastMCP) -> None:
         commit's effect, pd_commit_impact. An unknown bot/benchmark/variant on
         either side is rejected with the list of valid names.
 
-        a:          A-side (base) overrides, e.g. ["variant=v8_default"].
-        b:          B-side overrides, e.g. ["variant=v8_turbolev_future"].
-        benchmark:  filter both sides, e.g. "jetstream3.slipstream".
-        bot:        filter both sides (default "mac-m3-jgruber").
-        since:      window start, natural language ok (default "two weeks ago").
-        show_all:   include non-significant results (default False).
-        source:     data source (default "skiz").
         """
         cfg = _load_config()
         since_date = _parse_date(since) if since else None
