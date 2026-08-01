@@ -192,10 +192,33 @@ def _extract_label_scores(labels: dict) -> dict[str, list[tuple[str, int]]]:
     return result
 
 
+def _extract_label_flags(labels: dict) -> dict[str, dict[str, bool]]:
+    """Extract {label: {approved, rejected}} -- gerrit's own verdict per label.
+
+    Gerrit sets `approved`/`rejected` when someone cast the label's max/min
+    value, which is what a caller asking "does this stand approved" wants: the
+    numeric range is per-project and not discoverable from the votes alone
+    (v8/v8's Code-Review is -1..+1, so a hardcoded ">= +2" never fires).
+
+    The two are not complements, and `rejected` is not a veto signal: on a label
+    carrying both a max and a min vote gerrit reports only `approved` (real
+    case: v8/v8 8136620, -1 and +1, `approved` set, `rejected` absent, and
+    `submittable` false). Decide a veto from the vote values in
+    _extract_label_scores; use these flags only for "a max/min vote exists".
+    """
+    out: dict[str, dict[str, bool]] = {}
+    for label_name, label_info in labels.items():
+        approved, rejected = "approved" in label_info, "rejected" in label_info
+        if approved or rejected:
+            out[label_name] = {"approved": approved, "rejected": rejected}
+    return out
+
+
 def _compact_change(change: dict) -> dict:
     """Distill a ChangeInfo into a compact dict for display."""
     owner = change.get("owner", {})
-    labels = _extract_label_scores(change.get("labels", {}))
+    raw_labels = change.get("labels", {})
+    labels = _extract_label_scores(raw_labels)
 
     # Attention set: extract account emails and reasons
     attention = []
@@ -230,6 +253,7 @@ def _compact_change(change: dict) -> dict:
         "unresolved_comments": change.get("unresolved_comment_count", 0),
         "patchset": change.get("current_revision_number"),
         "labels": labels,
+        "label_flags": _extract_label_flags(raw_labels),
         "reviewers": reviewers,
         "attention": attention,
     }

@@ -90,3 +90,60 @@ class TestGerritCqClSpec:
         assert cq_spec(url, patchset=2) == (
             "chromium-review.googlesource.com/c/7650974/2"
         )
+
+
+# Gerrit's own per-label verdict. The numeric range is per-project (v8/v8's
+# Code-Review is -1..+1), so a caller cannot infer "stands approved" from the
+# vote values alone -- these flags are the portable signal.
+class TestLabelFlags:
+    def test_approved_and_rejected_are_surfaced(self):
+        labels = {
+            "Code-Review": {"approved": {"email": "a@b.c"}, "all": []},
+            "Verified": {"rejected": {"email": "d@e.f"}, "all": []},
+        }
+        assert g._extract_label_flags(labels) == {
+            "Code-Review": {"approved": True, "rejected": False},
+            "Verified": {"approved": False, "rejected": True},
+        }
+
+    def test_label_with_no_verdict_is_omitted(self):
+        # A label carrying only non-decisive votes says nothing either way.
+        labels = {"Code-Review": {"all": [{"email": "a@b.c", "value": 0}]}}
+        assert g._extract_label_flags(labels) == {}
+
+    def test_min_and_max_together_report_only_approved(self):
+        # Real case: v8/v8 8136620 carries -1 and +1; gerrit sets `approved` and
+        # omits `rejected`, while submittable stays false. A caller must decide a
+        # veto from the vote VALUES, never from the absence of this flag.
+        labels = {
+            "Code-Review": {
+                "approved": {"email": "yes@b.c"},
+                "all": [
+                    {"email": "no@b.c", "value": -1},
+                    {"email": "yes@b.c", "value": 1},
+                ],
+            }
+        }
+        flags = g._extract_label_flags(labels)
+        assert flags["Code-Review"] == {"approved": True, "rejected": False}
+        # ...and the values still carry the objection.
+        assert g._extract_label_scores(labels)["Code-Review"] == [
+            ("no@b.c", -1),
+            ("yes@b.c", 1),
+        ]
+
+    def test_compact_change_carries_flags_alongside_scores(self):
+        change = {
+            "_number": 1,
+            "labels": {
+                "Code-Review": {
+                    "approved": {"email": "a@b.c"},
+                    "all": [{"email": "a@b.c", "value": 1}],
+                }
+            },
+        }
+        out = g._compact_change(change)
+        assert out["labels"] == {"Code-Review": [("a@b.c", 1)]}
+        assert out["label_flags"] == {
+            "Code-Review": {"approved": True, "rejected": False}
+        }
