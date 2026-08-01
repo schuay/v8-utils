@@ -3,9 +3,11 @@
 import datetime
 import subprocess
 from pathlib import Path
+from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
+from pydantic import Field
 
 from .. import config
 from .. import worktree as worktree_mod
@@ -116,11 +118,23 @@ def _repo_names() -> str:
 
 REPO_NAMES = _repo_names()
 
-WORKTREE_LINE = (
-    "worktree: git worktree to read instead of the main checkout (directory or\n"
-    "          branch name; repo_git_worktree_list). This call only. Prefer over\n"
-    "          `ref` for branch work: `ref` sees commits, `worktree` sees the\n"
-    "          working tree including uncommitted edits."
+# Argument documentation belongs on the argument. A client sends each of these
+# as the parameter's own `description` in the JSON schema, so the model reads it
+# attached to the field rather than having to match a prose line against a
+# signature by name -- and a rename moves the text with it instead of silently
+# leaving the prose describing an argument that no longer exists.
+#
+# Shared here because these three are repeated across the read tools; the rest
+# are inline at their parameter.
+REPO_ARG = f"repo alias to read. One of: {REPO_NAMES}"
+REF_ARG = (
+    "git ref (commit hash, branch, tag) to read at. If omitted, reads the working tree."
+)
+WORKTREE_ARG = (
+    "git worktree to read instead of the main checkout (directory or branch"
+    " name; repo_git_worktree_list). This call only. Prefer over `ref` for"
+    " branch work: `ref` sees commits, `worktree` sees the working tree"
+    " including uncommitted edits."
 )
 
 
@@ -153,24 +167,32 @@ def register(mcp: FastMCP) -> None:
             "  1. File mode (path provided): returns `limit` lines from `offset`.\n"
             "     Use repo_git_grep to find the right offset first.\n"
             "  2. Commit mode (path omitted, ref required): shows the commit message\n"
-            "     and diff for the given ref (like `git show <ref>`).\n"
-            "\n"
-            f"Repos: {REPO_NAMES}\n"
-            "\n"
-            "path:   file path relative to the repo root (omit for commit mode)\n"
-            "offset: 0-based line offset to start reading from (default: 0)\n"
-            "limit:  max lines to return (default: 100)\n"
-            "ref:    git ref (commit hash, branch, tag). Required for commit mode.\n"
-            f"{WORKTREE_LINE}"
+            "     and diff for the given ref (like `git show <ref>`)."
         )
     )
     def repo_git_show(
-        repo: str,
-        path: str | None = None,
-        offset: int = 0,
-        limit: int = 100,
-        ref: str | None = None,
-        worktree: str | None = None,
+        repo: Annotated[str, Field(description=REPO_ARG)],
+        path: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "file path relative to the repo root; omit for commit mode"
+                )
+            ),
+        ] = None,
+        offset: Annotated[
+            int, Field(description="0-based line offset to start reading from")
+        ] = 0,
+        limit: Annotated[int, Field(description="max lines to return")] = 100,
+        ref: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "git ref (commit hash, branch, tag). Required for commit mode."
+                )
+            ),
+        ] = None,
+        worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
@@ -217,30 +239,26 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(
-        description=(
-            "Search for a pattern in a related source repo using git grep.\n"
-            "\n"
-            f"Repos: {REPO_NAMES}\n"
-            "\n"
-            "pattern: regex pattern to search for\n"
-            'glob:    optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"\n'
-            "context: lines of context around each match (default: 0)\n"
-            "ignore_case: case-insensitive matching (default: false)\n"
-            "limit:   max matches to return (default: 100)\n"
-            "ref:     git ref to search in (e.g. commit hash, branch, tag).\n"
-            "         If omitted, searches the working tree.\n"
-            f"{WORKTREE_LINE}"
-        )
+        description="Search for a pattern in a related source repo using git grep."
     )
     def repo_git_grep(
-        repo: str,
-        pattern: str,
-        glob: str | None = None,
-        context: int = 0,
-        ignore_case: bool = False,
-        limit: int = _MAX_GREP_MATCHES,
-        ref: str | None = None,
-        worktree: str | None = None,
+        repo: Annotated[str, Field(description=REPO_ARG)],
+        pattern: Annotated[str, Field(description="regex pattern to search for")],
+        glob: Annotated[
+            str | None,
+            Field(description='optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"'),
+        ] = None,
+        context: Annotated[
+            int, Field(description="lines of context around each match")
+        ] = 0,
+        ignore_case: Annotated[
+            bool, Field(description="case-insensitive matching")
+        ] = False,
+        limit: Annotated[
+            int, Field(description="max matches to return")
+        ] = _MAX_GREP_MATCHES,
+        ref: Annotated[str | None, Field(description=REF_ARG)] = None,
+        worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
@@ -290,23 +308,23 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(
         description=(
-            "List files in a related source repo matching a glob pattern (git ls-files).\n"
-            "\n"
-            f"Repos: {REPO_NAMES}\n"
-            "\n"
-            'glob:   file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"\n'
-            "limit:  max files to return (default: 500)\n"
-            "ref:    git ref to list from (e.g. commit hash, branch, tag).\n"
-            "        If omitted, lists from the working tree.\n"
-            f"{WORKTREE_LINE}"
+            "List files in a related source repo matching a glob pattern"
+            " (git ls-files)."
         )
     )
     def repo_git_find(
-        repo: str,
-        glob: str,
-        limit: int = _MAX_LS_FILES,
-        ref: str | None = None,
-        worktree: str | None = None,
+        repo: Annotated[str, Field(description=REPO_ARG)],
+        glob: Annotated[
+            str,
+            Field(
+                description=(
+                    'file glob pattern, e.g. "*.cpp", "src/**/*.h", "runtime/RegExp*"'
+                )
+            ),
+        ],
+        limit: Annotated[int, Field(description="max files to return")] = _MAX_LS_FILES,
+        ref: Annotated[str | None, Field(description=REF_ARG)] = None,
+        worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
@@ -352,34 +370,45 @@ def register(mcp: FastMCP) -> None:
             result = "\n".join(collected)
         return _text_result(banner + result)
 
-    @mcp.tool(
-        description=(
-            "Show git log in a related source repo.\n"
-            "\n"
-            f"Repos: {REPO_NAMES}\n"
-            "\n"
-            "path:   optional file path to show history for\n"
-            "ref:    git ref to start from (default: HEAD)\n"
-            f"limit:  max commits to return (default: 20, max: {_MAX_LOG_LINES})\n"
-            "grep:   optional pattern to filter commit messages\n"
-            "author: optional author filter (git --author regex; matches name\n"
-            '        or email, e.g. "jgruber" or "@google.com")\n'
-            "since:  optional lower date bound (git --since; absolute like\n"
-            '        "2026-01-01" or relative like "2 weeks ago")\n'
-            "until:  optional upper date bound (git --until; same formats)\n"
-            f"{WORKTREE_LINE}"
-        )
-    )
+    @mcp.tool(description="Show git log in a related source repo.")
     def repo_git_log(
-        repo: str,
-        path: str | None = None,
-        ref: str | None = None,
-        limit: int = 20,
-        grep: str | None = None,
-        author: str | None = None,
-        since: str | None = None,
-        until: str | None = None,
-        worktree: str | None = None,
+        repo: Annotated[str, Field(description=REPO_ARG)],
+        path: Annotated[
+            str | None, Field(description="optional file path to show history for")
+        ] = None,
+        ref: Annotated[
+            str | None, Field(description="git ref to start from (default: HEAD)")
+        ] = None,
+        limit: Annotated[
+            int, Field(description=f"max commits to return (max: {_MAX_LOG_LINES})")
+        ] = 20,
+        grep: Annotated[
+            str | None,
+            Field(description="optional pattern to filter commit messages"),
+        ] = None,
+        author: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "optional author filter (git --author regex; matches name or"
+                    ' email, e.g. "jgruber" or "@google.com")'
+                )
+            ),
+        ] = None,
+        since: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "optional lower date bound (git --since; absolute like"
+                    ' "2026-01-01" or relative like "2 weeks ago")'
+                )
+            ),
+        ] = None,
+        until: Annotated[
+            str | None,
+            Field(description="optional upper date bound (git --until; same formats)"),
+        ] = None,
+        worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
@@ -440,24 +469,18 @@ def register(mcp: FastMCP) -> None:
             "on every line. When more lines follow the window, a continuation\n"
             "hint gives the next `start`.\n"
             "\n"
-            f"Repos: {REPO_NAMES}\n"
-            "\n"
-            "path:   file path relative to the repo root\n"
-            "start:  first line to blame, 1-based (default: 1)\n"
-            f"limit:  window size in lines (default: {_DEFAULT_BLAME_LINES}, "
-            f"max: {_MAX_BLAME_LINES})\n"
-            "ref:    git ref to blame at (commit hash, branch, tag).\n"
-            "        If omitted, blames the working tree.\n"
-            f"{WORKTREE_LINE}"
         )
     )
     def repo_git_blame(
-        repo: str,
-        path: str,
-        start: int = 1,
-        limit: int = _DEFAULT_BLAME_LINES,
-        ref: str | None = None,
-        worktree: str | None = None,
+        repo: Annotated[str, Field(description=REPO_ARG)],
+        path: Annotated[str, Field(description="file path relative to the repo root")],
+        start: Annotated[int, Field(description="first line to blame, 1-based")] = 1,
+        limit: Annotated[
+            int,
+            Field(description=f"window size in lines (max: {_MAX_BLAME_LINES})"),
+        ] = _DEFAULT_BLAME_LINES,
+        ref: Annotated[str | None, Field(description=REF_ARG)] = None,
+        worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
@@ -523,16 +546,20 @@ def register(mcp: FastMCP) -> None:
             "[repo @ name | branch ...]. Call with no name to return to main.\n"
             "\n"
             'Also redirects gerrit_fetch and Pinpoint exp_patch="auto" detection.\n'
-            "Does NOT affect run_d8 or jsb_run_bench (pass their paths explicitly).\n"
-            "\n"
-            "name: worktree directory or branch name (repo_git_worktree_list).\n"
-            "      Omit to return to the main checkout.\n"
-            "repo: repo to select within (default: v8)"
+            "Does NOT affect run_d8 or jsb_run_bench (pass their paths explicitly)."
         )
     )
     def repo_git_worktree_select(
-        name: str | None = None,
-        repo: str = "v8",
+        name: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "worktree directory or branch name (repo_git_worktree_list)."
+                    " Omit to return to the main checkout."
+                )
+            ),
+        ] = None,
+        repo: Annotated[str, Field(description="repo to select within")] = "v8",
     ) -> CallToolResult:
         if name is None:
             previous = _clear_worktree(repo)
@@ -563,12 +590,12 @@ def register(mcp: FastMCP) -> None:
         description=(
             "List the git worktrees of a configured repo, marking the selected\n"
             "one. These names are what repo_git_worktree_select and the\n"
-            "`worktree` parameter accept.\n"
-            "\n"
-            "repo: repo to list worktrees for (default: v8)"
+            "`worktree` parameter accept."
         )
     )
-    def repo_git_worktree_list(repo: str = "v8") -> CallToolResult:
+    def repo_git_worktree_list(
+        repo: Annotated[str, Field(description="repo to list worktrees for")] = "v8",
+    ) -> CallToolResult:
         root = _configured_repo(repo)
         try:
             worktrees = worktree_mod.list_worktrees(root)
