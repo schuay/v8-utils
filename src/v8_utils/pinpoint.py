@@ -119,10 +119,17 @@ def resolve_patch(patch: str) -> str:
         # /changes/{id} form resolves a CL in any project on the host.  Scoping
         # the query to a project can only narrow it, and 404s for every CL
         # outside that project.
-        r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
-        r.raise_for_status()
-        text = r.text[r.text.find("{") :]  # strip Gerrit's XSSI prefix ")]}'"
-        project = json.loads(text)["project"]
+        # Through gerrit._get, not a bare httpx.get: it authenticates when a
+        # luci token is available.  Gerrit's ANONYMOUS quota is small and shared
+        # per IP, so an unauthenticated read here competes with every other tool
+        # on the box and 429s under no load of its own -- observed killing a
+        # `pp create-job` mid-run.
+        from .gerrit import _get as _gerrit_get
+
+        data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
+        if not isinstance(data, dict):
+            raise ValueError(f"unexpected Gerrit response for {change_id}")
+        project = data["project"]
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
         return f"{url}/{patchset}" if patchset else url
 
@@ -223,10 +230,10 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
     if not change_id:
         return None
     try:
-        r = httpx.get(f"{_GERRIT_BASE}/changes/{change_id}", timeout=15)
-        r.raise_for_status()
-        text = r.text[r.text.find("{") :]
-        return json.loads(text).get("subject")
+        from .gerrit import _get as _gerrit_get
+
+        data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
+        return data.get("subject") if isinstance(data, dict) else None
     except Exception:
         return None
 

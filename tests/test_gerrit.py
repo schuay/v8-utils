@@ -303,3 +303,30 @@ def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):
     assert body["message"] == "Addressed."
     # Publishing a reply must never vote on the CL.
     assert "labels" not in body
+
+
+def test_pinpoint_resolves_patches_through_the_authenticated_reader(monkeypatch):
+    """pinpoint.py had its own bare httpx.get against Gerrit.
+
+    Those never authenticated, so they drew on the ANONYMOUS quota -- small and
+    shared per IP, hence 429s under no load of their own. Observed killing a
+    `pp create-job` mid-run, after it had already queued jobs.
+    """
+    import v8_utils.pinpoint as pinpoint
+
+    seen = []
+
+    def fake_get(base, path, **kw):
+        seen.append((base, path))
+        return {"project": "v8/v8"}
+
+    monkeypatch.setattr(g, "_get", fake_get)
+    # A bare httpx.get here would bypass the fake and hit the network.
+    monkeypatch.setattr(
+        httpx, "get", lambda *a, **k: pytest.fail("unauthenticated Gerrit read")
+    )
+
+    url = pinpoint.resolve_patch("8176626")
+
+    assert url.endswith("/c/v8/v8/+/8176626")
+    assert seen == [("https://chromium-review.googlesource.com", "/changes/8176626")]
