@@ -64,7 +64,16 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
 
 
 def _gerrit_token() -> str | None:
-    """Get a Gerrit access token via git-credential-luci."""
+    """Get a Gerrit access token via git-credential-luci.
+
+    Deliberately NOT cached, even though _get now asks for a token on every
+    read.  git-credential-luci hands out short-lived OAuth access tokens
+    (ya29.*, ~1h) and does its own caching and refresh, so a process-lifetime
+    cache here would pin an expired token in any daemon that outlives it -- and
+    the 401 fallback in _get would then quietly send every request anonymously,
+    reintroducing the rate limiting this exists to avoid.  The helper costs
+    ~15ms against a 30s HTTP timeout, so there is nothing to win.
+    """
     try:
         out = subprocess.check_output(
             ["git-credential-luci", "get"],
@@ -124,28 +133,39 @@ def _require_auth() -> str:
 def _get(api_base: str, path: str, *, auth_required: bool = False) -> dict | list:
     """GET against the Gerrit REST API.
 
-    Public endpoints are tried without auth first; on 401 we upgrade
-    automatically.  When auth_required is True, we go straight to the
-    authenticated endpoint and raise ValueError if no token is available.
+    Authenticated whenever a token is available, anonymous otherwise.  The
+    order matters for RATE LIMITING, not for access: gerrit's anonymous quota
+    is small and shared per IP, so it covers every tool on the box plus any
+    human browsing at the same moment.  A public CL answers 200 anonymously, so
+    trying anonymous first meant a poll never upgraded and drew from that shared
+    bucket forever -- measured, 25 rapid anonymous reads of a public CL returned
+    429 eleven times while 25 authenticated ones returned 200 every time.
+
+    Falling back keeps a box with no luci credentials working against public
+    CLs, which is why this is not simply auth_required=True everywhere.
+
+    auth_required still forces the authenticated endpoint and raises when no
+    token exists -- for /drafts and friends, where anonymous is not merely
+    slower but wrong.
     """
     if auth_required:
         token = _require_auth()
-        return _parse_json(
-            httpx.get(
-                f"{api_base}/a{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=30,
-            )
-        )
-    r = httpx.get(f"{api_base}{path}", timeout=30)
-    if r.status_code == 401:
+    else:
         token = _gerrit_token()
-        if token:
-            r = httpx.get(
-                f"{api_base}/a{path}",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=30,
-            )
+    if token:
+        r = httpx.get(
+            f"{api_base}/a{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=30,
+        )
+        # An expired or wrong-account token must not be worse than no token at
+        # all: on a public endpoint, retry anonymously rather than raising the
+        # "credentials missing or expired" error at a caller that never needed
+        # them.
+        if r.status_code in (401, 403) and not auth_required:
+            r = httpx.get(f"{api_base}{path}", timeout=30)
+    else:
+        r = httpx.get(f"{api_base}{path}", timeout=30)
     return _parse_json(r)
 
 
