@@ -3,7 +3,7 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -127,33 +127,29 @@ class TestExtractChangeId:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-def _gerrit_response(project: str) -> MagicMock:
-    """A Gerrit /changes/ response body, XSSI prefix included."""
-    resp = MagicMock()
-    resp.text = ')]}\'\n{"project": "' + project + '"}'
-    return resp
-
-
 class TestResolvePatch:
     def test_canonical_url_passthrough(self):
         url = "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
         assert resolve_patch(url) == url
 
-    @patch("httpx.get")
+    @patch("v8_utils.gerrit._get")
     def test_short_url_resolves_foreign_project(self, mock_get):
-        mock_get.return_value = _gerrit_response("chromium/src")
+        mock_get.return_value = {"project": "chromium/src"}
         url = "https://chromium-review.googlesource.com/8174803/1"
         assert resolve_patch(url) == (
             "https://chromium-review.googlesource.com/c/chromium/src/+/8174803/1"
         )
         # Queried unscoped: a v8/v8-scoped lookup 404s for a Chromium CL.
+        # Patched at gerrit._get rather than httpx.get: the read goes through
+        # the authenticated reader, and mocking the transport underneath it
+        # would still shell out for a real OAuth token.
         mock_get.assert_called_once_with(
-            "https://chromium-review.googlesource.com/changes/8174803", timeout=15
+            "https://chromium-review.googlesource.com", "/changes/8174803"
         )
 
-    @patch("httpx.get")
+    @patch("v8_utils.gerrit._get")
     def test_bare_change_id_resolves_v8(self, mock_get):
-        mock_get.return_value = _gerrit_response("v8/v8")
+        mock_get.return_value = {"project": "v8/v8"}
         assert resolve_patch("7650974") == (
             "https://chromium-review.googlesource.com/c/v8/v8/+/7650974"
         )
