@@ -447,6 +447,22 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
 # ── Drafts ────────────────────────────────────────────────────────────────────
 
 
+def _published_by_id(api_base: str, cid: str) -> dict[str, dict]:
+    """Map comment id -> CommentInfo for every published comment on a change.
+
+    The REST payload keys files at the top level and leaves `path` off the
+    CommentInfo itself, so fold it in -- callers here want the location as one
+    object.
+    """
+    data: dict = _get(api_base, f"/changes/{cid}/comments")
+    out: dict[str, dict] = {}
+    for filepath, cs in data.items():
+        for c in cs:
+            c["path"] = filepath
+            out[c["id"]] = c
+    return out
+
+
 def create_drafts(
     change_url: str,
     comments: list[dict],
@@ -464,8 +480,21 @@ def create_drafts(
       unresolved  (optional) default True
       range       (optional) {start_line, start_character, end_line, end_character}
 
+    A reply that names in_reply_to and pins no location of its own is filed at
+    its parent's path, line, range, side and patchset. `in_reply_to` alone does
+    not place a comment: gerrit stores the location exactly as sent, and its
+    thread builder sorts by path before it walks in_reply_to, with
+    /PATCHSET_LEVEL sorting ahead of every real file. A reply left at the
+    default path is therefore visited before the parent it names, misses the
+    lookup, and renders as its own detached thread.
+
+    Location is inherited as a unit, so a caller that pins path (or line, or
+    range) gets exactly what it asked for and no parent fields mixed in.
+
     patchset: revision identifier ("current", commit SHA, or patchset number).
-              Defaults to the patchset in the URL, or "current".
+              Defaults to the patchset in the URL, or "current". Applies to
+              comments that are not location-inheriting replies; those follow
+              their parent's patchset, which is where the thread lives.
 
     Returns one result per input, in order: on success a CommentInfo dict
     with {"ok": True}, on failure {"ok": False, "error": ..., "input": ...}.
@@ -474,18 +503,51 @@ def create_drafts(
     api_base, project, change_id, url_patchset = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
 
-    rev = patchset if patchset is not None else (url_patchset or "current")
-    endpoint = f"/changes/{cid}/revisions/{rev}/drafts"
+    default_rev = patchset if patchset is not None else (url_patchset or "current")
+
+    # Fetched at most once, and only if some reply actually needs a location.
+    parents: dict[str, dict] = {}
+    parents_error: str | None = None
+    fetched = False
+
+    def _parent(uuid: str) -> dict | None:
+        nonlocal parents, parents_error, fetched
+        if not fetched:
+            fetched = True
+            try:
+                parents = _published_by_id(api_base, cid)
+            except (httpx.HTTPError, ValueError, RuntimeError) as e:
+                parents_error = str(e)
+        return parents.get(uuid)
 
     results: list[dict] = []
     for c in comments:
         if not c.get("message"):
             results.append({"ok": False, "error": "missing field: message", "input": c})
             continue
+
+        parent = None
+        if c.get("in_reply_to") and not any(
+            c.get(k) is not None for k in ("path", "line", "range")
+        ):
+            parent = _parent(c["in_reply_to"])
+            if parent is None and parents_error:
+                results.append(
+                    {
+                        "ok": False,
+                        "error": f"could not read the parent comment: {parents_error}",
+                        "input": c,
+                    }
+                )
+                continue
+        # An unknown uuid leaves parent None: fall through and let gerrit reject
+        # it with "Invalid inReplyTo", which names the uuid.
+        src = parent if parent is not None else c
+
         # Path is optional: omitted (or any /PATCHSET_LEVEL/ variant) means
         # a top-level CL comment. Gerrit's canonical magic path has no trailing
         # slash; trailing slash makes Gerrit treat it as a literal file path.
-        path = c.get("path") or "/PATCHSET_LEVEL"
+        path = src.get("path") or "/PATCHSET_LEVEL"
         if path.strip("/").upper() == "PATCHSET_LEVEL":
             path = "/PATCHSET_LEVEL"
         is_patchset_level = path == "/PATCHSET_LEVEL"
@@ -496,18 +558,26 @@ def create_drafts(
         }
         # Gerrit rejects side/line/range on patchset-level drafts.
         if not is_patchset_level:
-            body["side"] = c.get("side", "REVISION")
-            if c.get("line") is not None:
-                body["line"] = c["line"]
-            if c.get("range"):
-                body["range"] = c["range"]
+            body["side"] = src.get("side", "REVISION")
+            if src.get("line") is not None:
+                body["line"] = src["line"]
+            if src.get("range"):
+                body["range"] = src["range"]
         if c.get("in_reply_to"):
             body["in_reply_to"] = c["in_reply_to"]
+
         # Label machine-authored drafts as such. Gerrit renders it, and a
         # reviewer is entitled to know a reply was not typed by a human --
         # depot_tools stamps the same field on the drafts it creates.
         if c.get("is_ai"):
             body["is_ai"] = True
+
+        # An inherited reply goes on the patchset its parent was left on, so it
+        # shows up in that diff view rather than only in the change-wide list.
+        rev = default_rev
+        if parent is not None and parent.get("patch_set") is not None:
+            rev = parent["patch_set"]
+        endpoint = f"/changes/{cid}/revisions/{rev}/drafts"
         try:
             info = _put_json(api_base, endpoint, body)
             if isinstance(info, dict):

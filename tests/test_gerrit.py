@@ -235,28 +235,214 @@ def test_an_auth_required_401_does_not_silently_fall_back(monkeypatch):
 # ── create_drafts / publish_drafts ───────────────────────────────────────────
 
 
-def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(monkeypatch):
+@pytest.fixture
+def drafts(monkeypatch):
+    """Capture create_drafts' PUTs, with a fixed set of published parents.
+
+    The published payload is keyed by file with `path` absent from the
+    CommentInfo, exactly as gerrit returns it.
+    """
     sent = []
+    reads = []
+    published = {
+        "src/wasm/wasm-objects.cc": [
+            {
+                "id": "c1",
+                "patch_set": 5,
+                "line": 259,
+                "side": "REVISION",
+                "range": {
+                    "start_line": 259,
+                    "start_character": 7,
+                    "end_line": 259,
+                    "end_character": 20,
+                },
+                "message": "nit: capitalize",
+            },
+            {"id": "c-file", "patch_set": 5, "message": "file-level thought"},
+        ],
+        "/PATCHSET_LEVEL": [
+            {"id": "c-top", "patch_set": 5, "message": "overall"},
+        ],
+        "/COMMIT_MSG": [
+            {"id": "c-msg", "patch_set": 5, "line": 18, "message": "drop this line"},
+        ],
+    }
+
+    def fake_get(base, path, **kw):
+        reads.append(path)
+        return published
+
+    monkeypatch.setattr(g, "_get", fake_get)
     monkeypatch.setattr(
         g,
         "_put_json",
         lambda base, path, body: sent.append((path, body)) or {"id": "d1"},
     )
+    return types.SimpleNamespace(sent=sent, reads=reads, published=published)
 
+
+CL = "https://chromium-review.googlesource.com/8174846"
+
+
+def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(drafts):
     out = g.create_drafts(
-        "https://chromium-review.googlesource.com/8174846",
-        [{"message": "Done.", "in_reply_to": "c1", "is_ai": True}],
+        CL, [{"message": "Done.", "in_reply_to": "c1", "is_ai": True}]
     )
 
     assert out[0]["ok"] is True
-    path, body = sent[0]
-    assert path.endswith("/revisions/current/drafts")
+    _path, body = drafts.sent[0]
     assert body["in_reply_to"] == "c1"
     # A reviewer is entitled to know a reply was not typed by a human.
     assert body["is_ai"] is True
-    # No path given -> a top-level CL comment, and gerrit rejects side/line there.
+
+
+def test_a_bare_reply_lands_on_its_parents_location(drafts):
+    """in_reply_to alone does not place a comment.
+
+    Gerrit stores the location exactly as sent (CreateDraftComment only tests
+    that the parent exists), and its thread builder sorts by path before it
+    walks in_reply_to -- with /PATCHSET_LEVEL ahead of every real file. A reply
+    left at the default path is visited before the parent it names, misses the
+    lookup, and renders as its own detached thread.
+    """
+    g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c1"}])
+
+    path, body = drafts.sent[0]
+    assert body["path"] == "src/wasm/wasm-objects.cc"
+    assert body["line"] == 259
+    assert body["range"] == drafts.published["src/wasm/wasm-objects.cc"][0]["range"]
+    assert body["side"] == "REVISION"
+    # ...and on the parent's patchset, so it shows in that diff view too.
+    assert path.endswith("/revisions/5/drafts")
+
+
+def test_a_reply_to_a_top_level_comment_stays_top_level(drafts):
+    # The inherited path is the magic one, so side/line must stay off the body:
+    # gerrit rejects them on patchset-level drafts.
+    g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c-top"}])
+
+    _path, body = drafts.sent[0]
+    assert body["path"] == "/PATCHSET_LEVEL"
+    assert "side" not in body and "line" not in body and "range" not in body
+
+
+def test_a_reply_to_a_commit_message_comment_lands_on_commit_msg(drafts):
+    # The bug's other face: these were filed at /PATCHSET_LEVEL too.
+    g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c-msg"}])
+
+    _path, body = drafts.sent[0]
+    assert body["path"] == "/COMMIT_MSG"
+    assert body["line"] == 18
+
+
+def test_a_reply_to_a_file_level_comment_inherits_no_line(drafts):
+    g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c-file"}])
+
+    _path, body = drafts.sent[0]
+    assert body["path"] == "src/wasm/wasm-objects.cc"
+    assert "line" not in body and "range" not in body
+
+
+def test_a_new_comment_still_defaults_to_top_level(drafts):
+    # No in_reply_to: nothing to inherit, and no reason to read the parents.
+    g.create_drafts(CL, [{"message": "overall thought"}])
+
+    path, body = drafts.sent[0]
     assert body["path"] == "/PATCHSET_LEVEL"
     assert "side" not in body and "line" not in body
+    assert path.endswith("/revisions/current/drafts")
+    assert drafts.reads == []
+
+
+@pytest.mark.parametrize(
+    "pin",
+    [
+        {"path": "src/other.cc", "line": 12},
+        {"path": "src/other.cc"},
+        {"line": 12},
+        {"range": {"start_line": 12, "end_line": 12}},
+    ],
+)
+def test_a_reply_that_pins_a_location_keeps_it(drafts, pin):
+    """Location is inherited as a unit, never merged field by field.
+
+    Half the caller's coordinates and half the parent's would put the comment
+    somewhere neither asked for.
+    """
+    g.create_drafts(CL, [{"message": "see here", "in_reply_to": "c1", **pin}])
+
+    _path, body = drafts.sent[0]
+    if "path" in pin:
+        assert body["path"] == pin["path"]
+        assert body.get("line") == pin.get("line")
+        assert body.get("range") == pin.get("range")
+    else:
+        # A line with no path was meaningless before this and still is; what
+        # matters is that it does not drag half the parent's location along.
+        assert body["path"] == "/PATCHSET_LEVEL"
+        assert "line" not in body and "range" not in body and "side" not in body
+
+
+def test_the_parents_are_read_once_for_a_batch_of_replies(drafts):
+    g.create_drafts(
+        CL,
+        [
+            {"message": "a", "in_reply_to": "c1"},
+            {"message": "b", "in_reply_to": "c-top"},
+            {"message": "c", "in_reply_to": "c-msg"},
+        ],
+    )
+    assert len(drafts.sent) == 3
+    assert len(drafts.reads) == 1
+
+
+def test_an_unknown_parent_is_left_for_gerrit_to_reject(drafts, monkeypatch):
+    """Gerrit's own error names the uuid; a local guess would not be better.
+
+    The comment may simply be newer than our read, or a draft rather than
+    published.
+    """
+    monkeypatch.setattr(
+        g,
+        "_put_json",
+        lambda base, path, body: (_ for _ in ()).throw(
+            RuntimeError("HTTP 400: Invalid inReplyTo, comment nope not found")
+        ),
+    )
+    (out,) = g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "nope"}])
+    assert out["ok"] is False
+    assert "Invalid inReplyTo" in out["error"]
+
+
+def test_an_unreadable_parent_fails_the_reply_instead_of_relocating_it(
+    drafts, monkeypatch
+):
+    # Falling back to /PATCHSET_LEVEL is the bug this all guards against, so a
+    # failed read must not silently take that path.
+    def boom(base, path, **kw):
+        raise RuntimeError("HTTP 429: too many requests")
+
+    monkeypatch.setattr(g, "_get", boom)
+    (out,) = g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c1"}])
+
+    assert out["ok"] is False
+    assert "429" in out["error"]
+    assert drafts.sent == []
+
+
+def test_an_explicit_patchset_does_not_move_an_inherited_reply(drafts):
+    # The thread lives on the parent's patchset; a stale default must not drag
+    # the reply off it.
+    g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c1"}], patchset=7)
+    assert drafts.sent[0][0].endswith("/revisions/5/drafts")
+
+
+def test_an_explicit_patchset_still_governs_a_pinned_comment(drafts):
+    g.create_drafts(
+        CL, [{"message": "here", "path": "src/other.cc", "line": 3}], patchset=7
+    )
+    assert drafts.sent[0][0].endswith("/revisions/7/drafts")
 
 
 def test_one_failing_draft_does_not_sink_the_others(monkeypatch):

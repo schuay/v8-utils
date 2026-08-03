@@ -448,11 +448,13 @@ def register(
                     ' (optional) "REVISION" (default, the new patch) or "PARENT"'
                     " (the base it is diffed against); in_reply_to (optional)"
                     " UUID of an existing comment to reply to, from"
-                    " `gerrit_comments` (shown as `[id]` in the output);"
-                    " unresolved (optional) bool, default True; range (optional)"
-                    " {start_line, start_character, end_line, end_character} for"
-                    " a multi-line or character-range selection, which makes"
-                    " `line` ignored"
+                    " `gerrit_comments` (shown as `[id]` in the output) -- a"
+                    " reply with no path/line/range of its own is filed at its"
+                    " parent's location and patchset, so a plain reply needs"
+                    " only message + in_reply_to; unresolved (optional) bool,"
+                    " default True; range (optional) {start_line,"
+                    " start_character, end_line, end_character} for a multi-line"
+                    " or character-range selection, which makes `line` ignored"
                 )
             ),
         ],
