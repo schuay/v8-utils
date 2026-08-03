@@ -189,6 +189,27 @@ def _put_json(api_base: str, path: str, body: dict) -> dict | list:
     return _parse_json(r)
 
 
+def _post_json(api_base: str, path: str, body: dict) -> dict | list:
+    """Authenticated POST with a JSON body. Always uses /a/ prefix.
+
+    Same contract as _put_json; separate because Gerrit splits create (PUT on
+    /drafts) from act-on-the-change (POST on /review), and one helper taking a
+    verb reads worse than two named for what they do.
+    """
+    token = _require_auth()
+    r = httpx.post(
+        f"{api_base}/a{path}",
+        json=body,
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code in (401, 403):
+        raise _auth_error(r.status_code, r.text.strip()[:200])
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text.strip()}")
+    return _parse_json(r)
+
+
 # ── Query CLs ─────────────────────────────────────────────────────────────────
 
 _GERRIT_HOST = "https://chromium-review.googlesource.com"
@@ -439,6 +460,7 @@ def create_drafts(
       line        (optional) 1-based line; omit + no range = file-level
       side        (optional) "REVISION" (default, after) or "PARENT" (before)
       in_reply_to (optional) UUID of comment to reply to
+      is_ai       (optional) mark the draft as machine-authored
       unresolved  (optional) default True
       range       (optional) {start_line, start_character, end_line, end_character}
 
@@ -481,6 +503,11 @@ def create_drafts(
                 body["range"] = c["range"]
         if c.get("in_reply_to"):
             body["in_reply_to"] = c["in_reply_to"]
+        # Label machine-authored drafts as such. Gerrit renders it, and a
+        # reviewer is entitled to know a reply was not typed by a human --
+        # depot_tools stamps the same field on the drafts it creates.
+        if c.get("is_ai"):
+            body["is_ai"] = True
         try:
             info = _put_json(api_base, endpoint, body)
             if isinstance(info, dict):
@@ -494,6 +521,37 @@ def create_drafts(
             results.append({"ok": False, "error": str(e), "input": c})
 
     return results
+
+
+def publish_drafts(
+    change_url: str,
+    message: str = "",
+    patchset: int | str | None = None,
+) -> dict:
+    """Publish the calling user's draft comments on a CL, so reviewers see them.
+
+    Drafts created by create_drafts are private until this runs -- gerrit has no
+    publish endpoint of its own, so it is a review post with
+    `drafts: PUBLISH_ALL_REVISIONS`, which sends every draft the caller holds on
+    the change rather than only those on one revision. That is the right scope
+    here: a caller that drafted replies against the patchset a comment was left
+    on, then uploaded a new one, would otherwise publish nothing.
+
+    `message` is the cover note posted alongside; empty posts the drafts alone.
+    No labels are ever set -- publishing a reply must not vote on the CL.
+
+    Deliberately NOT exposed as an MCP tool. Creating a draft is reversible and
+    private; publishing is neither, and an agent that can publish on the
+    operator's behalf can speak as them on any CL they can reach.
+    """
+    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    rev = patchset if patchset is not None else (url_patchset or "current")
+    body: dict = {"drafts": "PUBLISH_ALL_REVISIONS"}
+    if message:
+        body["message"] = message
+    out = _post_json(api_base, f"/changes/{cid}/revisions/{rev}/review", body)
+    return out if isinstance(out, dict) else {}
 
 
 # ── Fetch ref ─────────────────────────────────────────────────────────────────

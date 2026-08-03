@@ -230,3 +230,76 @@ def test_an_auth_required_401_does_not_silently_fall_back(monkeypatch):
     with pytest.raises(ValueError, match="permission denied"):
         g._get("https://h", "/changes/1/drafts", auth_required=True)
     assert len(seen) == 1
+
+
+# ── create_drafts / publish_drafts ───────────────────────────────────────────
+
+
+def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        g,
+        "_put_json",
+        lambda base, path, body: sent.append((path, body)) or {"id": "d1"},
+    )
+
+    out = g.create_drafts(
+        "https://chromium-review.googlesource.com/8174846",
+        [{"message": "Done.", "in_reply_to": "c1", "is_ai": True}],
+    )
+
+    assert out[0]["ok"] is True
+    path, body = sent[0]
+    assert path.endswith("/revisions/current/drafts")
+    assert body["in_reply_to"] == "c1"
+    # A reviewer is entitled to know a reply was not typed by a human.
+    assert body["is_ai"] is True
+    # No path given -> a top-level CL comment, and gerrit rejects side/line there.
+    assert body["path"] == "/PATCHSET_LEVEL"
+    assert "side" not in body and "line" not in body
+
+
+def test_one_failing_draft_does_not_sink_the_others(monkeypatch):
+    # Per-comment results are the point: an all-or-nothing post would make the
+    # caller retry replies that already landed, duplicating them.
+    def fake_put(base, path, body):
+        if body.get("in_reply_to") == "bad":
+            raise RuntimeError("HTTP 400: Invalid inReplyTo")
+        return {"id": "ok"}
+
+    monkeypatch.setattr(g, "_put_json", fake_put)
+    out = g.create_drafts(
+        "https://chromium-review.googlesource.com/8174846",
+        [
+            {"message": "a", "in_reply_to": "good"},
+            {"message": "b", "in_reply_to": "bad"},
+            {"message": "c", "in_reply_to": "good"},
+        ],
+    )
+    assert [r["ok"] for r in out] == [True, False, True]
+    assert "Invalid inReplyTo" in out[1]["error"]
+    assert out[1]["input"]["message"] == "b"  # enough to retry just this one
+
+
+def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):
+    """Gerrit has no publish endpoint: it is a review post with drafts=PUBLISH*.
+
+    PUBLISH_ALL_REVISIONS rather than PUBLISH because a caller that drafted
+    replies against the patchset a comment was left on, then uploaded a newer
+    one, would otherwise publish nothing.
+    """
+    sent = []
+    monkeypatch.setattr(
+        g, "_post_json", lambda base, path, body: sent.append((path, body)) or {}
+    )
+
+    g.publish_drafts(
+        "https://chromium-review.googlesource.com/8174846", message="Addressed."
+    )
+
+    path, body = sent[0]
+    assert path.endswith("/revisions/current/review")
+    assert body["drafts"] == "PUBLISH_ALL_REVISIONS"
+    assert body["message"] == "Addressed."
+    # Publishing a reply must never vote on the CL.
+    assert "labels" not in body
