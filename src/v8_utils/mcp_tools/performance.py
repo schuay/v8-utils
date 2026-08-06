@@ -559,8 +559,26 @@ def register(mcp: FastMCP) -> None:
         """
         cfg = config.load()
         js3 = suite.lower() != "js2"
-        suite_dir = cfg.repos["js3"].path if js3 else cfg.repos["js2"].path
+        key = "js3" if js3 else "js2"
+        suite_dir = cfg.repos[key].path
         suite_label = "JS3" if js3 else "JS2"
+        # Name the path, and name it HERE. The suite is reached as
+        # `suite_dir/cli.js`, so a missing one otherwise surfaces as d8 failing to
+        # open a file several layers down -- and a caller that cannot see the
+        # configured path has no way to tell "not installed" from "installed
+        # somewhere else". Sandboxed agents read that as "JetStream is missing"
+        # and silently skip the measurement, which on a perf job is the whole
+        # deliverable. The path is not guessable either (the real one is
+        # `.../v8-perf/benchmarks/JetStream/v3.0-custom`, containing no "js3"),
+        # so stating it is the difference between an actionable error and a dead
+        # end.
+        if not (suite_dir / "cli.js").is_file():
+            raise FileNotFoundError(
+                f"{suite_label} not found: no cli.js under {suite_dir} "
+                f"(configured as repos.{key} in {config.CONFIG_PATH}). "
+                "Point that at a JetStream checkout, or pass a suite that is "
+                "installed."
+            )
 
         for b in binaries:
             path_part = b.split(":")[0].strip()
