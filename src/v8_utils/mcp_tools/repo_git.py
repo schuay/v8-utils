@@ -103,26 +103,36 @@ def _parse_blame_porcelain(text: str) -> tuple[list[tuple[str, int, str]], dict]
     return lines, commits
 
 
+# The one shape repo_git_show reads. Every region carries its own window
+# because the case this exists for -- the scattered hits of one grep -- has a
+# different one per hit; `ref` is per-region for the same reason, which is what
+# lets a single call show one function before and after a commit.
+#
+# Keep this docstring short: pydantic ships it to the model as the schema's
+# `description`, and Gemini gets the object INLINED at every use (the vertexai
+# converter dereferences $defs, which the Gemini API does not support), so
+# rationale prose here is re-sent on every call inside the cached tool prefix.
+# Rationale goes in comments like this one; the docstring is payload.
 class Region(BaseModel):
-    """One (path, offset, limit) window for a batched repo_git_show.
+    """A window of one file: which lines of which path, optionally at a ref."""
 
-    Regions carry their own offset/limit rather than inheriting the call's,
-    because the case this exists for -- the scattered hits of one grep -- has a
-    different window per hit. `ref` is per-region too, which is what lets one
-    call show the same function before and after a commit.
-    """
-
+    # Every field but `path` defaults to None rather than to a real value, so an
+    # omitted field is distinguishable from an explicitly-passed one and can fall
+    # back to the call's. A concrete default here would make offset=0 ambiguous:
+    # 0 is both "unset" and a meaningful value (the top of the file), so the
+    # call's offset would silently override a region that genuinely asked for
+    # line 1.
     path: str = Field(description="file path relative to the repo root")
-    offset: int = Field(
-        default=0, description="0-based line offset to start reading from"
+    offset: int | None = Field(
+        default=None,
+        description="0-based line offset to start at; defaults to the call's",
     )
-    limit: int = Field(default=100, description="max lines to return")
+    limit: int | None = Field(
+        default=None, description="max lines to return; defaults to the call's"
+    )
     ref: str | None = Field(
         default=None,
-        description=(
-            "git ref to read this region at; overrides the call's `ref`."
-            " Omit to use the call's ref, or the working tree if it has none."
-        ),
+        description="git ref to read this region at; defaults to the call's",
     )
 
 
@@ -231,13 +241,12 @@ def register(mcp: FastMCP) -> None:
             "Read regions of files in a related source repo, or show a commit.\n"
             "\n"
             "Two modes:\n"
-            "  1. File mode (regions given): each region returns `limit` lines\n"
-            "     from `offset`. Pass SEVERAL regions in one call -- the hits of\n"
-            "     one grep, or a function and its callers -- instead of a call\n"
-            "     each; regions of the same file cost one read between them.\n"
-            "     Each region may carry its own offset/limit/ref, falling back\n"
-            '     to the call\'s. A bare "path" string is a whole region using\n'
-            "     the call's offset/limit.\n"
+            "  1. File mode: regions=[{path, offset?, limit?, ref?}, ...].\n"
+            "     Pass SEVERAL regions in one call -- the hits of one grep, or a\n"
+            "     function and its callers -- instead of a call each; regions of\n"
+            "     the same file cost one read between them. Anything a region\n"
+            "     omits falls back to the call's offset/limit/ref, so\n"
+            '     [{"path": "src/x.cc"}] is a plain read.\n'
             "  2. Commit mode (regions omitted, ref required): shows the commit\n"
             "     message and diff for the given ref (like `git show <ref>`)."
         )
@@ -245,17 +254,19 @@ def register(mcp: FastMCP) -> None:
     def repo_git_show(
         repo: Annotated[str, Field(description=REPO_ARG)],
         regions: Annotated[
-            # `list[str | Region]`, not `list[str] | list[Region]`: the latter
-            # forces the list to be homogeneous, so mixing a bare path with one
-            # windowed region -- the natural way to write a batch -- fails
-            # validation before the tool runs and costs a turn to discover.
-            str | list[str | Region] | None,
+            # One shape, deliberately. Also accepting a bare string and a
+            # list[str] was measurably worse on both counts it was meant to help:
+            # the union made this parameter 52% of the whole tool's schema (1801
+            # of 3436 chars) because Gemini gets Region inlined into every
+            # branch, and it left the model a spelling to choose before it could
+            # express anything. A single shape is smaller to send and simpler to
+            # use -- offset/limit/ref all default, so [{"path": p}] is the whole
+            # of a plain read.
+            list[Region] | None,
             Field(
                 description=(
-                    "file regions to read; omit for commit mode. A string (or"
-                    " list of strings) is a path read with the call's"
-                    " offset/limit; a list of objects gives each region its own"
-                    " window."
+                    "file regions to read; omit for commit mode. Each needs a"
+                    " path; offset/limit/ref fall back to the call's."
                 )
             ),
         ] = None,
@@ -306,23 +317,16 @@ def register(mcp: FastMCP) -> None:
                 banner + _paginate_result(lines, offset, limit, numbered=True)
             )
 
-        # A bare string is the one-region spelling; normalizing here means the
-        # rest of this function has exactly one shape to handle.
-        if isinstance(regions, str):
-            regions = [regions]
+        # Resolve each region against the call's values once, so everything below
+        # reads concrete numbers. `is None` is the test, not `or`: an explicit
+        # offset=0 or limit=0 must not fall through to the call's.
         wanted = _check_batch(
             [
-                Region(path=r, offset=offset, limit=limit, ref=ref)
-                if isinstance(r, str)
-                # Per-region values win; the call's are the fallback. `offset`
-                # cannot use `or` -- offset=0 is both the default AND a
-                # meaningful value (the top of the file), so an explicit 0 must
-                # not fall through to the call's offset.
-                else Region(
+                Region(
                     path=r.path,
-                    offset=r.offset,
-                    limit=r.limit,
-                    ref=r.ref if r.ref is not None else ref,
+                    offset=offset if r.offset is None else r.offset,
+                    limit=limit if r.limit is None else r.limit,
+                    ref=ref if r.ref is None else r.ref,
                 )
                 for r in regions
             ],

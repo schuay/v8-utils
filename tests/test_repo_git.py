@@ -455,37 +455,45 @@ def _show(mcp, **args):
     return result.content[0].text
 
 
+def _r(path="f.txt", **kw):
+    """One region. Only `path` is required; the rest fall back to the call's."""
+    return {"path": path, **kw}
+
+
 class TestRepoGitShowRegions:
-    def test_single_region_string_is_unsectioned(self, mcp):
-        out = _show(mcp, regions="f.txt", limit=3)
+    def test_path_only_region_uses_call_window(self, mcp):
+        # The minimal spelling: a region that sets nothing but its path is a
+        # plain read, which is what keeps the single accepted shape cheap to use.
+        out = _show(mcp, regions=[_r()], limit=3)
         assert "=====" not in out
         assert "line1" in out
+        assert "line4" not in out
 
-    def test_single_element_list_matches_bare_string(self, mcp):
-        # Same rule as grep: shape follows count, not spelling.
-        assert _show(mcp, regions=["f.txt"], limit=3) == _show(
-            mcp, regions="f.txt", limit=3
-        )
+    def test_bare_string_rejected(self, mcp):
+        # One shape only. A string was accepted once; it cost 52% of this tool's
+        # schema to allow, so it must now fail loudly rather than half-work.
+        with pytest.raises(Exception):
+            _show(mcp, regions="f.txt")
 
-    def test_bare_strings_use_call_window(self, mcp):
-        out = _show(mcp, regions=["f.txt", "f.txt"], offset=2, limit=2)
+    def test_regions_share_call_window(self, mcp):
+        out = _show(mcp, regions=[_r(), _r()], offset=2, limit=2)
         assert out.count("===== f.txt =====") == 2
         assert "line3" in out and "line4" in out
         assert "line1" not in out
 
-    def test_mixed_strings_and_objects(self, mcp):
-        # `list[str] | list[Region]` would force the list to be homogeneous, so
-        # the natural way to write a batch -- a bare path next to one windowed
-        # region -- failed validation before the tool ran. It must be accepted.
-        out = _show(
-            mcp,
-            regions=["f.txt", {"path": "f.txt", "offset": 5, "limit": 1}],
-            offset=0,
-            limit=1,
-        )
+    def test_partial_region_mixes_with_full_one(self, mcp):
+        # Per-field fallback: a path-only region and a fully-specified one in the
+        # same call must each get the right window.
+        out = _show(mcp, regions=[_r(), _r(offset=5, limit=1)], offset=0, limit=1)
         assert out.count("===== f.txt =====") == 2
         assert "line1" in out
         assert "line6" in out
+
+    def test_explicit_zero_limit_not_overridden(self, mcp):
+        # limit=0 is the other value `or` would swallow. It is degenerate but
+        # must be honoured rather than silently becoming the call's limit.
+        out = _show(mcp, regions=[_r(offset=0, limit=0)], limit=5)
+        assert "line1" not in out
 
     def test_per_region_window_overrides_call(self, mcp):
         out = _show(
@@ -509,22 +517,22 @@ class TestRepoGitShowRegions:
         assert "line8" not in out
 
     def test_missing_file_isolated_in_batch(self, mcp):
-        out = _show(mcp, regions=["f.txt", "nope.txt", "f.txt"], limit=1)
+        out = _show(mcp, regions=[_r(), _r("nope.txt"), _r()], limit=1)
         assert out.count("=====") == 6  # three sections survive
         assert "error: file not found: nope.txt" in out
         assert out.count("line1") == 2  # both good regions still returned
 
     def test_missing_file_alone_still_raises(self, mcp):
         with pytest.raises(Exception, match="File not found|file not found"):
-            _show(mcp, regions="nope.txt")
+            _show(mcp, regions=[_r("nope.txt")])
 
     def test_path_traversal_refused(self, mcp):
         with pytest.raises(Exception, match="escapes repo root"):
-            _show(mcp, regions="../../etc/passwd")
+            _show(mcp, regions=[_r("../../etc/passwd")])
 
     def test_traversal_refused_inside_batch(self, mcp):
         # The guard must hold per region, not just on the single-region path.
-        out = _show(mcp, regions=["f.txt", "../../etc/passwd"], limit=1)
+        out = _show(mcp, regions=[_r(), _r("../../etc/passwd")], limit=1)
         assert "error: path escapes repo root" in out
         assert "line1" in out
 
@@ -584,4 +592,4 @@ class TestRepoGitShowRegions:
 
     def test_too_many_regions_rejected(self, mcp):
         with pytest.raises(Exception, match="max is"):
-            _show(mcp, regions=[f"f{i}.txt" for i in range(21)])
+            _show(mcp, regions=[_r(f"f{i}.txt") for i in range(21)])
