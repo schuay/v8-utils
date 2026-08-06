@@ -1,7 +1,8 @@
-"""Tests for the repo_git MCP tools, focused on repo_git_blame."""
+"""Tests for the repo_git MCP tools."""
 
 import asyncio
 import subprocess
+from pathlib import Path
 
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -380,3 +381,207 @@ class TestRepoGitGrep:
 
     def test_no_matches(self, grep_mcp):
         assert "No matches found" in _grep(grep_mcp, pattern="ABSENTPATTERN")
+
+
+class TestRepoGitGrepMultiPattern:
+    def test_single_pattern_output_is_unsectioned(self, grep_mcp):
+        # A one-pattern call must look exactly as it did before batching existed:
+        # the common search is not made noisier by a feature it does not use.
+        out = _grep(grep_mcp, pattern="NEEDLE", context=0)
+        assert "=====" not in out
+        assert out.startswith("regress-1-a.h:1:NEEDLE occurrence 0")
+
+    def test_single_element_list_matches_bare_string(self, grep_mcp):
+        # Shape follows item COUNT, not which spelling was used, so a caller that
+        # always builds a list does not get different output for a batch of one.
+        assert _grep(grep_mcp, pattern=["NEEDLE"], context=0) == _grep(
+            grep_mcp, pattern="NEEDLE", context=0
+        )
+
+    def test_multi_pattern_attributes_results(self, grep_mcp):
+        # The reason for N invocations over `git grep -e a -e b`: a union would
+        # interleave these with no way to tell which pattern found which line.
+        out = _grep(grep_mcp, pattern=["NEEDLE", "filler 1"], context=0)
+        assert "===== NEEDLE =====" in out
+        assert "===== filler 1 =====" in out
+        needle_sec, _, filler_sec = out.partition("===== filler 1 =====")
+        assert "NEEDLE occurrence 0" in needle_sec
+        assert "filler 1.0" not in needle_sec
+        assert "filler 1.0" in filler_sec
+
+    def test_limit_is_per_pattern_not_shared(self, grep_mcp):
+        # The starvation guard: a high-hit pattern must not consume a shared
+        # budget and leave the others with nothing.
+        out = _grep(grep_mcp, pattern=["filler 0", "NEEDLE"], context=0, limit=3)
+        hits, _, needles = out.partition("===== NEEDLE =====")
+        assert hits.count("filler 0.") == 3  # its own full limit
+        assert needles.count("NEEDLE occurrence") == 3  # not starved by the above
+
+    def test_one_pattern_missing_does_not_hide_the_others(self, grep_mcp):
+        out = _grep(grep_mcp, pattern=["NEEDLE", "ABSENTPATTERN"], context=0)
+        assert "NEEDLE occurrence 0" in out
+        assert "No matches found." in out
+        assert out.count("=====") == 4  # both sections present, 2 markers each
+
+    def test_bad_regex_isolated_in_batch(self, grep_mcp):
+        # A batch must survive one bad pattern: the others' results are the point
+        # of the call and must not be lost to it.
+        out = _grep(grep_mcp, pattern=["NEEDLE", "(unclosed"], context=0)
+        assert "NEEDLE occurrence 0" in out
+        assert "error: git grep failed" in out
+
+    def test_bad_regex_alone_still_raises(self, grep_mcp):
+        # With no siblings to protect, a bad pattern stays a hard error rather
+        # than becoming text the caller has to notice.
+        with pytest.raises(Exception, match="git grep failed"):
+            _grep(grep_mcp, pattern="(unclosed")
+
+    def test_empty_pattern_list(self, grep_mcp):
+        assert "No patterns given." in _grep(grep_mcp, pattern=[])
+
+    def test_too_many_patterns_rejected(self, grep_mcp):
+        with pytest.raises(Exception, match="max is"):
+            _grep(grep_mcp, pattern=[f"p{i}" for i in range(21)])
+
+    def test_context_applies_within_each_section(self, grep_mcp):
+        out = _grep(grep_mcp, pattern=["NEEDLE", "filler 2.0"])
+        assert "filler 0.4" in out  # context around the first NEEDLE
+        assert "===== filler 2.0 =====" in out
+
+
+def _show(mcp, **args):
+    args.setdefault("repo", "demo")
+    result = asyncio.run(mcp.call_tool("repo_git_show", args))
+    return result.content[0].text
+
+
+class TestRepoGitShowRegions:
+    def test_single_region_string_is_unsectioned(self, mcp):
+        out = _show(mcp, regions="f.txt", limit=3)
+        assert "=====" not in out
+        assert "line1" in out
+
+    def test_single_element_list_matches_bare_string(self, mcp):
+        # Same rule as grep: shape follows count, not spelling.
+        assert _show(mcp, regions=["f.txt"], limit=3) == _show(
+            mcp, regions="f.txt", limit=3
+        )
+
+    def test_bare_strings_use_call_window(self, mcp):
+        out = _show(mcp, regions=["f.txt", "f.txt"], offset=2, limit=2)
+        assert out.count("===== f.txt =====") == 2
+        assert "line3" in out and "line4" in out
+        assert "line1" not in out
+
+    def test_mixed_strings_and_objects(self, mcp):
+        # `list[str] | list[Region]` would force the list to be homogeneous, so
+        # the natural way to write a batch -- a bare path next to one windowed
+        # region -- failed validation before the tool ran. It must be accepted.
+        out = _show(
+            mcp,
+            regions=["f.txt", {"path": "f.txt", "offset": 5, "limit": 1}],
+            offset=0,
+            limit=1,
+        )
+        assert out.count("===== f.txt =====") == 2
+        assert "line1" in out
+        assert "line6" in out
+
+    def test_per_region_window_overrides_call(self, mcp):
+        out = _show(
+            mcp,
+            regions=[
+                {"path": "f.txt", "offset": 0, "limit": 1},
+                {"path": "f.txt", "offset": 5, "limit": 1},
+            ],
+            offset=99,  # would be past the end; per-region values must win
+            limit=99,
+        )
+        assert "line1" in out
+        assert "line6" in out
+
+    def test_explicit_zero_offset_not_overridden_by_call(self, mcp):
+        # offset=0 is both the default AND meaningful (top of file), so it cannot
+        # be reconciled with `or` -- an explicit 0 must not fall back to the
+        # call's offset.
+        out = _show(mcp, regions=[{"path": "f.txt", "offset": 0, "limit": 1}], offset=7)
+        assert "line1" in out
+        assert "line8" not in out
+
+    def test_missing_file_isolated_in_batch(self, mcp):
+        out = _show(mcp, regions=["f.txt", "nope.txt", "f.txt"], limit=1)
+        assert out.count("=====") == 6  # three sections survive
+        assert "error: file not found: nope.txt" in out
+        assert out.count("line1") == 2  # both good regions still returned
+
+    def test_missing_file_alone_still_raises(self, mcp):
+        with pytest.raises(Exception, match="File not found|file not found"):
+            _show(mcp, regions="nope.txt")
+
+    def test_path_traversal_refused(self, mcp):
+        with pytest.raises(Exception, match="escapes repo root"):
+            _show(mcp, regions="../../etc/passwd")
+
+    def test_traversal_refused_inside_batch(self, mcp):
+        # The guard must hold per region, not just on the single-region path.
+        out = _show(mcp, regions=["f.txt", "../../etc/passwd"], limit=1)
+        assert "error: path escapes repo root" in out
+        assert "line1" in out
+
+    def test_same_file_read_once(self, mcp, repo, monkeypatch):
+        # The point of batching: several windows of one file cost one read.
+        reads = []
+        orig = Path.read_text
+
+        def counting(self, *a, **k):
+            reads.append(str(self))
+            return orig(self, *a, **k)
+
+        monkeypatch.setattr(Path, "read_text", counting)
+        _show(
+            mcp,
+            regions=[{"path": "f.txt", "offset": i, "limit": 1} for i in range(4)],
+        )
+        assert [r for r in reads if r.endswith("f.txt")] == [str(repo / "f.txt")]
+
+    def test_per_region_ref_overrides_call(self, mcp):
+        # One call showing the same file at two revisions -- the review case that
+        # a call-level-only ref cannot express.
+        out = _show(
+            mcp,
+            regions=[
+                {"path": "f.txt", "limit": 20, "ref": "HEAD"},
+                {"path": "f.txt", "limit": 20, "ref": "HEAD~1"},
+            ],
+        )
+        head, _, prev = out.partition("===== f.txt@HEAD~1 =====")
+        assert "line10" in head  # second commit added lines 4-10
+        assert "line10" not in prev  # first commit had only three lines
+
+    def test_bad_ref_isolated_in_batch(self, mcp):
+        out = _show(
+            mcp,
+            regions=[
+                {"path": "f.txt", "limit": 1},
+                {"path": "f.txt", "limit": 1, "ref": "nosuchref"},
+            ],
+        )
+        assert "line1" in out
+        assert "error: git show nosuchref:f.txt failed" in out
+
+    def test_commit_mode_unchanged(self, mcp):
+        # regions omitted + ref = commit mode, exactly as before.
+        out = _show(mcp, ref="HEAD", limit=200)
+        assert "second commit" in out
+        assert "=====" not in out
+
+    def test_commit_mode_requires_ref(self, mcp):
+        with pytest.raises(Exception, match="ref is required"):
+            _show(mcp)
+
+    def test_empty_region_list(self, mcp):
+        assert "No regions requested." in _show(mcp, regions=[])
+
+    def test_too_many_regions_rejected(self, mcp):
+        with pytest.raises(Exception, match="max is"):
+            _show(mcp, regions=[f"f{i}.txt" for i in range(21)])
