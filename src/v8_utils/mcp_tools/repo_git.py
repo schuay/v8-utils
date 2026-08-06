@@ -27,6 +27,12 @@ from ._shared import (
 
 _MAX_READ_LINES = 2000
 _MAX_GREP_MATCHES = 100
+# Context lines around each grep match by default. Non-zero because a bare
+# file:line pair almost never answers the question that prompted the search --
+# the caller reads the hit next, so a locate-then-read pair costs two calls
+# where one would do. Five lines is enough to see a signature, a call site, or
+# the enclosing condition; past that the results crowd out the search itself.
+_DEFAULT_GREP_CONTEXT = 5
 _MAX_LS_FILES = 500
 _MAX_LOG_LINES = 2000
 _MAX_BLAME_LINES = 1000
@@ -239,7 +245,14 @@ def register(mcp: FastMCP) -> None:
         )
 
     @mcp.tool(
-        description="Search for a pattern in a related source repo using git grep."
+        description=(
+            "Search for a pattern in a related source repo using git grep.\n"
+            "\n"
+            f"Returns {_DEFAULT_GREP_CONTEXT} lines of context around each match"
+            " by default, so a hit usually answers the question without a\n"
+            "follow-up read. Pass context=0 when you only want file:line hits"
+            " (enumerating call sites, counting occurrences)."
+        )
     )
     def repo_git_grep(
         repo: Annotated[str, Field(description=REPO_ARG)],
@@ -249,13 +262,21 @@ def register(mcp: FastMCP) -> None:
             Field(description='optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"'),
         ] = None,
         context: Annotated[
-            int, Field(description="lines of context around each match")
-        ] = 0,
+            int,
+            Field(
+                description=(
+                    "lines of context around each match; pass 0 for bare file:line hits"
+                )
+            ),
+        ] = _DEFAULT_GREP_CONTEXT,
         ignore_case: Annotated[
             bool, Field(description="case-insensitive matching")
         ] = False,
         limit: Annotated[
-            int, Field(description="max matches to return")
+            int,
+            Field(
+                description=("max matches to return; with context, max context blocks")
+            ),
         ] = _MAX_GREP_MATCHES,
         ref: Annotated[str | None, Field(description=REF_ARG)] = None,
         worktree: Annotated[str | None, Field(description=WORKTREE_ARG)] = None,
@@ -282,12 +303,28 @@ def register(mcp: FastMCP) -> None:
             text=True,
             cwd=root,
         )
+        # What `limit` counts depends on whether context was asked for. Without
+        # context every output line is a match, so lines and matches are the same
+        # number. With it, git emits `context + 1 + context` lines per hit plus a
+        # `--` separator between non-adjacent hunks, so counting lines would cut
+        # a limit=100 search off at ~9 hits while the footer still claimed 100
+        # matches. Count hunks instead: a bare `--` line is git's own separator
+        # and cannot be confused with content (every content line is prefixed
+        # `path:N:` or `path-N-`), so this needs no path parsing -- which would be
+        # ambiguous anyway against V8 paths like `regress-123-foo.h`.
+        unit = "matches" if context <= 0 else "context blocks"
         collected: list[str] = []
+        hunks = 0
         try:
             assert proc.stdout is not None
             for line in proc.stdout:
-                collected.append(line.rstrip("\n"))
-                if len(collected) >= limit + 1:
+                line = line.rstrip("\n")
+                # Adjacent hunks are merged by git with no separator, so counting
+                # separators alone would undercount; the first hunk has none.
+                if context <= 0 or line == "--" or not collected:
+                    hunks += 1
+                collected.append(line)
+                if hunks > limit:
                     proc.kill()
                     break
         finally:
@@ -299,9 +336,18 @@ def register(mcp: FastMCP) -> None:
             stderr = proc.stderr.read() if proc.stderr else ""
             raise ValueError(f"git grep failed: {stderr.strip()[:500]}")
 
-        if len(collected) > limit:
-            result = "\n".join(collected[:limit])
-            result += f"\n(truncated — showing first {limit} matches)"
+        if hunks > limit:
+            # Drop the trailing partial hunk: we stopped mid-stream, so the last
+            # block is whatever happened to be read, not a whole one.
+            if context > 0:
+                while collected and collected[-1] != "--":
+                    collected.pop()
+                if collected and collected[-1] == "--":
+                    collected.pop()
+            else:
+                del collected[limit:]
+            result = "\n".join(collected)
+            result += f"\n(truncated — showing first {limit} {unit})"
         else:
             result = "\n".join(collected)
         return _text_result(banner + result)

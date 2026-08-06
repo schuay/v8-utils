@@ -283,3 +283,100 @@ class TestRepoGitLog:
     def test_unknown_repo_rejected(self, mcp):
         with pytest.raises(Exception, match="Unknown repo"):
             _log(mcp, repo="nope")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# repo_git_grep
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def grep_repo(tmp_path, monkeypatch):
+    """A repo whose matches are far enough apart to produce separate hunks.
+
+    Spacing matters: with the default context git merges nearby hits into one
+    block, and these tests are about how blocks are counted. The `regress-1-a.h`
+    name is deliberate -- a path containing `-<digits>-` is what makes parsing
+    git's `path-N-context` lines by regex ambiguous.
+    """
+    root = tmp_path / "greppy"
+    root.mkdir()
+    _git(root, "init", "-q")
+    _git(root, "config", "user.email", "tester@example.com")
+    _git(root, "config", "user.name", "Tester")
+
+    # 4 matches, 40 lines apart, so no two hunks merge at context=5.
+    body = []
+    for i in range(4):
+        body.append(f"NEEDLE occurrence {i}\n")
+        body.extend(f"filler {i}.{j}\n" for j in range(40))
+    (root / "regress-1-a.h").write_text("".join(body))
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "init")
+
+    monkeypatch.setattr(
+        config,
+        "_cache",
+        config.Config(repos={"demo": config.Repo(path=root, desc="demo repo")}),
+    )
+    return root
+
+
+@pytest.fixture
+def grep_mcp(grep_repo):
+    server = FastMCP("test")
+    repo_git.register(server)
+    return server
+
+
+def _grep(mcp, **args):
+    args.setdefault("repo", "demo")
+    args.setdefault("pattern", "NEEDLE")
+    result = asyncio.run(mcp.call_tool("repo_git_grep", args))
+    return result.content[0].text
+
+
+class TestRepoGitGrep:
+    def test_context_on_by_default(self, grep_mcp):
+        # The point of the default: a hit arrives with its surroundings, so the
+        # caller does not need a follow-up read to see what it found.
+        out = _grep(grep_mcp)
+        assert "NEEDLE occurrence 0" in out
+        assert "filler 0.0" in out  # the line after the first match
+        assert "filler 0.4" in out  # ...through the 5th
+        assert "filler 0.5" not in out  # but not the 6th
+
+    def test_context_zero_gives_bare_hits(self, grep_mcp):
+        out = _grep(grep_mcp, context=0)
+        assert "NEEDLE occurrence 0" in out
+        assert "filler" not in out
+        assert len(out.strip().splitlines()) == 4
+
+    def test_limit_counts_blocks_not_lines(self, grep_mcp):
+        # The regression this guards: `limit` used to count output LINES, so
+        # with context a limit of 2 returned part of one hunk while the footer
+        # claimed 2 matches. It must return two whole blocks.
+        out = _grep(grep_mcp, limit=2)
+        assert "NEEDLE occurrence 0" in out
+        assert "NEEDLE occurrence 1" in out
+        assert "NEEDLE occurrence 2" not in out
+        assert "truncated — showing first 2 context blocks" in out
+
+    def test_truncation_drops_partial_trailing_block(self, grep_mcp):
+        # A truncated result must not end mid-hunk: every block shown is whole.
+        out = _grep(grep_mcp, limit=1)
+        body = out.split("(truncated")[0]
+        assert "NEEDLE occurrence 0" in body
+        assert "NEEDLE occurrence 1" not in body
+        assert not body.rstrip().endswith("--")
+
+    def test_limit_counts_matches_without_context(self, grep_mcp):
+        out = _grep(grep_mcp, context=0, limit=2)
+        assert len(out.split("(truncated")[0].strip().splitlines()) == 2
+        assert "truncated — showing first 2 matches" in out
+
+    def test_no_truncation_when_limit_covers_all(self, grep_mcp):
+        assert "truncated" not in _grep(grep_mcp, limit=10)
+
+    def test_no_matches(self, grep_mcp):
+        assert "No matches found" in _grep(grep_mcp, pattern="ABSENTPATTERN")
