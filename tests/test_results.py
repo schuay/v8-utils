@@ -233,6 +233,26 @@ class TestFormatResultsTable:
         assert "\033[32m" in t
 
     @patch("v8_utils.tools.pinpoint.pivot_results")
+    def test_ansi_survives_dumb_term(self, mock_pivot, monkeypatch):
+        """ansi=True wins over $TERM, matching the header's behavior.
+
+        rich auto-detects color from $TERM and drops it entirely under
+        TERM=dumb, which left the table plain while _results_header kept
+        emitting escapes.
+        """
+        monkeypatch.setenv("TERM", "dumb")
+        mock_pivot.return_value = [_row("m1", 100, 95, unit="ms_smallerIsBetter")]
+        t = _format_results_table("j1", True, False, job=_job(), ansi=True)
+        assert "\033[32m" in t
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
+    def test_no_ansi_stays_plain_under_color_term(self, mock_pivot, monkeypatch):
+        monkeypatch.setenv("TERM", "xterm-256color")
+        mock_pivot.return_value = [_row("m1", 100, 95, unit="ms_smallerIsBetter")]
+        t = _format_results_table("j1", True, False, job=_job(), ansi=False)
+        assert "\033[" not in t
+
+    @patch("v8_utils.tools.pinpoint.pivot_results")
     def test_ansi_compact_colors(self, mock_pivot):
         """Regression test: compact mode still gets correct direction colors."""
         mock_pivot.return_value = [

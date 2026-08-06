@@ -93,9 +93,14 @@ def user_email_variants(email: str) -> list[str]:
 def _parse_change_patchset(path: str) -> tuple[str, str | None] | None:
     """Extract (change_id, patchset) from a path segment like /CHANGE[/PATCHSET].
 
-    Returns None if the first path component is not a numeric change ID.
+    An optional leading "c/" is accepted: Gerrit uses it in both its short URLs
+    and the shorthand people paste ("c/8194905/6"), and every caller reaches
+    this with one already stripped or absent.  Returns None if what remains
+    does not start with a numeric change ID.
     """
     parts = [p for p in path.strip("/").split("/") if p]
+    if parts and parts[0] == "c":
+        parts = parts[1:]
     if parts and parts[0].isdigit():
         patchset = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
         return parts[0], patchset
@@ -142,10 +147,7 @@ def resolve_patch(patch: str) -> str:
 
         if host == "crrev.com":
             # https://crrev.com/c/CHANGE[/PATCHSET]
-            path = parsed.path.lstrip("/")
-            if path.startswith("c/"):
-                path = path[2:]
-            result = _parse_change_patchset(path)
+            result = _parse_change_patchset(parsed.path)
             if result:
                 return _resolve_change_id(*result)
 
@@ -153,14 +155,14 @@ def resolve_patch(patch: str) -> str:
             "chromium-review.googlesource.com",
             "chromium-review.git.corp.google.com",
         ):
-            if "/+/" in parsed.path:
-                # Already canonical — strip any query/fragment and return
+            if parsed.path.startswith("/c/") and "/+/" in parsed.path:
+                # Already canonical — rehost onto the public review host and
+                # strip any query/fragment.  Both halves are required: "/c/"
+                # alone also matches the short /c/CHANGE form, and "/+/" alone
+                # would pass through any path that happens to contain it.
                 return f"{_GERRIT_BASE}{parsed.path}"
             # Short form: /CHANGE[/PATCHSET] or /c/CHANGE[/PATCHSET]
-            path = parsed.path.lstrip("/")
-            if path.startswith("c/"):
-                path = path[2:]
-            result = _parse_change_patchset(path)
+            result = _parse_change_patchset(parsed.path)
             if result:
                 return _resolve_change_id(*result)
 
@@ -168,10 +170,7 @@ def resolve_patch(patch: str) -> str:
         return patch
 
     # No scheme: bare change ID, c/CHANGE[/PATCHSET], or CHANGE/PATCHSET
-    path = patch.lstrip("/")
-    if path.startswith("c/"):
-        path = path[2:]
-    result = _parse_change_patchset(path)
+    result = _parse_change_patchset(patch)
     if result:
         return _resolve_change_id(*result)
 

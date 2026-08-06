@@ -184,32 +184,29 @@ def parse_patch_fields(
                 change, patchset = _parse_change_patchset(path[plus_idx + 3 :])
                 return project, change, patchset
             # Short: /CHANGE[/PATCHSET] or /c/CHANGE[/PATCHSET]
-            seg = path.lstrip("/")
-            if seg.startswith("c/"):
-                seg = seg[2:]
-            change, patchset = _parse_change_patchset(seg)
+            change, patchset = _parse_change_patchset(path)
             return None, change, patchset
 
         if "crrev.com" in host:
-            seg = path.lstrip("/")
-            if seg.startswith("c/"):
-                seg = seg[2:]
-            change, patchset = _parse_change_patchset(seg)
+            change, patchset = _parse_change_patchset(path)
             return None, change, patchset
 
         return None, None, None
 
     # No scheme: bare change ID, c/CHANGE[/PATCHSET], or CHANGE/PATCHSET
-    token = url.lstrip("/")
-    if token.startswith("c/"):
-        token = token[2:]
-    change, patchset = _parse_change_patchset(token)
+    change, patchset = _parse_change_patchset(url)
     return None, change, patchset
 
 
 def _parse_change_patchset(path: str) -> tuple[str | None, str | None]:
-    """Extract (change_id, patchset) from a path like CHANGE[/PATCHSET]."""
+    """Extract (change_id, patchset) from a path like [c/]CHANGE[/PATCHSET].
+
+    Mirrors pinpoint._parse_change_patchset, but returns a tuple of Nones
+    instead of None so callers can destructure unconditionally.
+    """
     parts = [p for p in path.strip("/").split("/") if p]
+    if parts and parts[0] == "c":
+        parts = parts[1:]
     if parts and parts[0].isdigit():
         patchset = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
         return parts[0], patchset

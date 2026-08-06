@@ -41,11 +41,18 @@ class TestParseChangePatchset:
     def test_leading_slash(self):
         assert _parse_change_patchset("/1234567/2") == ("1234567", "2")
 
+    def test_c_prefix_stripped(self):
+        # Gerrit's own short URLs and the shorthand people paste both carry it.
+        assert _parse_change_patchset("c/1234567") == ("1234567", None)
+        assert _parse_change_patchset("/c/1234567/3") == ("1234567", "3")
+
     def test_non_numeric_returns_none(self):
-        assert _parse_change_patchset("c/1234567") is None
+        assert _parse_change_patchset("refs/1234567") is None
+        assert _parse_change_patchset("c/notanumber") is None
 
     def test_empty_returns_none(self):
         assert _parse_change_patchset("") is None
+        assert _parse_change_patchset("c/") is None
 
     def test_ignores_extra_segments(self):
         # only first two numeric segments matter
@@ -196,6 +203,32 @@ class TestResolvePatch:
         assert resolve_patch(arg) == (
             "https://chromium-review.googlesource.com/c/v8/v8/+/8174803/1"
         )
+
+    @patch("v8_utils.gerrit._get")
+    def test_short_c_url_is_not_mistaken_for_canonical(self, mock_get):
+        # "/c/8174803/1" contains "/c/" but no "/+/", so it is the short form
+        # and still needs a project lookup; returning it verbatim would hand
+        # Pinpoint a URL with no project in it.
+        mock_get.return_value = {"project": "v8/v8"}
+        url = "https://chromium-review.googlesource.com/c/8174803/1"
+        assert resolve_patch(url) == (
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174803/1"
+        )
+        mock_get.assert_called_once()
+
+    def test_query_and_fragment_stripped(self):
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/8174803/1"
+        assert resolve_patch(f"{url}?tab=comments#/COMMIT_MSG") == url
+
+    def test_non_cl_path_containing_plus_passes_through(self):
+        # Gitiles paths carry "/+/" too but name a ref, not a change.  Treating
+        # one as canonical would rehost it and hand Pinpoint a bogus patch;
+        # passing it through unchanged lets the caller fail on its own terms.
+        url = (
+            "https://chromium-review.git.corp.google.com"
+            "/plugins/gitiles/v8/v8/+/refs/heads/main"
+        )
+        assert resolve_patch(url) == url
 
 
 # ══════════════════════════════════════════════════════════════════════════════

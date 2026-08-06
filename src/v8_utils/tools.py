@@ -249,6 +249,11 @@ def _format_results_table(
             cols.append(direction)
         table.add_row(*cols)
 
+    # color_system is pinned rather than auto-detected: rich reads $TERM, and
+    # under TERM=dumb it resolves to None and silently drops every color in the
+    # table while _results_header above still emits its escapes -- a half-colored
+    # report.  The ansi flag is the caller's decision (pp passes stdout.isatty()),
+    # so honour it and let the caller decide, as it already does for the header.
     console = Console(
         no_color=not ansi,
         highlight=False,
