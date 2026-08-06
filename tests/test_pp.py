@@ -3,6 +3,7 @@
 Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
+import logging
 from unittest.mock import patch
 
 import pytest
@@ -171,6 +172,29 @@ class TestResolvePatch:
         mock_get.return_value = {"project": "v8/v8"}
         assert resolve_patch("7650974") == (
             "https://chromium-review.googlesource.com/c/v8/v8/+/7650974"
+        )
+
+    def test_corp_canonical_url_rewritten_to_public_host(self):
+        url = "https://chromium-review.git.corp.google.com/c/v8/v8/+/8174803/1"
+        assert resolve_patch(url) == (
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174803/1"
+        )
+
+    @pytest.mark.parametrize(
+        "arg",
+        [
+            "8174803/1",
+            "c/8174803/1",
+            "https://chromium-review.googlesource.com/c/8174803/1",
+            "https://chromium-review.git.corp.google.com/c/8174803/1",
+            "https://crrev.com/c/8174803/1",
+        ],
+    )
+    @patch("v8_utils.gerrit._get")
+    def test_short_forms_resolve(self, mock_get, arg):
+        mock_get.return_value = {"project": "v8/v8"}
+        assert resolve_patch(arg) == (
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174803/1"
         )
 
 
@@ -829,52 +853,6 @@ class TestConfigurationValidation:
         assert not unknown
 
 
-class TestResolvePatch:
-    def test_canonical_passthrough(self):
-        from v8_utils.pinpoint import resolve_patch
-
-        url = "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        assert resolve_patch(url) == url
-
-    def test_corp_canonical_passthrough(self):
-        from v8_utils.pinpoint import resolve_patch
-
-        url = "https://chromium-review.git.corp.google.com/c/v8/v8/+/8194905/6"
-        assert (
-            resolve_patch(url)
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        )
-
-    def test_shorthand_resolution(self, monkeypatch):
-        from v8_utils import pinpoint, gerrit
-
-        monkeypatch.setattr(
-            gerrit,
-            "_get",
-            lambda base, path, **kw: {"project": "v8/v8", "subject": "Test CL"},
-        )
-        assert (
-            pinpoint.resolve_patch("8194905")
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905"
-        )
-        assert (
-            pinpoint.resolve_patch("8194905/6")
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        )
-        assert (
-            pinpoint.resolve_patch("c/8194905/6")
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        )
-        assert (
-            pinpoint.resolve_patch("https://chromium-review.googlesource.com/c/8194905/6")
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        )
-        assert (
-            pinpoint.resolve_patch("https://crrev.com/c/8194905/6")
-            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
-        )
-
-
 class TestFetchGerritSubject:
     def test_fetch_subject_success(self, monkeypatch):
         from v8_utils import pinpoint, gerrit
@@ -885,12 +863,13 @@ class TestFetchGerritSubject:
             lambda base, path, **kw: {"subject": "Awesome fix for feature X"},
         )
         assert (
-            pinpoint.fetch_gerrit_subject("https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6")
+            pinpoint.fetch_gerrit_subject(
+                "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+            )
             == "Awesome fix for feature X"
         )
         assert (
-            pinpoint.fetch_gerrit_subject("c/8194905/6")
-            == "Awesome fix for feature X"
+            pinpoint.fetch_gerrit_subject("c/8194905/6") == "Awesome fix for feature X"
         )
 
     def test_fetch_subject_invalid_url_raises(self):
@@ -910,21 +889,57 @@ class TestFetchGerritSubject:
             pinpoint.fetch_gerrit_subject("8194905/6")
 
 
-class TestCreatePinpointJobsFallback:
-    def test_job_name_fallback_on_fetch_subject_error(self, monkeypatch, capsys):
+class TestSubjectOrNone:
+    def test_returns_subject(self, monkeypatch):
+        from v8_utils import pinpoint, gerrit
+
+        monkeypatch.setattr(gerrit, "_get", lambda base, path, **kw: {"subject": "Hi"})
+        assert pinpoint.subject_or_none("c/8194905/6") == "Hi"
+
+    def test_no_patch_is_not_an_error(self, caplog):
+        from v8_utils import pinpoint
+
+        assert pinpoint.subject_or_none(None) is None
+        assert pinpoint.subject_or_none("") is None
+        assert not caplog.records
+
+    def test_failure_returns_none_but_logs(self, monkeypatch, caplog):
+        from v8_utils import pinpoint, gerrit
+
+        def _fail(base, path, **kw):
+            raise RuntimeError("Gerrit rate-limit (HTTP 429)")
+
+        monkeypatch.setattr(gerrit, "_get", _fail)
+        with caplog.at_level(logging.DEBUG, logger="v8-utils"):
+            assert pinpoint.subject_or_none("c/8194905/6") is None
+        # Degrading to no subject is fine; degrading silently is not -- a
+        # rate-limit storm has to leave a trace somewhere.
+        assert "fetch_gerrit_subject failed" in caplog.text
+        assert "HTTP 429" in caplog.text
+
+
+class TestCreatePinpointJobsNaming:
+    """Job names are baked into Pinpoint and cannot be edited after creation."""
+
+    @staticmethod
+    def _run(monkeypatch, subject_impl):
+        """Create one job with Gerrit stubbed out; return the kwargs create_job saw."""
         from v8_utils import tools, pinpoint
 
-        def _fail(patch_url):
-            raise RuntimeError("Rate limited 429")
+        created = {}
 
-        monkeypatch.setattr(pinpoint, "fetch_gerrit_subject", _fail)
-        monkeypatch.setattr(
-            pinpoint, "create_job", lambda **kwargs: {"job_id": "test_job_1", "url": "https://pinpoint/job/1"}
-        )
+        def _create_job(**kwargs):
+            created.update(kwargs)
+            return {"job_id": "test_job_1", "url": "https://pinpoint/job/1"}
+
+        monkeypatch.setattr(pinpoint, "fetch_gerrit_subject", subject_impl)
+        monkeypatch.setattr(pinpoint, "create_job", _create_job)
         monkeypatch.setattr(
             pinpoint, "fetch_latest_build_commit", lambda cfg: ("abc1234", 1)
         )
-        monkeypatch.setattr(tools, "_fetch_job_detail", lambda url: {"job_id": "test_job_1"})
+        monkeypatch.setattr(
+            tools, "_fetch_job_detail", lambda url: {"job_id": "test_job_1"}
+        )
 
         jobs = tools.create_pinpoint_jobs(
             benchmarks=["sp3"],
@@ -933,5 +948,20 @@ class TestCreatePinpointJobsFallback:
             watch=False,
         )
         assert len(jobs) == 1
+        return created
+
+    def test_job_name_uses_subject_and_benchmark_alias(self, monkeypatch):
+        created = self._run(monkeypatch, lambda patch_url: "Inline the fast path")
+        # The alias, not the full "speedometer3.crossbench" benchmark name, to
+        # match how the bot config is already abbreviated.
+        assert created["name"] == "Inline the fast path (m4, sp3)"
+
+    def test_job_name_falls_back_to_cl_number(self, monkeypatch, capsys):
+        def _fail(patch_url):
+            raise RuntimeError("Rate limited 429")
+
+        created = self._run(monkeypatch, _fail)
+        # Not a bare "(m4, sp3)": the job must stay traceable to its CL.
+        assert created["name"] == "CL 8194905 (m4, sp3)"
         captured = capsys.readouterr()
         assert "warning: could not fetch Gerrit subject for c/8194905/6" in captured.err

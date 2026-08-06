@@ -173,9 +173,11 @@ class TestParsePatchFields:
         ) == (None, "8194905", "6")
 
     def test_crrev_url(self):
-        assert pinpoint_cache.parse_patch_fields(
-            "https://crrev.com/c/8194905/6"
-        ) == (None, "8194905", "6")
+        assert pinpoint_cache.parse_patch_fields("https://crrev.com/c/8194905/6") == (
+            None,
+            "8194905",
+            "6",
+        )
 
     def test_bare_change_id(self):
         assert pinpoint_cache.parse_patch_fields("8194905") == (None, "8194905", None)

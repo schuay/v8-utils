@@ -160,12 +160,7 @@ def _print_job(j: dict) -> None:
     print()
 
     patch_url = j.get("experiment_patch")
-    patch_subject = None
-    if patch_url:
-        try:
-            patch_subject = pinpoint.fetch_gerrit_subject(patch_url)
-        except Exception:
-            pass
+    patch_subject = pinpoint.subject_or_none(patch_url)
 
     # Merged bot + benchmark line
     header_parts = []
@@ -287,16 +282,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
                 pass
             else:
                 patches = [j.get("experiment_patch") or "" for j in jobs]
-
-                def _safe_fetch(p: str) -> str | None:
-                    if not p:
-                        return None
-                    try:
-                        return pinpoint.fetch_gerrit_subject(p)
-                    except Exception:
-                        return None
-
-                fns = [lambda p=p: _safe_fetch(p) for p in patches]
+                fns = [lambda p=p: pinpoint.subject_or_none(p) for p in patches]
                 t2 = progress.add_task("Fetching details", total=len(fns))
                 subjects = _run_concurrent(
                     fns, lambda done, total: progress.update(t2, completed=done)
@@ -306,16 +292,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             count=args.recent, user=user, filters=filters or None, since=since
         )
         patches = [j.get("experiment_patch") or "" for j in jobs] if jobs else []
-
-        def _safe_fetch_no_prog(p: str) -> str | None:
-            if not p:
-                return None
-            try:
-                return pinpoint.fetch_gerrit_subject(p)
-            except Exception:
-                return None
-
-        fns = [lambda p=p: _safe_fetch_no_prog(p) for p in patches]
+        fns = [lambda p=p: pinpoint.subject_or_none(p) for p in patches]
         subjects = _run_concurrent(fns) if fns else []
 
     if not jobs:

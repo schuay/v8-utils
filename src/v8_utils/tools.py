@@ -2,6 +2,7 @@
 
 import logging
 import subprocess
+import sys
 from collections.abc import Callable
 from datetime import datetime
 
@@ -96,21 +97,9 @@ def _fetch_jobs_list(
 def _results_header(job: dict, ansi: bool = False) -> str:
     """Build the header lines (bot/benchmark/patch/flags) for a results table."""
     experiment_patch_url = job.get("experiment_patch")
-    experiment_patch_subject = None
-    if experiment_patch_url:
-        try:
-            experiment_patch_subject = pinpoint.fetch_gerrit_subject(
-                experiment_patch_url
-            )
-        except Exception:
-            pass
+    experiment_patch_subject = pinpoint.subject_or_none(experiment_patch_url)
     base_patch_url = job.get("base_patch")
-    base_patch_subject = None
-    if base_patch_url:
-        try:
-            base_patch_subject = pinpoint.fetch_gerrit_subject(base_patch_url)
-        except Exception:
-            pass
+    base_patch_subject = pinpoint.subject_or_none(base_patch_url)
     base_hash = job.get("base_git_hash")
     base_flags = job.get("base_extra_args")
     exp_flags = job.get("experiment_extra_args")
@@ -289,12 +278,7 @@ def _format_job_detail(j: dict) -> str:
     url = j.get("url") or ""
 
     patch_url = j.get("experiment_patch")
-    patch_subject = None
-    if patch_url:
-        try:
-            patch_subject = pinpoint.fetch_gerrit_subject(patch_url)
-        except Exception:
-            pass
+    patch_subject = pinpoint.subject_or_none(patch_url)
 
     lines = [f"{created}  {status}  {url}"]
     # Merged bot + benchmark line
@@ -539,33 +523,28 @@ def create_pinpoint_jobs(
                 if on_auto_hash:
                     on_auto_hash(cfg, None, e)
 
-    # Pre-fetch Gerrit subjects for human-readable job names
+    # Pre-fetch Gerrit subjects for human-readable job names.  Unlike the
+    # display paths, a miss here warns rather than logging at debug: the subject
+    # is baked into the job title on Pinpoint and cannot be edited afterwards,
+    # so a silent miss leaves a job permanently named after an unidentifiable CL.
     patch_subjects: dict[str, str | None] = {}
-    for p in exp_patches:
-        if p and p not in patch_subjects:
-            try:
-                patch_subjects[p] = pinpoint.fetch_gerrit_subject(p)
-            except Exception as e:
-                import sys
 
-                print(
-                    f"warning: could not fetch Gerrit subject for {p}: {e}",
-                    file=sys.stderr,
-                )
-                change = pinpoint._extract_change_id(p)
-                patch_subjects[p] = f"CL {change}" if change else None
-    if base_patch and base_patch not in patch_subjects:
+    def _subject_for_name(p: str) -> str | None:
         try:
-            patch_subjects[base_patch] = pinpoint.fetch_gerrit_subject(base_patch)
+            return pinpoint.fetch_gerrit_subject(p)
         except Exception as e:
-            import sys
-
             print(
-                f"warning: could not fetch Gerrit subject for {base_patch}: {e}",
+                f"warning: could not fetch Gerrit subject for {p}: {e}",
                 file=sys.stderr,
             )
-            change = pinpoint._extract_change_id(base_patch)
-            patch_subjects[base_patch] = f"CL {change}" if change else None
+            change = pinpoint._extract_change_id(p)
+            return f"CL {change}" if change else None
+
+    for p in exp_patches:
+        if p and p not in patch_subjects:
+            patch_subjects[p] = _subject_for_name(p)
+    if base_patch and base_patch not in patch_subjects:
+        patch_subjects[base_patch] = _subject_for_name(base_patch)
 
     combos = list(
         itertools.product(configurations, pairs, exp_patches, exp_js_flags_list)

@@ -51,17 +51,9 @@ def _format_job_list(jobs: list[dict]) -> str:
     """Format job list as compact text (mirrors pp's list-jobs output)."""
     import concurrent.futures
 
-    def _safe_fetch(p: str) -> str | None:
-        if not p:
-            return None
-        try:
-            return pinpoint_mod.fetch_gerrit_subject(p)
-        except Exception:
-            return None
-
     patches = [j.get("experiment_patch") or "" for j in jobs]
     with concurrent.futures.ThreadPoolExecutor() as ex:
-        subjects = list(ex.map(_safe_fetch, patches))
+        subjects = list(ex.map(pinpoint_mod.subject_or_none, patches))
 
     blocks = []
     for j, subject in zip(jobs, subjects):

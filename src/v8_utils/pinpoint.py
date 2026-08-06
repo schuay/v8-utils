@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import json
+import logging
 import re
 import statistics
 import subprocess
@@ -240,6 +241,28 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
     if not isinstance(data, dict):
         raise ValueError(f"unexpected Gerrit response for {change_id}")
     return data.get("subject")
+
+
+def subject_or_none(patch_url: str | None) -> str | None:
+    """fetch_gerrit_subject for display paths, where no subject beats an error.
+
+    The subject only decorates output, so a 429 or an expired token should cost
+    a label, not the listing it labels.  Logged at debug rather than dropped:
+    the whole point of fetch_gerrit_subject raising is that a rate-limit storm
+    is diagnosable, and a bare `except: pass` at every call site would put it
+    back where it was.  Callers that bake the subject into something durable
+    (create-job names it in the job title) should call fetch_gerrit_subject
+    directly and handle the failure themselves.
+    """
+    if not patch_url:
+        return None
+    try:
+        return fetch_gerrit_subject(patch_url)
+    except Exception:
+        logging.getLogger("v8-utils").debug(
+            "fetch_gerrit_subject failed for %s", patch_url, exc_info=True
+        )
+        return None
 
 
 # ── Job listing ───────────────────────────────────────────────────────────────
