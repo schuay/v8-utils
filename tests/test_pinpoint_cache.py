@@ -139,3 +139,67 @@ class TestConcurrency:
             list(ex.map(read_write, range(20)))
 
         assert not errors
+
+
+class TestParsePatchFields:
+    def test_canonical_url(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        ) == ("v8/v8", "8194905", "6")
+
+    def test_canonical_url_no_patchset(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8194905"
+        ) == ("v8/v8", "8194905", None)
+
+    def test_short_gerrit_url(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.googlesource.com/8194905/6"
+        ) == (None, "8194905", "6")
+
+    def test_short_gerrit_url_with_c_prefix(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.googlesource.com/c/8194905/6"
+        ) == (None, "8194905", "6")
+
+    def test_corp_gerrit_url(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.git.corp.google.com/c/v8/v8/+/8194905/6"
+        ) == ("v8/v8", "8194905", "6")
+
+    def test_corp_short_url_with_c_prefix(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://chromium-review.git.corp.google.com/c/8194905/6"
+        ) == (None, "8194905", "6")
+
+    def test_crrev_url(self):
+        assert pinpoint_cache.parse_patch_fields(
+            "https://crrev.com/c/8194905/6"
+        ) == (None, "8194905", "6")
+
+    def test_bare_change_id(self):
+        assert pinpoint_cache.parse_patch_fields("8194905") == (None, "8194905", None)
+
+    def test_bare_change_and_patchset(self):
+        assert pinpoint_cache.parse_patch_fields("8194905/6") == (None, "8194905", "6")
+
+    def test_c_prefix_shorthand(self):
+        assert pinpoint_cache.parse_patch_fields("c/8194905/6") == (
+            None,
+            "8194905",
+            "6",
+        )
+        assert pinpoint_cache.parse_patch_fields("c/8194905") == (
+            None,
+            "8194905",
+            None,
+        )
+
+    def test_empty_or_invalid(self):
+        assert pinpoint_cache.parse_patch_fields("") == (None, None, None)
+        assert pinpoint_cache.parse_patch_fields(None) == (None, None, None)
+        assert pinpoint_cache.parse_patch_fields("https://example.com/foo") == (
+            None,
+            None,
+            None,
+        )

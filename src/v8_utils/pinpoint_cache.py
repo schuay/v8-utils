@@ -183,19 +183,27 @@ def parse_patch_fields(
                 project = project_seg.strip("/") or None
                 change, patchset = _parse_change_patchset(path[plus_idx + 3 :])
                 return project, change, patchset
-            # Short: /CHANGE[/PATCHSET]
-            change, patchset = _parse_change_patchset(path)
+            # Short: /CHANGE[/PATCHSET] or /c/CHANGE[/PATCHSET]
+            seg = path.lstrip("/")
+            if seg.startswith("c/"):
+                seg = seg[2:]
+            change, patchset = _parse_change_patchset(seg)
             return None, change, patchset
 
         if "crrev.com" in host:
-            seg = "/" + path[3:] if path.startswith("/c/") else path
+            seg = path.lstrip("/")
+            if seg.startswith("c/"):
+                seg = seg[2:]
             change, patchset = _parse_change_patchset(seg)
             return None, change, patchset
 
         return None, None, None
 
-    # No scheme: bare change ID or CHANGE/PATCHSET
-    change, patchset = _parse_change_patchset(url.lstrip("/"))
+    # No scheme: bare change ID, c/CHANGE[/PATCHSET], or CHANGE/PATCHSET
+    token = url.lstrip("/")
+    if token.startswith("c/"):
+        token = token[2:]
+    change, patchset = _parse_change_patchset(token)
     return None, change, patchset
 
 

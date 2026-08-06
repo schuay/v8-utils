@@ -74,6 +74,14 @@ class TestGerritChangeIdFromUrl:
         url = "https://chromium-review.googlesource.com/1234567"
         assert _gerrit_change_id_from_url(url) == "1234567"
 
+    def test_short_url_with_c(self):
+        url = "https://chromium-review.googlesource.com/c/1234567/3"
+        assert _gerrit_change_id_from_url(url) == "1234567"
+
+    def test_corp_url(self):
+        url = "https://chromium-review.git.corp.google.com/c/v8/v8/+/1234567/3"
+        assert _gerrit_change_id_from_url(url) == "v8%2Fv8~1234567"
+
     def test_wrong_host_returns_none(self):
         url = "https://example.com/c/v8/v8/+/1234567"
         assert _gerrit_change_id_from_url(url) is None
@@ -81,6 +89,9 @@ class TestGerritChangeIdFromUrl:
     def test_crrev_returns_change_id(self):
         url = "https://crrev.com/c/1234567"
         assert _gerrit_change_id_from_url(url) == "1234567"
+
+    def test_c_prefix_shorthand(self):
+        assert _gerrit_change_id_from_url("c/1234567/3") == "1234567"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -95,6 +106,10 @@ class TestExtractChangeId:
     def test_number_slash_patchset(self):
         assert _extract_change_id("1234567/3") == "1234567"
 
+    def test_c_prefix_shorthand(self):
+        assert _extract_change_id("c/1234567/3") == "1234567"
+        assert _extract_change_id("c/1234567") == "1234567"
+
     def test_full_gerrit_url(self):
         assert (
             _extract_change_id(
@@ -106,6 +121,10 @@ class TestExtractChangeId:
     def test_short_gerrit_url(self):
         assert (
             _extract_change_id("https://chromium-review.googlesource.com/1234567")
+            == "1234567"
+        )
+        assert (
+            _extract_change_id("https://chromium-review.googlesource.com/c/1234567/3")
             == "1234567"
         )
 
@@ -167,6 +186,10 @@ class TestExtractChangeAndPatchset:
     def test_number_slash_patchset(self):
         assert _extract_change_and_patchset("1234567/3") == ("1234567", "3")
 
+    def test_c_prefix_shorthand(self):
+        assert _extract_change_and_patchset("c/1234567/3") == ("1234567", "3")
+        assert _extract_change_and_patchset("c/1234567") == ("1234567", None)
+
     def test_full_gerrit_url_with_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567/3"
         assert _extract_change_and_patchset(url) == ("1234567", "3")
@@ -174,6 +197,10 @@ class TestExtractChangeAndPatchset:
     def test_full_gerrit_url_no_patchset(self):
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/1234567"
         assert _extract_change_and_patchset(url) == ("1234567", None)
+
+    def test_short_gerrit_url_with_c(self):
+        url = "https://chromium-review.googlesource.com/c/1234567/3"
+        assert _extract_change_and_patchset(url) == ("1234567", "3")
 
     def test_crrev_url_with_patchset(self):
         assert _extract_change_and_patchset("https://crrev.com/c/1234567/3") == (
@@ -232,6 +259,7 @@ class TestClassifyShowArg:
         [
             "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
             "https://chromium-review.googlesource.com/7650974",
+            "https://chromium-review.git.corp.google.com/c/v8/v8/+/7650974",
             "https://crrev.com/c/7650974",
             "7650974",
             "7650974/3",
@@ -799,3 +827,111 @@ class TestConfigurationValidation:
             if name not in known
         }
         assert not unknown
+
+
+class TestResolvePatch:
+    def test_canonical_passthrough(self):
+        from v8_utils.pinpoint import resolve_patch
+
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        assert resolve_patch(url) == url
+
+    def test_corp_canonical_passthrough(self):
+        from v8_utils.pinpoint import resolve_patch
+
+        url = "https://chromium-review.git.corp.google.com/c/v8/v8/+/8194905/6"
+        assert (
+            resolve_patch(url)
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        )
+
+    def test_shorthand_resolution(self, monkeypatch):
+        from v8_utils import pinpoint, gerrit
+
+        monkeypatch.setattr(
+            gerrit,
+            "_get",
+            lambda base, path, **kw: {"project": "v8/v8", "subject": "Test CL"},
+        )
+        assert (
+            pinpoint.resolve_patch("8194905")
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905"
+        )
+        assert (
+            pinpoint.resolve_patch("8194905/6")
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        )
+        assert (
+            pinpoint.resolve_patch("c/8194905/6")
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        )
+        assert (
+            pinpoint.resolve_patch("https://chromium-review.googlesource.com/c/8194905/6")
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        )
+        assert (
+            pinpoint.resolve_patch("https://crrev.com/c/8194905/6")
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6"
+        )
+
+
+class TestFetchGerritSubject:
+    def test_fetch_subject_success(self, monkeypatch):
+        from v8_utils import pinpoint, gerrit
+
+        monkeypatch.setattr(
+            gerrit,
+            "_get",
+            lambda base, path, **kw: {"subject": "Awesome fix for feature X"},
+        )
+        assert (
+            pinpoint.fetch_gerrit_subject("https://chromium-review.googlesource.com/c/v8/v8/+/8194905/6")
+            == "Awesome fix for feature X"
+        )
+        assert (
+            pinpoint.fetch_gerrit_subject("c/8194905/6")
+            == "Awesome fix for feature X"
+        )
+
+    def test_fetch_subject_invalid_url_raises(self):
+        from v8_utils import pinpoint
+
+        with pytest.raises(ValueError, match="Could not extract Gerrit change ID"):
+            pinpoint.fetch_gerrit_subject("https://example.com/not-gerrit")
+
+    def test_fetch_subject_gerrit_error_raises(self, monkeypatch):
+        from v8_utils import pinpoint, gerrit
+
+        def _fail(base, path, **kw):
+            raise RuntimeError("Gerrit rate-limit (HTTP 429)")
+
+        monkeypatch.setattr(gerrit, "_get", _fail)
+        with pytest.raises(RuntimeError, match="HTTP 429"):
+            pinpoint.fetch_gerrit_subject("8194905/6")
+
+
+class TestCreatePinpointJobsFallback:
+    def test_job_name_fallback_on_fetch_subject_error(self, monkeypatch, capsys):
+        from v8_utils import tools, pinpoint
+
+        def _fail(patch_url):
+            raise RuntimeError("Rate limited 429")
+
+        monkeypatch.setattr(pinpoint, "fetch_gerrit_subject", _fail)
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kwargs: {"job_id": "test_job_1", "url": "https://pinpoint/job/1"}
+        )
+        monkeypatch.setattr(
+            pinpoint, "fetch_latest_build_commit", lambda cfg: ("abc1234", 1)
+        )
+        monkeypatch.setattr(tools, "_fetch_job_detail", lambda url: {"job_id": "test_job_1"})
+
+        jobs = tools.create_pinpoint_jobs(
+            benchmarks=["sp3"],
+            configurations=["m4"],
+            exp_patches=["c/8194905/6"],
+            watch=False,
+        )
+        assert len(jobs) == 1
+        captured = capsys.readouterr()
+        assert "warning: could not fetch Gerrit subject for c/8194905/6" in captured.err

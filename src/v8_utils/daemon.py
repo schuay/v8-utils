@@ -85,7 +85,10 @@ def _format_job_details_for_chat(job: dict) -> str:
     args = job.get("arguments", {})
     patch = args.get("experiment_patch")
     if patch:
-        subject = pinpoint.fetch_gerrit_subject(patch)
+        try:
+            subject = pinpoint.fetch_gerrit_subject(patch)
+        except Exception:
+            subject = None
         patch_str = f'{patch}  "{subject}"' if subject else patch
     else:
         patch_str = None

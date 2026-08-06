@@ -96,15 +96,21 @@ def _fetch_jobs_list(
 def _results_header(job: dict, ansi: bool = False) -> str:
     """Build the header lines (bot/benchmark/patch/flags) for a results table."""
     experiment_patch_url = job.get("experiment_patch")
-    experiment_patch_subject = (
-        pinpoint.fetch_gerrit_subject(experiment_patch_url)
-        if experiment_patch_url
-        else None
-    )
+    experiment_patch_subject = None
+    if experiment_patch_url:
+        try:
+            experiment_patch_subject = pinpoint.fetch_gerrit_subject(
+                experiment_patch_url
+            )
+        except Exception:
+            pass
     base_patch_url = job.get("base_patch")
-    base_patch_subject = (
-        pinpoint.fetch_gerrit_subject(base_patch_url) if base_patch_url else None
-    )
+    base_patch_subject = None
+    if base_patch_url:
+        try:
+            base_patch_subject = pinpoint.fetch_gerrit_subject(base_patch_url)
+        except Exception:
+            pass
     base_hash = job.get("base_git_hash")
     base_flags = job.get("base_extra_args")
     exp_flags = job.get("experiment_extra_args")
@@ -255,7 +261,11 @@ def _format_results_table(
         table.add_row(*cols)
 
     console = Console(
-        no_color=not ansi, highlight=False, width=200, force_terminal=ansi
+        no_color=not ansi,
+        highlight=False,
+        width=200,
+        force_terminal=ansi,
+        color_system="standard" if ansi else None,
     )
     with console.capture() as capture:
         console.print(table, end="")
@@ -279,7 +289,12 @@ def _format_job_detail(j: dict) -> str:
     url = j.get("url") or ""
 
     patch_url = j.get("experiment_patch")
-    patch_subject = pinpoint.fetch_gerrit_subject(patch_url) if patch_url else None
+    patch_subject = None
+    if patch_url:
+        try:
+            patch_subject = pinpoint.fetch_gerrit_subject(patch_url)
+        except Exception:
+            pass
 
     lines = [f"{created}  {status}  {url}"]
     # Merged bot + benchmark line
@@ -528,9 +543,29 @@ def create_pinpoint_jobs(
     patch_subjects: dict[str, str | None] = {}
     for p in exp_patches:
         if p and p not in patch_subjects:
-            patch_subjects[p] = pinpoint.fetch_gerrit_subject(p)
+            try:
+                patch_subjects[p] = pinpoint.fetch_gerrit_subject(p)
+            except Exception as e:
+                import sys
+
+                print(
+                    f"warning: could not fetch Gerrit subject for {p}: {e}",
+                    file=sys.stderr,
+                )
+                change = pinpoint._extract_change_id(p)
+                patch_subjects[p] = f"CL {change}" if change else None
     if base_patch and base_patch not in patch_subjects:
-        patch_subjects[base_patch] = pinpoint.fetch_gerrit_subject(base_patch)
+        try:
+            patch_subjects[base_patch] = pinpoint.fetch_gerrit_subject(base_patch)
+        except Exception as e:
+            import sys
+
+            print(
+                f"warning: could not fetch Gerrit subject for {base_patch}: {e}",
+                file=sys.stderr,
+            )
+            change = pinpoint._extract_change_id(base_patch)
+            patch_subjects[base_patch] = f"CL {change}" if change else None
 
     combos = list(
         itertools.product(configurations, pairs, exp_patches, exp_js_flags_list)
@@ -545,7 +580,7 @@ def create_pinpoint_jobs(
             parts.append(subject)
         elif exp_js_flags:
             parts.append(f"flags: {exp_js_flags}")
-        parts.append(f"({cfg}, {bench})")
+        parts.append(f"({cfg}, {pinpoint.short_benchmark(bench)})")
         job_name = " ".join(parts)
 
         result = pinpoint.create_job(

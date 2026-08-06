@@ -110,6 +110,7 @@ def resolve_patch(patch: str) -> str:
       c/12345[/1]                                              Gerrit short path
       https://crrev.com/c/12345[/1]                           crrev URL
       https://chromium-review.googlesource.com/12345[/1]      short Gerrit URL
+      https://chromium-review.googlesource.com/c/12345[/1]    short Gerrit URL with /c/
       https://chromium-review.googlesource.com/c/v8/v8/+/...  canonical (pass-through)
     """
     patch = patch.strip()
@@ -127,7 +128,7 @@ def resolve_patch(patch: str) -> str:
         from .gerrit import _get as _gerrit_get
 
         data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
-        if not isinstance(data, dict):
+        if not isinstance(data, dict) or "project" not in data:
             raise ValueError(f"unexpected Gerrit response for {change_id}")
         project = data["project"]
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
@@ -151,11 +152,14 @@ def resolve_patch(patch: str) -> str:
             "chromium-review.googlesource.com",
             "chromium-review.git.corp.google.com",
         ):
-            if parsed.path.startswith("/c/"):
+            if "/+/" in parsed.path:
                 # Already canonical — strip any query/fragment and return
                 return f"{_GERRIT_BASE}{parsed.path}"
-            # Short form: /CHANGE[/PATCHSET]
-            result = _parse_change_patchset(parsed.path)
+            # Short form: /CHANGE[/PATCHSET] or /c/CHANGE[/PATCHSET]
+            path = parsed.path.lstrip("/")
+            if path.startswith("c/"):
+                path = path[2:]
+            result = _parse_change_patchset(path)
             if result:
                 return _resolve_change_id(*result)
 
@@ -224,18 +228,18 @@ def _extract_change_id(patch: str) -> str | None:
 def fetch_gerrit_subject(patch_url: str) -> str | None:
     """Return the subject (first line of commit message) for a Gerrit change URL.
 
-    Returns None if the change ID cannot be extracted or the request fails.
+    Uses credentials if available via git-credential-luci, falling back to
+    unauthenticated requests. Raises on failure.
     """
     change_id = _gerrit_change_id_from_url(patch_url)
     if not change_id:
-        return None
-    try:
-        from .gerrit import _get as _gerrit_get
+        raise ValueError(f"Could not extract Gerrit change ID from {patch_url!r}")
+    from .gerrit import _get as _gerrit_get
 
-        data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
-        return data.get("subject") if isinstance(data, dict) else None
-    except Exception:
-        return None
+    data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
+    if not isinstance(data, dict):
+        raise ValueError(f"unexpected Gerrit response for {change_id}")
+    return data.get("subject")
 
 
 # ── Job listing ───────────────────────────────────────────────────────────────
@@ -255,7 +259,11 @@ def job_id_from_url(job_url: str) -> str:
 # is tested first.
 _JOB_ID_RE = re.compile(r"[0-9a-f]{12,}", re.IGNORECASE)
 _CHANGE_ID_RE = re.compile(r"[0-9]{1,9}")
-_GERRIT_HOSTS = ("chromium-review.googlesource.com", "crrev.com")
+_GERRIT_HOSTS = (
+    "chromium-review.googlesource.com",
+    "chromium-review.git.corp.google.com",
+    "crrev.com",
+)
 
 
 def classify_show_arg(arg: str) -> str:
