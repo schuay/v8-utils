@@ -463,6 +463,48 @@ def _published_by_id(api_base: str, cid: str) -> dict[str, dict]:
     return out
 
 
+def _canonical_path(path: str | None) -> str:
+    """The gerrit path a comment is filed under: a real file path, or the magic
+    /PATCHSET_LEVEL for a change-level comment.
+
+    Every /PATCHSET_LEVEL/ spelling normalizes to the canonical one, which has no
+    trailing slash -- with one, gerrit takes it for a literal file named
+    "PATCHSET_LEVEL" and the comment lands on a file nobody can see.
+    """
+    p = path or "/PATCHSET_LEVEL"
+    return "/PATCHSET_LEVEL" if p.strip("/").upper() == "PATCHSET_LEVEL" else p
+
+
+def _comment_input(c: dict, src: dict, path: str) -> dict:
+    """A gerrit CommentInput built from one caller entry.
+
+    `src` is where the LOCATION is read from: normally the entry itself, but a
+    reply that inherits its parent's position passes the parent here. `path` is
+    already canonical and is NOT included in the result -- create_drafts carries
+    it inside the body while a review post keys its map by it, so each caller
+    adds the path in the shape its endpoint wants.
+    """
+    body: dict = {
+        "message": c["message"],
+        "unresolved": c.get("unresolved", True),
+    }
+    # Gerrit rejects side/line/range on a patchset-level comment.
+    if path != "/PATCHSET_LEVEL":
+        body["side"] = src.get("side", "REVISION")
+        if src.get("line") is not None:
+            body["line"] = src["line"]
+        if src.get("range"):
+            body["range"] = src["range"]
+    if c.get("in_reply_to"):
+        body["in_reply_to"] = c["in_reply_to"]
+    # Label machine-authored comments as such. Gerrit renders it, and a reviewer
+    # is entitled to know a comment was not typed by a human -- depot_tools
+    # stamps the same field on everything it writes under an AI agent.
+    if c.get("is_ai"):
+        body["is_ai"] = True
+    return body
+
+
 def create_drafts(
     change_url: str,
     comments: list[dict],
@@ -545,32 +587,10 @@ def create_drafts(
         src = parent if parent is not None else c
 
         # Path is optional: omitted (or any /PATCHSET_LEVEL/ variant) means
-        # a top-level CL comment. Gerrit's canonical magic path has no trailing
-        # slash; trailing slash makes Gerrit treat it as a literal file path.
-        path = src.get("path") or "/PATCHSET_LEVEL"
-        if path.strip("/").upper() == "PATCHSET_LEVEL":
-            path = "/PATCHSET_LEVEL"
-        is_patchset_level = path == "/PATCHSET_LEVEL"
-        body: dict = {
-            "path": path,
-            "message": c["message"],
-            "unresolved": c.get("unresolved", True),
-        }
-        # Gerrit rejects side/line/range on patchset-level drafts.
-        if not is_patchset_level:
-            body["side"] = src.get("side", "REVISION")
-            if src.get("line") is not None:
-                body["line"] = src["line"]
-            if src.get("range"):
-                body["range"] = src["range"]
-        if c.get("in_reply_to"):
-            body["in_reply_to"] = c["in_reply_to"]
-
-        # Label machine-authored drafts as such. Gerrit renders it, and a
-        # reviewer is entitled to know a reply was not typed by a human --
-        # depot_tools stamps the same field on the drafts it creates.
-        if c.get("is_ai"):
-            body["is_ai"] = True
+        # a top-level CL comment. The draft endpoint carries the path in the
+        # body, so it goes in alongside the shared CommentInput fields.
+        path = _canonical_path(src.get("path"))
+        body: dict = {"path": path, **_comment_input(c, src, path)}
 
         # An inherited reply goes on the patchset its parent was left on, so it
         # shows up in that diff view rather than only in the change-wide list.
@@ -591,6 +611,104 @@ def create_drafts(
             results.append({"ok": False, "error": str(e), "input": c})
 
     return results
+
+
+def post_review_comments(
+    change_url: str,
+    comments: list[dict],
+    message: str = "",
+    patchset: int | str | None = None,
+) -> dict:
+    """Publish inline comments on a CL in ONE request, without drafting first.
+
+    comments: the same per-comment shape create_drafts takes (message, path,
+    line, side, range, unresolved, is_ai), minus in_reply_to -- see below.
+
+    The batched counterpart to create_drafts + publish_drafts, and a different
+    tool rather than an optimization of them. Choose by whether a human reads the
+    output before it lands:
+
+      create_drafts (+ publish_drafts) -- private until someone publishes. The
+        human IS the gate, and the drafts are what they review.
+      post_review_comments -- published the moment it returns. Only for a caller
+        whose output was already gated (a verify pass, or an explicit human
+        request naming this CL).
+
+    Three properties make this the right primitive for an automated publisher,
+    and each is a failure mode of the draft-then-publish pair:
+
+    - ATOMIC. One POST: the comments land together or not at all. The pair has a
+      window where N drafts exist and the publish failed, leaving unpublished
+      comments on someone's CL that nobody knows about and a retry duplicates.
+    - EXACTLY SCOPED. Only the comments in this request are published.
+      publish_drafts sends `PUBLISH_ALL_REVISIONS`, i.e. EVERY draft the account
+      holds on the change -- including ones a human left by hand and was not
+      finished with, and leftovers from an earlier failed run.
+    - ONE ROUND TRIP, so a 50-comment review costs ~200ms rather than ~11s.
+
+    `drafts: KEEP` is load-bearing, not a default worth trusting: gerrit's
+    DraftHandling defaults to DELETE, so a review post that omits it DISCARDS the
+    caller's unpublished drafts on that revision. depot_tools sends KEEP on every
+    SetReview for the same reason. Silent data loss otherwise, and someone else's
+    data at that.
+
+    No labels, ever. Posting a review comment must not vote on the CL -- the same
+    rule publish_drafts follows, and it matters more here: this path exists to be
+    driven by an agent.
+
+    Deliberately NOT exposed as an MCP tool, for the reason publish_drafts is
+    not: create_drafts is safe to hand an agent because a draft is reversible and
+    private, whereas this speaks as the operator on a colleague's CL the instant
+    it is called. A caller wiring it to an agent owns the gate (authorization,
+    scope, a cap) and holds it in its own code, where that gate can be reviewed.
+
+    in_reply_to is NOT supported. A review post takes a map keyed by path, so a
+    location-inheriting reply would need its parent fetched to be placed at all
+    (the lookup create_drafts does). Replies are a conversation, which is the
+    draft path's job; this one posts fresh review comments. Passing it is a hard
+    error rather than a silently dropped field, which would file the reply as a
+    detached top-level comment.
+
+    patchset: revision identifier ("current", commit SHA, or patchset number).
+              Defaults to the patchset in the URL, or "current". Pin it when the
+              comments were written against a patchset that may have been
+              superseded mid-review -- otherwise a newly uploaded one silently
+              receives comments about code nobody read.
+
+    `message` is the cover note posted alongside the comments.
+
+    Returns gerrit's ReviewInfo. Raises on transport/auth failure or a rejected
+    comment: unlike create_drafts there are no per-comment results to report,
+    because nothing partially succeeds.
+    """
+    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    rev = patchset if patchset is not None else (url_patchset or "current")
+
+    # Validate everything before sending anything. The request is atomic, so a
+    # bad entry must not reach gerrit and be rejected wholesale after a partial
+    # body was built -- the caller gets one precise error naming the entry.
+    by_path: dict[str, list[dict]] = {}
+    for i, c in enumerate(comments):
+        if not c.get("message"):
+            raise ValueError(f"comment {i}: missing field: message")
+        if c.get("in_reply_to"):
+            raise ValueError(
+                f"comment {i}: in_reply_to is not supported here; use create_drafts"
+                " to reply to an existing comment"
+            )
+        path = _canonical_path(c.get("path"))
+        by_path.setdefault(path, []).append(_comment_input(c, c, path))
+
+    body: dict = {"drafts": "KEEP"}
+    if by_path:
+        body["comments"] = by_path
+    if message:
+        body["message"] = message
+    if not by_path and not message:
+        raise ValueError("nothing to post: no comments and no message")
+    out = _post_json(api_base, f"/changes/{cid}/revisions/{rev}/review", body)
+    return out if isinstance(out, dict) else {}
 
 
 def publish_drafts(

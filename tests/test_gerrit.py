@@ -491,6 +491,137 @@ def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):
     assert "labels" not in body
 
 
+# ── post_review_comments ─────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def review_posts(monkeypatch):
+    """Capture post_review_comments' single POST as (path, body)."""
+    sent = []
+    monkeypatch.setattr(
+        g, "_post_json", lambda base, path, body: sent.append((path, body)) or {"ok": 1}
+    )
+    return sent
+
+
+def test_review_post_batches_every_comment_into_one_request(review_posts):
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
+        [
+            {"path": "src/a.cc", "line": 10, "message": "first"},
+            {"path": "src/a.cc", "line": 20, "message": "second"},
+            {"path": "src/b.cc", "line": 5, "message": "third", "unresolved": False},
+        ],
+        message="perf review",
+    )
+
+    # One request, whatever the comment count -- the point of this primitive.
+    assert len(review_posts) == 1
+    path, body = review_posts[0]
+    assert path == "/changes/v8%2Fv8~8174846/revisions/current/review"
+    # Keyed by file, several comments per file preserved in order.
+    assert [c["message"] for c in body["comments"]["src/a.cc"]] == ["first", "second"]
+    assert body["comments"]["src/b.cc"][0]["line"] == 5
+    assert body["message"] == "perf review"
+    # unresolved defaults True and is honoured per comment.
+    assert body["comments"]["src/a.cc"][0]["unresolved"] is True
+    assert body["comments"]["src/b.cc"][0]["unresolved"] is False
+    # Posting review comments must never vote on the CL.
+    assert "labels" not in body
+
+
+def test_review_post_keeps_existing_drafts(review_posts):
+    """DraftHandling defaults to DELETE, so omitting `drafts` would discard the
+    caller's unpublished drafts on the revision -- someone else's data, lost
+    silently. depot_tools sends KEEP on every SetReview for this reason."""
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/8174846",
+        [{"path": "src/a.cc", "line": 1, "message": "x"}],
+    )
+    assert review_posts[0][1]["drafts"] == "KEEP"
+
+
+def test_review_post_marks_machine_authored_comments(review_posts):
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/8174846",
+        [{"path": "src/a.cc", "line": 1, "message": "x", "is_ai": True}],
+    )
+    assert review_posts[0][1]["comments"]["src/a.cc"][0]["is_ai"] is True
+
+
+def test_review_post_files_a_pathless_comment_at_change_level(review_posts):
+    """No path means a change-level comment, and every /PATCHSET_LEVEL/ spelling
+    normalizes to the canonical one -- a trailing slash makes gerrit treat it as
+    a literal file nobody can see. Gerrit also rejects line/side/range there."""
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/8174846",
+        [
+            {"message": "overall: looks good"},
+            {"path": "/PATCHSET_LEVEL/", "line": 3, "message": "also top-level"},
+        ],
+    )
+    filed = review_posts[0][1]["comments"]
+    assert list(filed) == ["/PATCHSET_LEVEL"]
+    assert [c["message"] for c in filed["/PATCHSET_LEVEL"]] == [
+        "overall: looks good",
+        "also top-level",
+    ]
+    assert not any(k in filed["/PATCHSET_LEVEL"][1] for k in ("line", "side", "range"))
+
+
+def test_review_post_pins_the_patchset_it_was_given(review_posts):
+    """A review written against patchset 3 must not land on a 4 that was uploaded
+    mid-review -- those comments would be about code nobody read."""
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/8174846",
+        [{"path": "src/a.cc", "line": 1, "message": "x"}],
+        patchset=3,
+    )
+    assert review_posts[0][0].endswith("/revisions/3/review")
+
+
+def test_review_post_validates_before_sending_anything(review_posts):
+    """The request is atomic, so a bad entry must be caught BEFORE the POST --
+    otherwise gerrit rejects the whole batch and the good comments are lost with
+    an error naming none of them."""
+    with pytest.raises(ValueError, match="comment 1: missing field: message"):
+        g.post_review_comments(
+            "https://chromium-review.googlesource.com/8174846",
+            [{"path": "a.cc", "line": 1, "message": "ok"}, {"path": "a.cc", "line": 2}],
+        )
+    assert review_posts == []  # nothing reached gerrit
+
+
+def test_review_post_refuses_a_reply(review_posts):
+    """in_reply_to cannot be honoured by a path-keyed review post: without the
+    parent lookup create_drafts does, the reply would silently file as a detached
+    top-level comment. Refuse loudly and name the alternative."""
+    with pytest.raises(ValueError, match="in_reply_to is not supported"):
+        g.post_review_comments(
+            "https://chromium-review.googlesource.com/8174846",
+            [{"message": "agreed", "in_reply_to": "c1"}],
+        )
+    assert review_posts == []
+
+
+def test_review_post_refuses_an_empty_review(review_posts):
+    # A bare {"drafts": "KEEP"} would be a no-op request that still reads as
+    # success to the caller.
+    with pytest.raises(ValueError, match="nothing to post"):
+        g.post_review_comments("https://chromium-review.googlesource.com/8174846", [])
+    assert review_posts == []
+
+
+def test_review_post_may_carry_a_message_alone(review_posts):
+    """A cover note with no inline comments is a legitimate review post; only the
+    truly empty one is refused."""
+    g.post_review_comments(
+        "https://chromium-review.googlesource.com/8174846", [], message="lgtm"
+    )
+    body = review_posts[0][1]
+    assert body["message"] == "lgtm" and "comments" not in body
+
+
 def test_pinpoint_resolves_patches_through_the_authenticated_reader(monkeypatch):
     """pinpoint.py had its own bare httpx.get against Gerrit.
 
