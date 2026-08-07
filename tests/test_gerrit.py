@@ -218,6 +218,27 @@ def test_auth_required_still_raises_rather_than_going_anonymous(monkeypatch):
         g._get("https://h", "/changes/1/drafts", auth_required=True)
 
 
+def test_a_missing_helper_and_a_missing_login_read_differently(monkeypatch):
+    """The two ways to have no token need opposite fixes, and _gerrit_token
+    returns None for both.
+
+    Naming only the login sent an operator whose systemd unit simply lacked
+    depot_tools on PATH to re-run `login` -- which succeeds and changes nothing.
+    """
+    monkeypatch.setattr(g, "_gerrit_token", lambda: None)
+
+    monkeypatch.setattr(g.shutil, "which", lambda _: None)
+    with pytest.raises(ValueError, match="not on PATH") as missing:
+        g._require_auth()
+    # Points at the cause, not at authenticating again.
+    assert "login" not in str(missing.value)
+
+    monkeypatch.setattr(g.shutil, "which", lambda _: "/usr/bin/git-credential-luci")
+    with pytest.raises(ValueError, match="git-credential-luci login") as unauthed:
+        g._require_auth()
+    assert "not on PATH" not in str(unauthed.value)
+
+
 def test_an_auth_required_401_does_not_silently_fall_back(monkeypatch):
     seen = []
 

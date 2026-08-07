@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import subprocess
 from urllib.parse import quote, urlparse
 
@@ -89,6 +90,34 @@ def _gerrit_token() -> str | None:
     return None
 
 
+def _no_token_reason() -> str:
+    """Why _gerrit_token came back empty, as a line naming the actual fix.
+
+    The two causes need opposite responses and are indistinguishable in the
+    return value -- _gerrit_token catches FileNotFoundError (the helper is not on
+    PATH) and CalledProcessError (it ran and holds no credentials) in one except,
+    with stderr discarded, because its caller only asks "can I authenticate".
+
+    Worth telling apart because the old single message named authentication, so
+    a daemon whose PATH simply lacked depot_tools sent its operator to re-run
+    `login` -- which succeeds, changes nothing, and gives no hint why. systemd
+    user units are the common case: they do not source a shell profile, so a
+    depot_tools directory that is on an interactive PATH is absent from theirs.
+    """
+    if shutil.which("git-credential-luci") is None:
+        return (
+            "git-credential-luci is not on PATH. It ships with depot_tools; add"
+            " that checkout to PATH. In a systemd user unit set it explicitly --"
+            " units do not source a shell profile, so a working interactive PATH"
+            " says nothing about the daemon's."
+        )
+    return (
+        "git-credential-luci is installed but holds no credentials for this"
+        " account. Run `git-credential-luci login` as the user the process runs"
+        " as -- a login under a different account does not carry over."
+    )
+
+
 def _auth_error(status: int, detail: str = "") -> ValueError:
     """Build an actionable error for a Gerrit 401/403.
 
@@ -121,12 +150,7 @@ def _parse_json(r: httpx.Response) -> dict | list:
 def _require_auth() -> str:
     token = _gerrit_token()
     if not token:
-        raise ValueError(
-            "Gerrit authentication required but git-credential-luci "
-            "returned no token. Visit\n"
-            "  https://chromium.googlesource.com/new-password\n"
-            "to set up credentials."
-        )
+        raise ValueError(f"Gerrit authentication required, but {_no_token_reason()}")
     return token
 
 
