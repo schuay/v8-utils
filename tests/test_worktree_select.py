@@ -129,9 +129,7 @@ class TestBanner:
     def test_applies_to_all_tools(self, mcp):
         _call(mcp, "repo_git_worktree_select", name="wt-feature", repo="demo")
         prefix = "[demo @ wt-feature"
-        assert _call(
-            mcp, "repo_git_show", repo="demo", regions=[{"path": "f.txt"}]
-        ).startswith(prefix)
+        assert _call(mcp, "repo_git_show", repo="demo", path="f.txt").startswith(prefix)
         assert _call(mcp, "repo_git_find", repo="demo", glob="*.txt").startswith(prefix)
         assert _call(mcp, "repo_git_log", repo="demo").startswith(prefix)
         assert _call(mcp, "repo_git_blame", repo="demo", path="f.txt").startswith(

@@ -7,7 +7,7 @@ from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from .. import config
 from .. import worktree as worktree_mod
@@ -37,11 +37,6 @@ _MAX_LS_FILES = 500
 _MAX_LOG_LINES = 2000
 _MAX_BLAME_LINES = 1000
 _DEFAULT_BLAME_LINES = 100
-# Items per batched call. `limit` is per item, so a batch's worst-case output is
-# items * limit -- this is what stops that product from becoming unbounded. Set
-# where a plausible batch (the hits of one grep, the definitions a review needs)
-# fits comfortably and a runaway loop does not.
-_MAX_BATCH_ITEMS = 20
 
 
 def _parse_blame_porcelain(text: str) -> tuple[list[tuple[str, int, str]], dict]:
@@ -101,72 +96,6 @@ def _parse_blame_porcelain(text: str) -> tuple[list[tuple[str, int, str]], dict]
             pending[parts[0]] = parts[1]
 
     return lines, commits
-
-
-# The one shape repo_git_show reads. Every region carries its own window
-# because the case this exists for -- the scattered hits of one grep -- has a
-# different one per hit; `ref` is per-region for the same reason, which is what
-# lets a single call show one function before and after a commit.
-#
-# Keep this docstring short: pydantic ships it to the model as the schema's
-# `description`, and Gemini gets the object INLINED at every use (the vertexai
-# converter dereferences $defs, which the Gemini API does not support), so
-# rationale prose here is re-sent on every call inside the cached tool prefix.
-# Rationale goes in comments like this one; the docstring is payload.
-class Region(BaseModel):
-    """A window of one file: which lines of which path, optionally at a ref."""
-
-    # Every field but `path` defaults to None rather than to a real value, so an
-    # omitted field is distinguishable from an explicitly-passed one and can fall
-    # back to the call's. A concrete default here would make offset=0 ambiguous:
-    # 0 is both "unset" and a meaningful value (the top of the file), so the
-    # call's offset would silently override a region that genuinely asked for
-    # line 1.
-    path: str = Field(description="file path relative to the repo root")
-    offset: int | None = Field(
-        default=None,
-        description="0-based line offset to start at; defaults to the call's",
-    )
-    limit: int | None = Field(
-        default=None, description="max lines to return; defaults to the call's"
-    )
-    ref: str | None = Field(
-        default=None,
-        description="git ref to read this region at; defaults to the call's",
-    )
-
-
-def _check_batch(items: list, name: str) -> list:
-    """Bound a batch's item count.
-
-    `limit` is per item, so worst-case output is items * limit; this is what
-    keeps that product finite. Note an EMPTY list is legal and distinct from
-    omitting the argument: it means the caller computed a batch that came out
-    empty (a grep that matched no files to read), which is worth reporting
-    plainly rather than treating as a missing argument.
-    """
-    if len(items) > _MAX_BATCH_ITEMS:
-        raise ValueError(
-            f"{name} has {len(items)} entries; max is {_MAX_BATCH_ITEMS}."
-            " Split into several calls."
-        )
-    return items
-
-
-def _section(header: str, body: str) -> str:
-    """One item's block in a multi-item result.
-
-    The boundary has to survive arbitrary file content, so it is a line that
-    cannot be confused with a numbered content line (those are
-    `<width-6 number>\ttext`) and reads as a heading rather than as code.
-
-    Only used when a call carries more than one item: a single item returns bare
-    output, byte-identical to what the tool returned before it could batch, so
-    the common read is not made noisier by a feature it does not use. Every item
-    in a multi-item call gets a section INCLUDING failed ones, so the result has
-    exactly as many sections as the call had items and they match up positionally.
-    """
-    return f"===== {header} =====\n{body}"
 
 
 def _repo_summary() -> str:
@@ -238,58 +167,34 @@ def register(mcp: FastMCP) -> None:
 
     @mcp.tool(
         description=(
-            "Read regions of files in a related source repo, or show a commit.\n"
+            "Read lines from a file in a related source repo, or show a commit.\n"
             "\n"
             "Two modes:\n"
-            "  1. File mode: regions=[{path, offset?, limit?, ref?}, ...].\n"
-            "     Pass SEVERAL regions in one call -- the hits of one grep, or a\n"
-            "     function and its callers -- instead of a call each; regions of\n"
-            "     the same file cost one read between them. Anything a region\n"
-            "     omits falls back to the call's offset/limit/ref, so\n"
-            '     [{"path": "src/x.cc"}] is a plain read.\n'
-            "  2. Commit mode (regions omitted, ref required): shows the commit\n"
-            "     message and diff for the given ref (like `git show <ref>`)."
+            "  1. File mode (path provided): returns `limit` lines from `offset`.\n"
+            "     Use repo_git_grep to find the right offset first.\n"
+            "  2. Commit mode (path omitted, ref required): shows the commit message\n"
+            "     and diff for the given ref (like `git show <ref>`)."
         )
     )
     def repo_git_show(
         repo: Annotated[str, Field(description=REPO_ARG)],
-        regions: Annotated[
-            # One shape, deliberately. Also accepting a bare string and a
-            # list[str] was measurably worse on both counts it was meant to help:
-            # the union made this parameter 52% of the whole tool's schema (1801
-            # of 3436 chars) because Gemini gets Region inlined into every
-            # branch, and it left the model a spelling to choose before it could
-            # express anything. A single shape is smaller to send and simpler to
-            # use -- offset/limit/ref all default, so [{"path": p}] is the whole
-            # of a plain read.
-            list[Region] | None,
+        path: Annotated[
+            str | None,
             Field(
                 description=(
-                    "file regions to read; omit for commit mode. Each needs a"
-                    " path; offset/limit/ref fall back to the call's."
+                    "file path relative to the repo root; omit for commit mode"
                 )
             ),
         ] = None,
         offset: Annotated[
-            int,
-            Field(
-                description=(
-                    "0-based line offset; the default for regions not setting one"
-                )
-            ),
+            int, Field(description="0-based line offset to start reading from")
         ] = 0,
-        limit: Annotated[
-            int,
-            Field(
-                description="max lines per region; the default for regions not setting one"
-            ),
-        ] = 100,
+        limit: Annotated[int, Field(description="max lines to return")] = 100,
         ref: Annotated[
             str | None,
             Field(
                 description=(
-                    "git ref (commit hash, branch, tag). Required for commit mode;"
-                    " in file mode it is the default for regions not setting one."
+                    "git ref (commit hash, branch, tag). Required for commit mode."
                 )
             ),
         ] = None,
@@ -298,12 +203,10 @@ def register(mcp: FastMCP) -> None:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
 
-        if regions is None:
+        if path is None:
             # Commit mode: show commit message + diff
             if not ref:
-                raise ValueError(
-                    "ref is required when regions is omitted (commit mode)"
-                )
+                raise ValueError("ref is required when path is omitted (commit mode)")
             proc = subprocess.run(
                 ["git", "show", "--stat", "--patch", "--end-of-options", ref],
                 capture_output=True,
@@ -313,125 +216,47 @@ def register(mcp: FastMCP) -> None:
             if proc.returncode != 0:
                 raise ValueError(f"git show {ref} failed: {proc.stderr.strip()[:500]}")
             lines = proc.stdout.splitlines()
-            return _text_result(
-                banner + _paginate_result(lines, offset, limit, numbered=True)
+        elif ref:
+            proc = subprocess.run(
+                ["git", "show", "--end-of-options", f"{ref}:{path}"],
+                capture_output=True,
+                text=True,
+                cwd=root,
             )
-
-        # Resolve each region against the call's values once, so everything below
-        # reads concrete numbers. `is None` is the test, not `or`: an explicit
-        # offset=0 or limit=0 must not fall through to the call's.
-        wanted = _check_batch(
-            [
-                Region(
-                    path=r.path,
-                    offset=offset if r.offset is None else r.offset,
-                    limit=limit if r.limit is None else r.limit,
-                    ref=ref if r.ref is None else r.ref,
+            if proc.returncode != 0:
+                raise ValueError(
+                    f"git show {ref}:{path} failed: {proc.stderr.strip()[:500]}"
                 )
-                for r in regions
-            ],
-            "regions",
+            lines = proc.stdout.splitlines()
+        else:
+            root = root.resolve()
+            target = (root / path).resolve()
+            # Prevent path traversal outside repo root. is_relative_to is a true
+            # path-boundary check; a string prefix test would admit siblings
+            # that merely share the root's leading characters (e.g. v8-secrets
+            # for a v8 root).
+            if not target.is_relative_to(root):
+                raise ValueError(f"Path escapes repo root: {path}")
+            if not target.is_file():
+                raise ValueError(f"File not found: {path} (in {root})")
+            lines = target.read_text(errors="replace").splitlines()
+        return _text_result(
+            banner + _paginate_result(lines, offset, limit, numbered=True)
         )
-        if not wanted:
-            return _text_result(banner + "No regions requested.")
-
-        root = root.resolve()
-        # Content cache keyed by (path, ref) -- the point of batching. Several
-        # regions of one file are the common case (the scattered hits of one
-        # grep), and each used to re-read the whole file: in `ref` mode that is a
-        # `git show` subprocess and a full decode per region.
-        cache: dict[tuple[str, str | None], list[str] | str] = {}
-
-        def _fetch(rpath: str, rref: str | None) -> list[str] | str:
-            """File lines, or an error string for this region alone."""
-            key = (rpath, rref)
-            if key in cache:
-                return cache[key]
-            if rref:
-                proc = subprocess.run(
-                    ["git", "show", "--end-of-options", f"{rref}:{rpath}"],
-                    capture_output=True,
-                    text=True,
-                    cwd=root,
-                )
-                out: list[str] | str = (
-                    proc.stdout.splitlines()
-                    if proc.returncode == 0
-                    else f"error: git show {rref}:{rpath} failed:"
-                    f" {proc.stderr.strip()[:500]}"
-                )
-            else:
-                target = (root / rpath).resolve()
-                # Prevent path traversal outside repo root. is_relative_to is a
-                # true path-boundary check; a string prefix test would admit
-                # siblings that merely share the root's leading characters (e.g.
-                # v8-secrets for a v8 root).
-                if not target.is_relative_to(root):
-                    out = f"error: path escapes repo root: {rpath}"
-                elif not target.is_file():
-                    out = f"error: file not found: {rpath} (in {root})"
-                else:
-                    try:
-                        out = target.read_text(errors="replace").splitlines()
-                    except OSError as e:
-                        out = f"error: cannot read {rpath}: {e.strerror or e}"
-            cache[key] = out
-            return out
-
-        # A single region returns bare output, byte-identical to what this tool
-        # returned before it could batch. Only a real batch pays for headers.
-        if len(wanted) == 1:
-            r = wanted[0]
-            got = _fetch(r.path, r.ref)
-            if isinstance(got, str):
-                # One region, no sibling to isolate it from: raise, as before, so
-                # a plain bad path stays a hard error rather than becoming text
-                # the caller has to notice.
-                raise ValueError(got.removeprefix("error: "))
-            return _text_result(
-                banner + _paginate_result(got, r.offset, r.limit, numbered=True)
-            )
-
-        # Multi-region: one failure must not lose the other regions' content, so
-        # an error becomes this section's body and the rest still return.
-        blocks = []
-        for r in wanted:
-            got = _fetch(r.path, r.ref)
-            at = f"{r.path}@{r.ref}" if r.ref else r.path
-            body = (
-                got
-                if isinstance(got, str)
-                else _paginate_result(got, r.offset, r.limit, numbered=True)
-            )
-            blocks.append(_section(at, body))
-        return _text_result(banner + "\n\n".join(blocks))
 
     @mcp.tool(
         description=(
-            "Search for one or more patterns in a related source repo using"
-            " git grep.\n"
+            "Search for a pattern in a related source repo using git grep.\n"
             "\n"
             f"Returns {_DEFAULT_GREP_CONTEXT} lines of context around each match"
             " by default, so a hit usually answers the question without a\n"
             "follow-up read. Pass context=0 when you only want file:line hits"
-            " (enumerating call sites, counting occurrences).\n"
-            "\n"
-            "`pattern` takes a list: search several names in one call rather than"
-            " one call each. Each pattern is searched\nseparately and gets its own"
-            " `limit`, so a name with thousands of hits cannot crowd out the rest,"
-            " and\nresults stay attributed to the pattern that found them."
+            " (enumerating call sites, counting occurrences)."
         )
     )
     def repo_git_grep(
         repo: Annotated[str, Field(description=REPO_ARG)],
-        pattern: Annotated[
-            str | list[str],
-            Field(
-                description=(
-                    "regex pattern, or several to search independently in one call"
-                )
-            ),
-        ],
+        pattern: Annotated[str, Field(description="regex pattern to search for")],
         glob: Annotated[
             str | None,
             Field(description='optional file glob filter, e.g. "*.cpp" or "*.{h,cpp}"'),
@@ -450,10 +275,7 @@ def register(mcp: FastMCP) -> None:
         limit: Annotated[
             int,
             Field(
-                description=(
-                    "max matches PER PATTERN; with context, max context blocks."
-                    " Per-pattern so a high-hit name cannot crowd out the others."
-                )
+                description=("max matches to return; with context, max context blocks")
             ),
         ] = _MAX_GREP_MATCHES,
         ref: Annotated[str | None, Field(description=REF_ARG)] = None,
@@ -461,104 +283,74 @@ def register(mcp: FastMCP) -> None:
     ) -> CallToolResult:
         root = _resolve_repo(repo, worktree)
         banner = _repo_banner(repo, root)
+        cmd = ["git", "grep", "-n", "--no-color", "-E"]
+        if ignore_case:
+            cmd.append("-i")
+        if context > 0:
+            cmd.append(f"-C{context}")
+        # -e keeps a leading-dash pattern from being parsed as an option;
+        # --end-of-options does the same for a caller-supplied ref.
+        cmd.extend(["-e", pattern])
+        if ref:
+            cmd.extend(["--end-of-options", ref])
+        if glob:
+            cmd.extend(["--", glob])
 
-        # Each pattern is a SEPARATE git invocation rather than one `git grep -e
-        # a -e b`. The union form cannot do either thing this needs: results come
-        # back interleaved with no way to tell which pattern matched (so a caller
-        # cannot act on one), and a single limit would be shared, letting one
-        # high-hit name crowd the rest out. A git grep over v8 costs ~20-100ms,
-        # far below the model call this call is saving.
-        def _search(pat: str) -> str:
-            cmd = ["git", "grep", "-n", "--no-color", "-E"]
-            if ignore_case:
-                cmd.append("-i")
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=root,
+        )
+        # What `limit` counts depends on whether context was asked for. Without
+        # context every output line is a match, so lines and matches are the same
+        # number. With it, git emits `context + 1 + context` lines per hit plus a
+        # `--` separator between non-adjacent hunks, so counting lines would cut
+        # a limit=100 search off at ~9 hits while the footer still claimed 100
+        # matches. Count hunks instead: a bare `--` line is git's own separator
+        # and cannot be confused with content (every content line is prefixed
+        # `path:N:` or `path-N-`), so this needs no path parsing -- which would be
+        # ambiguous anyway against V8 paths like `regress-123-foo.h`.
+        unit = "matches" if context <= 0 else "context blocks"
+        collected: list[str] = []
+        hunks = 0
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                # Adjacent hunks are merged by git with no separator, so counting
+                # separators alone would undercount; the first hunk has none.
+                if context <= 0 or line == "--" or not collected:
+                    hunks += 1
+                collected.append(line)
+                if hunks > limit:
+                    proc.kill()
+                    break
+        finally:
+            proc.wait()
+
+        if not collected and proc.returncode == 1:
+            return _text_result(banner + "No matches found.")
+        if not collected and proc.returncode not in (0, 1, -9):
+            stderr = proc.stderr.read() if proc.stderr else ""
+            raise ValueError(f"git grep failed: {stderr.strip()[:500]}")
+
+        if hunks > limit:
+            # Drop the trailing partial hunk: we stopped mid-stream, so the last
+            # block is whatever happened to be read, not a whole one.
             if context > 0:
-                cmd.append(f"-C{context}")
-            # -e keeps a leading-dash pattern from being parsed as an option;
-            # --end-of-options does the same for a caller-supplied ref.
-            cmd.extend(["-e", pat])
-            if ref:
-                cmd.extend(["--end-of-options", ref])
-            if glob:
-                cmd.extend(["--", glob])
-
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=root,
-            )
-            # What `limit` counts depends on whether context was asked for.
-            # Without context every output line is a match, so lines and matches
-            # are the same number. With it, git emits `context + 1 + context`
-            # lines per hit plus a `--` separator between non-adjacent hunks, so
-            # counting lines would cut a limit=100 search off at ~9 hits while the
-            # footer still claimed 100 matches. Count hunks instead: a bare `--`
-            # line is git's own separator and cannot be confused with content
-            # (every content line is prefixed `path:N:` or `path-N-`), so this
-            # needs no path parsing -- which would be ambiguous anyway against V8
-            # paths like `regress-123-foo.h`.
-            unit = "matches" if context <= 0 else "context blocks"
-            collected: list[str] = []
-            hunks = 0
-            try:
-                assert proc.stdout is not None
-                for line in proc.stdout:
-                    line = line.rstrip("\n")
-                    # Adjacent hunks are merged by git with no separator, so
-                    # counting separators alone would undercount; the first hunk
-                    # has none.
-                    if context <= 0 or line == "--" or not collected:
-                        hunks += 1
-                    collected.append(line)
-                    if hunks > limit:
-                        proc.kill()
-                        break
-            finally:
-                proc.wait()
-
-            if not collected and proc.returncode == 1:
-                return "No matches found."
-            if not collected and proc.returncode not in (0, 1, -9):
-                stderr = proc.stderr.read() if proc.stderr else ""
-                # A bad regex is per-pattern: in a batch it must not lose the
-                # other patterns' results, so it is returned as this pattern's
-                # body. The single-pattern path re-raises it below.
-                return f"error: git grep failed: {stderr.strip()[:500]}"
-
-            if hunks > limit:
-                # Drop the trailing partial hunk: we stopped mid-stream, so the
-                # last block is whatever happened to be read, not a whole one.
-                if context > 0:
-                    while collected and collected[-1] != "--":
-                        collected.pop()
-                    if collected and collected[-1] == "--":
-                        collected.pop()
-                else:
-                    del collected[limit:]
-                return (
-                    "\n".join(collected)
-                    + f"\n(truncated — showing first {limit} {unit})"
-                )
-            return "\n".join(collected)
-
-        # A bare string is the one-pattern spelling, and a one-pattern call
-        # returns bare output -- byte-identical to what this tool returned before
-        # it could batch.
-        patterns = _check_batch(
-            [pattern] if isinstance(pattern, str) else list(pattern), "pattern"
-        )
-        if not patterns:
-            return _text_result(banner + "No patterns given.")
-        if len(patterns) == 1:
-            out = _search(patterns[0])
-            if out.startswith("error: git grep failed: "):
-                raise ValueError(out.removeprefix("error: "))
-            return _text_result(banner + out)
-        return _text_result(
-            banner + "\n\n".join(_section(pat, _search(pat)) for pat in patterns)
-        )
+                while collected and collected[-1] != "--":
+                    collected.pop()
+                if collected and collected[-1] == "--":
+                    collected.pop()
+            else:
+                del collected[limit:]
+            result = "\n".join(collected)
+            result += f"\n(truncated — showing first {limit} {unit})"
+        else:
+            result = "\n".join(collected)
+        return _text_result(banner + result)
 
     @mcp.tool(
         description=(
