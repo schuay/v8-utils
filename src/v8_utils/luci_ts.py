@@ -29,6 +29,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from . import luci_auth
+
 log = logging.getLogger(__name__)
 
 _TOKEN_SERVER_HOST = "luci-token-server.appspot.com"
@@ -50,9 +52,7 @@ _cache_lock = threading.Lock()
 def _luci_user_token() -> str:
     """Get the caller's user OAuth token via luci-auth (any default scope)."""
     try:
-        return subprocess.check_output(
-            ["luci-auth", "token"], stderr=subprocess.STDOUT, text=True
-        ).strip()
+        return luci_auth.mint_token()
     except FileNotFoundError:
         raise RuntimeError(
             "luci-auth not found in PATH. Install depot_tools or log in via "

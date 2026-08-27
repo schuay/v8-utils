@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 import httpx
 from scipy.stats import mannwhitneyu
 
+from . import luci_auth
+
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
 _GERRIT_BASE = "https://chromium-review.googlesource.com"
 
@@ -31,21 +33,18 @@ _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
 # ── LUCI auth ─────────────────────────────────────────────────────────────────
 
 
-def _luci_run(command: str) -> str:
-    """Run a luci-auth subcommand and return stdout, or raise ValueError."""
+def get_current_user_email() -> str:
+    """Return the email of the currently logged-in LUCI user.
+
+    Whichever account `luci-auth login` cached: luci-auth offers no way to ask
+    for a different one, so an account switch happens at login.
+    """
     try:
-        return subprocess.check_output(
-            ["luci-auth", command], stderr=subprocess.STDOUT, text=True
-        )
+        token = luci_auth.mint_token()
     except subprocess.CalledProcessError as e:
         raise ValueError(e.output.strip() or _LOGIN_INSTRUCTIONS)
     except FileNotFoundError:
         raise ValueError("luci-auth not found in PATH. " + _LOGIN_INSTRUCTIONS)
-
-
-def get_current_user_email() -> str:
-    """Return the email of the currently logged-in user, preferring chromium.org."""
-    token = _luci_run("token").strip()
     r = httpx.get(
         "https://www.googleapis.com/oauth2/v3/userinfo",
         headers={"Authorization": f"Bearer {token}"},
@@ -55,27 +54,18 @@ def get_current_user_email() -> str:
     email = r.json().get("email")
     if not email:
         raise ValueError("Could not retrieve email from userinfo API")
-    if email.endswith("@google.com"):
-        chromium_email = email.split("@")[0] + "@chromium.org"
-        if get_auth_headers(chromium_email):
-            return chromium_email
     return email
 
 
-def get_auth_headers(email: str | None = None) -> dict[str, str]:
-    """Return Authorization headers for the given email (or current LUCI user).
+def get_auth_headers() -> dict[str, str]:
+    """Return Authorization headers for the current LUCI user, or {}.
 
-    Pass email to request a token for a specific account via luci-auth -email.
-    Returns {} if not logged in or the account is unavailable.
+    Empty when luci-auth is missing or has nothing cached; callers raise
+    _LOGIN_INSTRUCTIONS on that rather than sending the request unauthenticated
+    and reporting whatever the server says about it.
     """
     try:
-        cmd = ["luci-auth", "token"]
-        if email:
-            cmd += ["-email", email]
-        token = subprocess.check_output(
-            cmd, stderr=subprocess.STDOUT, text=True
-        ).strip()
-        return {"Authorization": f"Bearer {token}"}
+        return {"Authorization": f"Bearer {luci_auth.mint_token()}"}
     except (subprocess.CalledProcessError, FileNotFoundError):
         return {}
 
@@ -1214,15 +1204,6 @@ def create_job(
     headers = get_auth_headers()
     if not headers:
         raise ValueError(_LOGIN_INSTRUCTIONS)
-    # Prefer chromium.org if available (get_current_user_email already resolves the preference)
-    try:
-        email = get_current_user_email()
-        if not email.endswith("@google.com"):
-            alt = get_auth_headers(email)
-            if alt:
-                headers = alt
-    except Exception:
-        pass
 
     r = httpx.post(
         f"{_PINPOINT_BASE}/api/new",
