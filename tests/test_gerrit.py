@@ -668,3 +668,68 @@ def test_pinpoint_resolves_patches_through_the_authenticated_reader(monkeypatch)
 
     assert url.endswith("/c/v8/v8/+/8176626")
     assert seen == [("https://chromium-review.googlesource.com", "/changes/8176626")]
+
+
+# ── comments(): thread building ──────────────────────────────────────────────
+
+
+def _comments_payload():
+    """One file with a root, an AI reply, and a human follow-up."""
+    return {
+        "src/a.cc": [
+            {
+                "id": "root",
+                "author": {"email": "reviewer@chromium.org"},
+                "message": "why?",
+                "line": 7,
+                "patch_set": 2,
+                "unresolved": True,
+                "updated": "2026-08-25 10:00:00.000000000",
+            },
+            {
+                "id": "ours",
+                "in_reply_to": "root",
+                "author": {"email": "operator@chromium.org"},
+                "message": "Done.",
+                "is_ai": True,
+                "unresolved": False,
+                "updated": "2026-08-25 11:00:00.000000000",
+            },
+            {
+                "id": "back",
+                "in_reply_to": "ours",
+                "author": {"email": "reviewer@chromium.org"},
+                "message": "still not right",
+                "unresolved": True,
+                "updated": "2026-08-25 12:00:00.000000000",
+            },
+        ]
+    }
+
+
+def test_comments_passes_is_ai_through_on_replies(monkeypatch):
+    # The flag is the only thing separating a caller's OWN replies from a
+    # reviewer's: both are posted under the same human account.
+    monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
+    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    assert [r["id"] for r in thread["replies"]] == ["ours", "back"]
+    assert thread["replies"][0]["is_ai"] is True
+    # Absent, not False: gerrit omits the field when unset, and "not marked"
+    # is not the same claim as "a human wrote this".
+    assert "is_ai" not in thread["replies"][1]
+    assert "is_ai" not in thread
+
+
+def test_comments_passes_is_ai_through_on_a_thread_root(monkeypatch):
+    payload = {"src/a.cc": [{"id": "r", "message": "x", "is_ai": True}]}
+    monkeypatch.setattr(g, "_get", lambda host, path: payload)
+    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    assert thread["is_ai"] is True
+
+
+def test_comments_reads_resolution_from_the_last_entry(monkeypatch):
+    # A thread's standing is its LAST entry's, which is what gerrit's own UI
+    # renders -- the root's flag says nothing about where the thread stands.
+    monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
+    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    assert thread["unresolved"] is True

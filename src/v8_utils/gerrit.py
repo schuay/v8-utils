@@ -388,6 +388,14 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
     Each thread has: file, line, patch_set, author, message, replies[].
     Threads are sorted by file then line.
 
+    `is_ai` is passed through, on the root and on every reply, because a caller
+    that reads a thread it also WRITES to has no other way to tell its own
+    replies from a reviewer's: an agent posting under a human's credentials
+    shows up as that human, and re-reads its own comments as review to act on.
+    Gerrit omits the field when unset, so absence means only "not marked" --
+    it covers humans and anything written before the flag existed, and is never
+    proof that a person wrote a comment.
+
     If include_drafts is True, also fetches your unpublished draft comments
     (requires authentication via `luci-auth login`).  Drafts are marked
     with draft=True.
@@ -455,10 +463,13 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
                     "message": r.get("message", ""),
                     "updated": r.get("updated", ""),
                     **({"draft": True} if r.get("_draft") else {}),
+                    **({"is_ai": True} if r.get("is_ai") else {}),
                 }
                 for r in replies
             ],
         }
+        if root.get("is_ai"):
+            t["is_ai"] = True
         if root.get("_draft"):
             t["draft"] = True
         return t
