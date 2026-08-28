@@ -12,29 +12,42 @@ CLI and MCP tools for [V8](https://v8.dev/) JavaScript engine developers.
 ## Installation
 
 ```bash
-# Full developer install (all CLIs and MCP tool groups):
-uv tool install "v8-utils[all] @ git+https://github.com/schuay/v8-utils.git"
+# Everything -- all CLIs and all MCP tool groups:
+uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git"
 # Upgrade:
 uv tool upgrade v8-utils
 ```
 
-The base install (no extras) is intentionally light -- only the MCP server core
-and the tool groups that shell out to `git` (`repo_git_*`), manage worktrees, and
-talk to Gerrit. The heavy scientific/cloud stack lives in optional extras that
-the MCP server loads lazily; groups whose extra is missing are skipped at startup
-with a warning naming the extra to install:
+There are no extras to remember: a forgotten one breaks a console script
+outright (the CLIs import their dependencies at module scope) and silently drops
+MCP tool groups, so the `v8-utils` distribution installs the full stack.
+
+### Subsetting the install
+
+Deployments that want only part of the surface install the companion
+`v8-utils-core` distribution from `packaging/core/` instead. Same code, same
+entry points, but the scientific/cloud stack sits behind extras that the MCP
+server loads lazily; groups whose extra is missing are skipped at startup with a
+warning naming the extra:
+
+```bash
+# MCP server core plus the git-backed tool groups only:
+uv pip install "git+https://github.com/schuay/v8-utils.git#subdirectory=packaging/core"
+# ... plus a subset:
+uv pip install "v8-utils-core[analysis] @ git+https://github.com/schuay/v8-utils.git#subdirectory=packaging/core"
+```
 
 | Extra | Enables |
 |-------|---------|
+| (none) | `repo_git_*`, worktree and `gerrit_*` MCP groups |
 | `analysis` | the `pd` MCP group and the `pd` / `jsb` CLIs (numpy/pandas/scipy/ruptures) |
 | `pinpoint` | the `pinpoint` MCP group and the `pp` CLI |
 | `gchat` | the Google Chat frontend (`pp` daemon) |
 | `spanner` | the Spanner-backed perf timeseries adaptor |
-| `all` | everything above -- the full developer surface |
+| `all` | everything -- equivalent to the `v8-utils` distribution |
 
-A minimal MCP-only deployment that just needs the git-backed repo tools can
-install the base package (`uv tool install git+...`); everyone else wants
-`[all]`.
+Both distributions install the same `v8_utils` module, so they are alternatives
+rather than layers: an environment gets one or the other.
 
 ## Configuration
 

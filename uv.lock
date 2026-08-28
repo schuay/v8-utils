@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'win32'",
+    "python_full_version < '3.13' and sys_platform == 'emscripten'",
     "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -1603,75 +1603,51 @@ name = "v8-utils"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "dateparser" },
+    { name = "google-auth" },
+    { name = "google-cloud-spanner" },
     { name = "httpx" },
     { name = "mcp", extra = ["cli"] },
+    { name = "numpy" },
+    { name = "opentelemetry-resourcedetector-gcp" },
+    { name = "pandas" },
     { name = "platformdirs" },
+    { name = "protobuf" },
     { name = "rich" },
+    { name = "ruptures" },
+    { name = "scipy" },
     { name = "typer" },
-]
-
-[package.optional-dependencies]
-all = [
-    { name = "dateparser" },
-    { name = "google-auth" },
-    { name = "google-cloud-spanner" },
-    { name = "numpy" },
-    { name = "opentelemetry-resourcedetector-gcp" },
-    { name = "pandas" },
-    { name = "protobuf" },
-    { name = "ruptures" },
-    { name = "scipy" },
-]
-analysis = [
-    { name = "dateparser" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "ruptures" },
-    { name = "scipy" },
-]
-gchat = [
-    { name = "google-auth" },
-]
-pinpoint = [
-    { name = "dateparser" },
-    { name = "protobuf" },
-    { name = "scipy" },
-]
-spanner = [
-    { name = "google-cloud-spanner" },
-    { name = "opentelemetry-resourcedetector-gcp" },
 ]
 
 [package.dev-dependencies]
 dev = [
+    { name = "packaging" },
     { name = "pytest" },
     { name = "ruff" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "dateparser", marker = "extra == 'analysis'", specifier = ">=1.3.0" },
-    { name = "dateparser", marker = "extra == 'pinpoint'", specifier = ">=1.3.0" },
-    { name = "google-auth", marker = "extra == 'gchat'", specifier = ">=2.0" },
-    { name = "google-cloud-spanner", marker = "extra == 'spanner'", specifier = ">=3.63.0" },
+    { name = "dateparser", specifier = ">=1.3.0" },
+    { name = "google-auth", specifier = ">=2.0" },
+    { name = "google-cloud-spanner", specifier = ">=3.63.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.0,<2" },
-    { name = "numpy", marker = "extra == 'analysis'", specifier = ">=1.24" },
-    { name = "opentelemetry-resourcedetector-gcp", marker = "extra == 'spanner'", specifier = ">=1.8.0a0" },
-    { name = "pandas", marker = "extra == 'analysis'", specifier = ">=2.0" },
+    { name = "numpy", specifier = ">=1.24" },
+    { name = "opentelemetry-resourcedetector-gcp", specifier = ">=1.8.0a0" },
+    { name = "pandas", specifier = ">=2.0" },
     { name = "platformdirs", specifier = ">=4.0" },
-    { name = "protobuf", marker = "extra == 'pinpoint'", specifier = ">=5.0" },
+    { name = "protobuf", specifier = ">=5.0" },
     { name = "rich", specifier = ">=13.9" },
-    { name = "ruptures", marker = "extra == 'analysis'", specifier = ">=1.1" },
-    { name = "scipy", marker = "extra == 'analysis'", specifier = ">=1.13" },
-    { name = "scipy", marker = "extra == 'pinpoint'", specifier = ">=1.13" },
+    { name = "ruptures", specifier = ">=1.1" },
+    { name = "scipy", specifier = ">=1.13" },
     { name = "typer", specifier = ">=0.16" },
-    { name = "v8-utils", extras = ["analysis", "pinpoint", "gchat", "spanner"], marker = "extra == 'all'" },
 ]
-provides-extras = ["analysis", "pinpoint", "gchat", "spanner", "all"]
+provides-extras = ["all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "packaging", specifier = ">=24.0" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "ruff", specifier = ">=0.15.4" },
 ]

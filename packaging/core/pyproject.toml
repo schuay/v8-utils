@@ -1,0 +1,91 @@
+# v8-utils-core: the subsettable build of v8-utils, for deployments that want
+# only some of the tool surface.
+#
+# Same source tree, same module, same entry points as the v8-utils distribution
+# one directory up -- the difference is only where the dependency line is drawn.
+# v8-utils installs everything so an interactive install needs no extras;
+# v8-utils-core keeps the base at the MCP server core plus the tool groups that
+# only shell out to git, and puts the scientific/cloud stack behind extras that
+# mcp_tools.build_server loads lazily. Groups whose extra is missing are skipped
+# at startup with a warning naming the extra.
+#
+#   uv pip install ./vendor/v8-utils/packaging/core              # git tools only
+#   uv pip install "./vendor/v8-utils/packaging/core[analysis]"  # plus pd/jsb
+#
+# The two distributions install the same v8_utils files, so they are
+# alternatives, not layers: an environment gets one or the other, never both.
+# tests/test_packaging.py asserts v8-utils' dependencies stay equal to this
+# file's base plus every extra, so the split cannot drift.
+#
+# Built from a checkout only (a path install, or git+URL#subdirectory=
+# packaging/core): the wheel reaches outside this directory for the sources, and
+# hatchling cannot do that for an sdist.
+[project]
+name = "v8-utils-core"
+version = "0.1.0"
+description = "CLI and MCP tools for V8 JavaScript engine developers (subsettable build)"
+requires-python = ">=3.12"
+# Base install: only what the MCP server core and its light tool groups need --
+# the repo_git, worktree and gerrit groups. See the comments in ../../pyproject
+# .toml for why the mcp cap and the explicit httpx/typer/rich entries are there.
+dependencies = [
+    "mcp[cli]>=1.0,<2",
+    "platformdirs>=4.0",
+    "httpx>=0.27",
+    "typer>=0.16",
+    "rich>=13.9",
+]
+
+[project.optional-dependencies]
+# Perf-data analysis: the `pd` MCP group and the `pd`/`jsb` CLIs (change-point
+# detection, A/B stats, JetStream comparison).
+analysis = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.13",
+    "ruptures>=1.1",
+    "dateparser>=1.3.0",
+]
+# Chromium Pinpoint A/B jobs: the `pinpoint` MCP group and the `pp` CLI. protobuf
+# backs the RBE/CAS wire types (cas_api); scipy backs the Mann-Whitney stats.
+pinpoint = [
+    "scipy>=1.13",
+    "protobuf>=5.0",
+    "dateparser>=1.3.0",
+]
+# Google Chat frontend (pp/daemon): impersonated-credential auth.
+gchat = [
+    "google-auth>=2.0",
+]
+# Spanner-backed perf timeseries (the pd `skiz` adaptor, imported lazily).
+spanner = [
+    "google-cloud-spanner>=3.63.0",
+    # See ../../pyproject.toml for why this alpha pin is needed.
+    "opentelemetry-resourcedetector-gcp>=1.8.0a0",
+]
+# Everything -- equivalent to installing the v8-utils distribution. Recursive
+# extras are resolved by uv and modern pip.
+all = [
+    "v8-utils-core[analysis,pinpoint,gchat,spanner]",
+]
+
+# The CLIs import their dependencies at module scope, so a console script is
+# broken outright if its extra is missing -- unlike the MCP groups, which
+# build_server skips with a warning. cli_deps turns the resulting
+# ModuleNotFoundError into the extra that fixes it.
+[project.scripts]
+v8-mcp = "v8_utils.server:main"
+pp = "v8_utils.cli_deps:pp"
+jsb = "v8_utils.cli_deps:jsb"
+pd = "v8_utils.cli_deps:pd"
+lv = "v8_utils.lv:main"
+vt = "v8_utils.vt:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The sources live at the repo root, outside this build directory; force-include
+# maps them into the wheel as the v8_utils package.
+[tool.hatch.build.targets.wheel.force-include]
+"../../src/v8_utils" = "v8_utils"

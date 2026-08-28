@@ -3,16 +3,17 @@
 Each group is a module under this package exporting a ``register(mcp)`` function
 that defines and decorates its tools. ``build_server`` constructs a FastMCP and
 registers the enabled groups; ``GROUPS`` is the authoritative table of group
-names, the module that implements each, its default-on/off state, and the pip
-extra that supplies its dependencies (None for groups that need only the base
-install).
+names, the module that implements each, its default-on/off state, and the
+v8-utils-core extra that supplies its dependencies (None for groups that need
+only the base install).
 
 Group modules are imported lazily inside ``build_server`` rather than at package
-import time: the heavy scientific/cloud dependencies live in optional extras, so
-a base-only install (v8-utils with no extras) must still start the server with
-the groups it can satisfy -- repo_git, worktree, gerrit -- and skip the rest with
-an actionable warning instead of failing to import. Install v8-utils[all] to get
-every group.
+import time: the v8-utils-core distribution puts the heavy scientific/cloud
+dependencies behind extras, so an install without them must still start the
+server with the groups it can satisfy -- repo_git, worktree, gerrit -- and skip
+the rest with an actionable warning instead of failing to import. The v8-utils
+distribution installs every extra's dependencies, so no group is ever skipped
+there.
 """
 
 import importlib
@@ -99,10 +100,10 @@ def build_server(
             module = importlib.import_module(f".{group.module}", __package__)
         except ImportError as exc:
             # A group whose optional extra is not installed is skipped, not fatal:
-            # the base install intentionally omits the heavy deps. Name the fix so
-            # the operator can restore the group if they want it.
+            # a v8-utils-core install intentionally omits the heavy deps. Name the
+            # fix so the operator can restore the group if they want it.
             hint = (
-                f"install v8-utils[{group.extra}]"
+                f"install v8-utils-core[{group.extra}]"
                 if group.extra
                 else "the base install looks incomplete; reinstall v8-utils"
             )

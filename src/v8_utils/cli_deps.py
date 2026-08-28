@@ -1,5 +1,8 @@
 """Actionable errors for CLI entry points whose optional extra is missing.
 
+Only reachable in a v8-utils-core environment: the v8-utils distribution
+installs every extra's dependencies, so its console scripts always import.
+
 The MCP server can skip a tool group whose extra is absent (see
 mcp_tools.build_server), but a console script cannot: its module-scope imports
 run before main() and fail with a bare ModuleNotFoundError traceback naming a
@@ -48,8 +51,11 @@ def run_cli(module: str, attr: str = "main") -> None:
             raise
         print(
             f"error: {exc}\n"
-            f"This CLI needs the '{extra}' extra. Reinstall with:\n"
-            f"  uv tool install --force v8-utils[all]",
+            f"This CLI needs the v8-utils-core '{extra}' extra. Add it:\n"
+            f"  uv pip install 'v8-utils-core[{extra}]'\n"
+            f"or switch to the full distribution:\n"
+            f"  uv tool install --force "
+            f"'v8-utils @ git+https://github.com/schuay/v8-utils.git'",
             file=sys.stderr,
         )
         sys.exit(1)
