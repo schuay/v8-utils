@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Perf-data analysis: the `pd` MCP group and the `pd`/`jsb` CLIs (change-point
+# Perf-data analysis: the `pd` and `performance` MCP groups, the `pd`/`jsb` CLIs (change-point
 # detection, A/B stats, JetStream comparison).
 analysis = [
     "numpy>=1.24",

@@ -27,7 +27,7 @@ dependencies = [
     "httpx>=0.27",
     "typer>=0.16",
     "rich>=13.9",
-    # Perf-data analysis: the `pd` MCP group and the `pd`/`jsb` CLIs
+    # Perf-data analysis: the `pd` and `performance` MCP groups, the `pd`/`jsb` CLIs
     # (change-point detection, A/B stats, JetStream comparison).
     "numpy>=1.24",
     "pandas>=2.0",

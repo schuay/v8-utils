@@ -40,7 +40,7 @@ uv pip install "v8-utils-core[analysis] @ git+https://github.com/schuay/v8-utils
 | Extra | Enables |
 |-------|---------|
 | (none) | `repo_git_*`, worktree and `gerrit_*` MCP groups |
-| `analysis` | the `pd` MCP group and the `pd` / `jsb` CLIs (numpy/pandas/scipy/ruptures) |
+| `analysis` | the `pd` and `performance` MCP groups, the `pd` / `jsb` CLIs (numpy/pandas/scipy/ruptures) |
 | `pinpoint` | the `pinpoint` MCP group and the `pp` CLI |
 | `gchat` | the Google Chat frontend (`pp` daemon) |
 | `spanner` | the Spanner-backed perf timeseries adaptor |
