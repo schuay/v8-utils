@@ -26,10 +26,39 @@ def mint_token() -> str:
 
     Raises CalledProcessError, with luci-auth's own diagnostics folded into
     stdout, or FileNotFoundError; callers word those for their own surface.
+
+    The streams are captured SEPARATELY and merged only on failure. Merging
+    them always -- which this did -- put luci-auth's warnings into the returned
+    string on the SUCCESS path, and it warns whenever it refreshes a token it
+    cannot cache, which is every call in a sandbox that mounts
+    ~/.config/chrome_infra read-only. The corrupted value then went into an
+    Authorization header, and the "Illegal header value" the client raised
+    quoted it: the token landed in an error message, a log, and an agent's
+    transcript.
     """
-    return subprocess.check_output(
+    proc = subprocess.run(
         ["luci-auth", "token"],
-        stderr=subprocess.STDOUT,
+        capture_output=True,
         text=True,
+        check=False,
         env={**os.environ, _CREDENTIAL_HELPER: ""},
-    ).strip()
+    )
+    if proc.returncode != 0:
+        # Both streams here, which is what the folded-into-stdout contract
+        # promises callers. A nonzero exit means luci-auth minted nothing, so
+        # there is no token in either one to fold.
+        raise subprocess.CalledProcessError(
+            proc.returncode, proc.args, output=proc.stdout + proc.stderr
+        )
+    token = proc.stdout.strip()
+    if not token or any(c.isspace() for c in token):
+        # Structural, not defensive: a bearer token has no interior whitespace,
+        # so anything that does is luci-auth output this function failed to
+        # separate. Refused HERE, where the message can omit the value, rather
+        # than at the header where the client quotes what it rejected.
+        raise ValueError(
+            "luci-auth returned a token with whitespace in it; refusing to use"
+            " it as a credential (value withheld -- it may be a real token"
+            " concatenated with a warning)"
+        )
+    return token
