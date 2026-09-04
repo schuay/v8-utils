@@ -794,6 +794,66 @@ def _latest_patchset(api_base: str, change_id: str, project: str = "") -> str:
     return "1"
 
 
+def resolve_patchset(change_url: str) -> dict:
+    """Pin a CL URL to one patchset and the SHA of its revision, without fetching.
+
+    For a caller that has to know WHICH code a CL reference names before doing
+    anything with it -- a chat approval binding to a patchset, an agent handed a
+    citation it must be able to read -- and cannot pay for a fetch to find out.
+
+    Not fetch_ref(fetch=False), which answers a different question. That returns
+    the ref and the patchset NUMBER and no SHA (fetch_head is None without a
+    fetch), and when the URL already names a patchset it makes no request at
+    all: a mistyped or nonexistent change "resolves" cleanly and only fails
+    later, wherever the ref is first used. This always asks gerrit, so a change
+    that does not exist says so here.
+
+    One query. `_latest_patchset` already makes it with o=CURRENT_REVISION and
+    discards the SHA; ALL_REVISIONS carries the same for every patchset, which is
+    what lets a URL naming an older one be pinned as exactly as the current one.
+
+    Returns:
+      ref:       full git ref, e.g. refs/changes/74/7650974/3
+      patchset:  patchset number resolved (the URL's, else current)
+      revision:  commit SHA of that patchset
+      project:   gerrit project, e.g. v8/v8 -- authoritative even when the URL
+                 omitted it, which is what lets a caller refuse a foreign one
+      host:      the review host the change lives on
+    """
+    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    data = _get(api_base, f"/changes/{cid}?o=ALL_REVISIONS")
+    if not isinstance(data, dict) or not data.get("revisions"):
+        raise ValueError(f"no such change, or it has no revisions: {change_url!r}")
+
+    revisions = data["revisions"]
+    if url_patchset:
+        wanted = int(url_patchset)
+        found = [
+            (sha, rev) for sha, rev in revisions.items() if rev.get("_number") == wanted
+        ]
+        if not found:
+            raise ValueError(f"change {change_id} has no patchset {wanted}")
+        revision, rev = found[0]
+    else:
+        revision = data.get("current_revision", "")
+        if revision not in revisions:
+            raise ValueError(f"change {change_id} names no current revision")
+        rev = revisions[revision]
+
+    patchset = str(rev.get("_number", url_patchset or 1))
+    last_two = change_id[-2:].zfill(2)
+    return {
+        "ref": f"refs/changes/{last_two}/{change_id}/{patchset}",
+        "patchset": patchset,
+        "revision": revision,
+        # From the response, not the URL: the short form carries no project, and
+        # a caller restricting citations to its own repo needs the real one.
+        "project": data.get("project", project),
+        "host": urlparse(api_base).netloc,
+    }
+
+
 def _git_remote_url(api_base: str, project: str) -> str:
     """Infer the git fetch URL from a Gerrit review host + project.
 

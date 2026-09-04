@@ -733,3 +733,77 @@ def test_comments_reads_resolution_from_the_last_entry(monkeypatch):
     monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
     (thread,) = g.comments("https://chromium-review.googlesource.com/123")
     assert thread["unresolved"] is True
+
+
+# ── resolve_patchset ──────────────────────────────────────────────────────────
+
+
+def _change(current="sha3", patchsets=(1, 2, 3), project="v8/v8"):
+    return {
+        "project": project,
+        "current_revision": current,
+        "revisions": {f"sha{n}": {"_number": n} for n in patchsets},
+    }
+
+
+def _capture(monkeypatch, payload):
+    seen = {}
+    monkeypatch.setattr(
+        g, "_get", lambda host, path: seen.update(host=host, path=path) or payload
+    )
+    return seen
+
+
+def test_resolve_patchset_pins_the_current_revision(monkeypatch):
+    seen = _capture(monkeypatch, _change())
+    out = g.resolve_patchset(
+        "https://chromium-review.googlesource.com/c/v8/v8/+/7650974"
+    )
+    assert out == {
+        "ref": "refs/changes/74/7650974/3",
+        "patchset": "3",
+        "revision": "sha3",
+        "project": "v8/v8",
+        "host": "chromium-review.googlesource.com",
+    }
+    # One query, and the one that carries every patchset's SHA.
+    assert "o=ALL_REVISIONS" in seen["path"]
+
+
+def test_resolve_patchset_honours_a_patchset_in_the_url(monkeypatch):
+    # The whole point of pinning: an approval binds to the patchset the human
+    # read, not to whatever is current when the job finally runs.
+    _capture(monkeypatch, _change())
+    out = g.resolve_patchset("https://chromium-review.googlesource.com/7650974/1")
+    assert out["patchset"] == "1"
+    assert out["revision"] == "sha1"
+    assert out["ref"] == "refs/changes/74/7650974/1"
+
+
+def test_resolve_patchset_reads_the_project_off_the_response(monkeypatch):
+    # A short-form URL carries no project, and a caller restricting citations to
+    # its own repo has nothing else to check.
+    _capture(monkeypatch, _change(project="chromium/src"))
+    out = g.resolve_patchset("https://chromium-review.googlesource.com/7650974")
+    assert out["project"] == "chromium/src"
+
+
+def test_resolve_patchset_refuses_a_change_that_does_not_exist(monkeypatch):
+    # fetch_ref(fetch=False) answers a URL naming a patchset without asking
+    # gerrit anything, so a mistyped change resolves there and fails later,
+    # wherever the ref is first used. This always asks.
+    _capture(monkeypatch, {})
+    with pytest.raises(ValueError, match="no such change"):
+        g.resolve_patchset("https://chromium-review.googlesource.com/7650974/2")
+
+
+def test_resolve_patchset_refuses_a_patchset_the_change_has_not_got(monkeypatch):
+    _capture(monkeypatch, _change(patchsets=(1, 2)))
+    with pytest.raises(ValueError, match="no patchset 9"):
+        g.resolve_patchset("https://chromium-review.googlesource.com/7650974/9")
+
+
+def test_resolve_patchset_refuses_a_change_with_no_current_revision(monkeypatch):
+    _capture(monkeypatch, _change(current="gone"))
+    with pytest.raises(ValueError, match="no current revision"):
+        g.resolve_patchset("https://chromium-review.googlesource.com/7650974")
