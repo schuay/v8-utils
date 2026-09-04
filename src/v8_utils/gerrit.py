@@ -20,6 +20,12 @@ _XSSI = ")]}'\n"
 # Gerrit review hosts qualify (chromium-review, chrome-internal-review, ...).
 _ALLOWED_HOST_SUFFIX = "-review.googlesource.com"
 
+# The Chromium redirector and where its /c/ links land. Only the public review
+# host: crrev.com/i/ (chrome-internal-review) is a different host and is not
+# claimed here until someone needs it.
+_CRREV_HOST = "crrev.com"
+_CRREV_TARGET = "chromium-review.googlesource.com"
+
 
 # ── URL parsing ───────────────────────────────────────────────────────────────
 
@@ -42,10 +48,23 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
       https://chromium-review.googlesource.com/c/v8/v8/+/7650974/1
       https://chromium-review.googlesource.com/7650974
       https://chromium-review.googlesource.com/7650974/1
+      https://crrev.com/c/7650974
+      https://crrev.com/c/7650974/1
+
+    crrev.com is not a gerrit host, it is the redirector people paste: /c/N
+    lands on chromium-review's short form, so it is rewritten to that here and
+    never talked to. Rewritten BEFORE the host check, which would otherwise
+    refuse it as a non-review host -- the one URL shape a chat thread cites
+    most, refused as if it were hostile.
     """
     p = urlparse(url)
     if p.scheme != "https":
         raise ValueError(f"Gerrit URL must be https, got {p.scheme!r}: {url!r}")
+    if p.netloc.lower() == _CRREV_HOST:
+        m = re.match(r"^/c/(\d+)(?:/(\d+))?$", p.path.rstrip("/"))
+        if not m:
+            raise ValueError(f"Cannot parse crrev change URL: {url!r}")
+        return f"https://{_CRREV_TARGET}", "", m.group(1), m.group(2)
     _check_host(p.netloc)
     api_base = f"{p.scheme}://{p.netloc}"
     path = p.path.rstrip("/")

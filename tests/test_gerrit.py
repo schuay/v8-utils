@@ -788,6 +788,22 @@ def test_resolve_patchset_reads_the_project_off_the_response(monkeypatch):
     assert out["project"] == "chromium/src"
 
 
+def test_resolve_patchset_follows_a_crrev_link(monkeypatch):
+    # crrev.com/c/N is how a chat thread cites a CL, and it is a redirector, not
+    # a review host: talking to it would be refused by the host allowlist. It is
+    # rewritten to chromium-review's short form, patchset included, so the pin
+    # is exactly what the long form gives.
+    seen = _capture(monkeypatch, _change())
+    out = g.resolve_patchset("https://crrev.com/c/7650974/1")
+    assert seen["host"] == "https://chromium-review.googlesource.com"
+    assert out["ref"] == "refs/changes/74/7650974/1"
+    assert out["revision"] == "sha1"
+    assert out["host"] == "chromium-review.googlesource.com"
+    assert g.resolve_patchset("https://crrev.com/c/7650974")["patchset"] == "3"
+    with pytest.raises(ValueError, match="crrev"):
+        g.resolve_patchset("https://crrev.com/c/not-a-change")
+
+
 def test_resolve_patchset_refuses_a_change_that_does_not_exist(monkeypatch):
     # fetch_ref(fetch=False) answers a URL naming a patchset without asking
     # gerrit anything, so a mistyped change resolves there and fails later,
