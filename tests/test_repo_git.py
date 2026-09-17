@@ -294,8 +294,8 @@ class TestRepoGitLog:
 def grep_repo(tmp_path, monkeypatch):
     """A repo whose matches are far enough apart to produce separate hunks.
 
-    Spacing matters: with the default context git merges nearby hits into one
-    block, and these tests are about how blocks are counted. The `regress-1-a.h`
+    Spacing matters: with context git merges nearby hits into one block, and
+    these tests are about how blocks are counted. The `regress-1-a.h`
     name is deliberate -- a path containing `-<digits>-` is what makes parsing
     git's `path-N-context` lines by regex ambiguous.
     """
@@ -337,26 +337,24 @@ def _grep(mcp, **args):
 
 
 class TestRepoGitGrep:
-    def test_context_on_by_default(self, grep_mcp):
-        # The point of the default: a hit arrives with its surroundings, so the
-        # caller does not need a follow-up read to see what it found.
+    def test_bare_hits_by_default(self, grep_mcp):
         out = _grep(grep_mcp)
+        assert "NEEDLE occurrence 0" in out
+        assert "filler" not in out
+        assert len(out.strip().splitlines()) == 4
+
+    def test_context_surrounds_each_hit(self, grep_mcp):
+        out = _grep(grep_mcp, context=5)
         assert "NEEDLE occurrence 0" in out
         assert "filler 0.0" in out  # the line after the first match
         assert "filler 0.4" in out  # ...through the 5th
         assert "filler 0.5" not in out  # but not the 6th
 
-    def test_context_zero_gives_bare_hits(self, grep_mcp):
-        out = _grep(grep_mcp, context=0)
-        assert "NEEDLE occurrence 0" in out
-        assert "filler" not in out
-        assert len(out.strip().splitlines()) == 4
-
     def test_limit_counts_blocks_not_lines(self, grep_mcp):
         # The regression this guards: `limit` used to count output LINES, so
         # with context a limit of 2 returned part of one hunk while the footer
         # claimed 2 matches. It must return two whole blocks.
-        out = _grep(grep_mcp, limit=2)
+        out = _grep(grep_mcp, context=5, limit=2)
         assert "NEEDLE occurrence 0" in out
         assert "NEEDLE occurrence 1" in out
         assert "NEEDLE occurrence 2" not in out
@@ -364,7 +362,7 @@ class TestRepoGitGrep:
 
     def test_truncation_drops_partial_trailing_block(self, grep_mcp):
         # A truncated result must not end mid-hunk: every block shown is whole.
-        out = _grep(grep_mcp, limit=1)
+        out = _grep(grep_mcp, context=5, limit=1)
         body = out.split("(truncated")[0]
         assert "NEEDLE occurrence 0" in body
         assert "NEEDLE occurrence 1" not in body
@@ -376,7 +374,7 @@ class TestRepoGitGrep:
         assert "truncated — showing first 2 matches" in out
 
     def test_no_truncation_when_limit_covers_all(self, grep_mcp):
-        assert "truncated" not in _grep(grep_mcp, limit=10)
+        assert "truncated" not in _grep(grep_mcp, context=5, limit=10)
 
     def test_no_matches(self, grep_mcp):
         assert "No matches found" in _grep(grep_mcp, pattern="ABSENTPATTERN")

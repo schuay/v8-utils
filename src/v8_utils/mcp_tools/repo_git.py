@@ -27,12 +27,10 @@ from ._shared import (
 
 _MAX_READ_LINES = 2000
 _MAX_GREP_MATCHES = 100
-# Context lines around each grep match by default. Non-zero because a bare
-# file:line pair almost never answers the question that prompted the search --
-# the caller reads the hit next, so a locate-then-read pair costs two calls
-# where one would do. Five lines is enough to see a signature, a call site, or
-# the enclosing condition; past that the results crowd out the search itself.
-_DEFAULT_GREP_CONTEXT = 5
+# Bare file:line hits by default; a caller that wants a match's surroundings
+# asks for them. A context default invites judging a hit from its few lines
+# instead of opening the definition behind it.
+_DEFAULT_GREP_CONTEXT = 0
 _MAX_LS_FILES = 500
 _MAX_LOG_LINES = 2000
 _MAX_BLAME_LINES = 1000
@@ -248,10 +246,9 @@ def register(mcp: FastMCP) -> None:
         description=(
             "Search for a pattern in a related source repo using git grep.\n"
             "\n"
-            f"Returns {_DEFAULT_GREP_CONTEXT} lines of context around each match"
-            " by default, so a hit usually answers the question without a\n"
-            "follow-up read. Pass context=0 when you only want file:line hits"
-            " (enumerating call sites, counting occurrences)."
+            "Returns bare file:line hits by default. Pass context=N to see the"
+            " lines around each match; read the definition itself with"
+            " repo_git_show."
         )
     )
     def repo_git_grep(
@@ -263,11 +260,7 @@ def register(mcp: FastMCP) -> None:
         ] = None,
         context: Annotated[
             int,
-            Field(
-                description=(
-                    "lines of context around each match; pass 0 for bare file:line hits"
-                )
-            ),
+            Field(description="lines of context around each match"),
         ] = _DEFAULT_GREP_CONTEXT,
         ignore_case: Annotated[
             bool, Field(description="case-insensitive matching")
