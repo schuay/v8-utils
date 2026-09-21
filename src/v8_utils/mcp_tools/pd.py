@@ -177,12 +177,24 @@ def register(mcp: FastMCP) -> None:
             str,
             Field(
                 description=(
-                    '"text" for a human report, or "json" for structured change'
-                    " points with candidate probabilities and resolved git"
-                    " hashes, for programmatic consumers"
+                    '"text" for a human report, or "json" for a paged envelope'
+                    " of structured change points with candidate probabilities"
+                    " and resolved git hashes, for programmatic consumers"
                 )
             ),
         ] = "text",
+        limit: Annotated[
+            int,
+            Field(
+                description=(
+                    "json only: max change points per page, ordered by"
+                    " localization confidence then magnitude"
+                )
+            ),
+        ] = 100,
+        offset: Annotated[
+            int, Field(description="json only: page offset into that order")
+        ] = 0,
     ) -> CallToolResult:
         """Scan benchmark timelines for regressions/improvements (change points).
 
@@ -195,6 +207,10 @@ def register(mcp: FastMCP) -> None:
         Narrow with benchmark/engine/metric; omitting benchmark scans all series
         (large). Shows only significant shifts. An unknown bot/benchmark value is
         rejected with the list of valid names, so a wrong guess is self-correcting.
+
+        format="json" returns {changepoints, total, offset, returned, truncated}.
+        A truncated page means points remain: advance offset by returned to read
+        the next one. Ordering is a stable total order, so pages do not overlap.
 
         """
         cfg = _load_config()
@@ -237,10 +253,12 @@ def register(mcp: FastMCP) -> None:
             if format == "json":
                 import json
 
-                from ..pd.serialize import changepoints_to_json
+                from ..pd.serialize import changepoints_to_payload
 
                 out = json.dumps(
-                    changepoints_to_json(results, commit_store, default_engine)
+                    changepoints_to_payload(
+                        results, commit_store, default_engine, limit, offset
+                    )
                 )
             else:
                 out = _render(

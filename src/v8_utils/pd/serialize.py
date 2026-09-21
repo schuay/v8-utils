@@ -10,6 +10,20 @@ dict is a wire contract. It also enriches each point with resolved git hashes
 (the consumer process has no CommitStore) and a single `localization_confidence`
 number -- the probability mass the candidate distribution puts on the chosen
 breakpoint -- which is the gate the consumer applies before reporting a point.
+
+The payload is a paged envelope rather than a bare list. An unfiltered detect
+run reports hundreds of points at ~1 KB each, and a consumer that caps tool
+output by characters (airc caps at 50k) cuts mid-string, turning a valid
+document into a decode error that loses the whole poll. A count-bounded page
+plus an explicit `truncated` flag makes the loss visible and recoverable, and
+`total` reports how much was left behind.
+
+Paging needs a total order that does not depend on detection order, so
+`_page_key` sorts by localization confidence first -- the consumer's publish
+gate, so the points it can act on come first -- then by magnitude, then by the
+series identity as a tiebreak. Detection is deterministic for fixed data, so
+pages are coherent across calls; a page taken while new data lands may drop or
+repeat a point, which the consumer's dedup absorbs and the next poll corrects.
 """
 
 from __future__ import annotations
@@ -37,6 +51,14 @@ def _localization_confidence(cp: ChangePoint) -> float:
     return 0.0
 
 
+# Abbreviation length for the hashes on the wire. Every consumer resolves a rev
+# against a real checkout before using it (airc's perf subscriber normalizes to
+# the full SHA to key its commit threads), so the full 40 chars buy nothing and
+# cost 56 per point across two fields. 12 is what the same code abbreviates to
+# for display, and stays unambiguous well past V8's history.
+_HASH_LEN = 12
+
+
 def changepoint_to_dict(
     cp: ChangePoint,
     commit_store: CommitStore | None,
@@ -48,7 +70,7 @@ def changepoint_to_dict(
         if commit_store and engine:
             info = commit_store.get(engine, commit_id)
             if info:
-                return info.hash
+                return info.hash[:_HASH_LEN]
         return ""
 
     def title_of(commit_id: int) -> str:
@@ -92,3 +114,49 @@ def changepoints_to_json(
     default_engine: str | None,
 ) -> list[dict]:
     return [changepoint_to_dict(cp, commit_store, default_engine) for cp in results]
+
+
+def _page_key(cp: ChangePoint) -> tuple:
+    """Total order over change points, for coherent paging.
+
+    Confidence descending first: it is the consumer's publish gate, so a page cut
+    short still carries every point that could have been acted on. Magnitude
+    breaks confidence ties, and the series identity breaks the rest -- without a
+    final tiebreak two equal points could swap between pages and one of them
+    would never be returned.
+    """
+    return (
+        -_localization_confidence(cp),
+        -abs(cp.pct_change),
+        cp.bot,
+        cp.benchmark,
+        cp.metric,
+        cp.variant,
+        cp.submetric,
+        cp.commit_id,
+    )
+
+
+def changepoints_to_payload(
+    results: list[ChangePoint],
+    commit_store: CommitStore | None,
+    default_engine: str | None,
+    limit: int,
+    offset: int = 0,
+) -> dict:
+    """One page of change points, ordered by `_page_key`.
+
+    `truncated` says whether points remain after this page, which is what lets a
+    consumer drain the rest by advancing `offset` -- and what distinguishes a
+    deliberate cut from the silent mid-document one a character cap would make.
+    """
+    ordered = sorted(results, key=_page_key)
+    offset = max(offset, 0)
+    page = ordered[offset : offset + limit] if limit > 0 else []
+    return {
+        "changepoints": changepoints_to_json(page, commit_store, default_engine),
+        "total": len(ordered),
+        "offset": offset,
+        "returned": len(page),
+        "truncated": offset + len(page) < len(ordered),
+    }
