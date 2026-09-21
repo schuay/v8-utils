@@ -7,6 +7,7 @@ from v8_utils.pd.serialize import (
     changepoint_to_dict,
     changepoints_to_json,
     changepoints_to_payload,
+    filter_by_localization,
 )
 
 
@@ -166,3 +167,30 @@ def test_order_is_total_so_equal_points_do_not_swap_between_pages():
     also_first = _payload([b, a], limit=1)["changepoints"]
     assert first[0]["series"]["benchmark"] == "aaa"
     assert also_first[0]["series"]["benchmark"] == "aaa"
+
+
+def _conf(cid, prob):
+    return _cp(commit_id=cid, candidates=[(cid, prob)])
+
+
+def test_localization_filter_keeps_points_at_or_above_the_floor():
+    points = [_conf(300, 0.4), _conf(301, 0.75), _conf(302, 0.9)]
+    kept = filter_by_localization(points, 0.75)
+    assert [cp.commit_id for cp in kept] == [301, 302]
+
+
+def test_localization_filter_of_zero_keeps_everything():
+    # The default. An unlocalized point reads as 0.0 confidence, so a floor of 0
+    # must not quietly drop it.
+    points = [_conf(300, 0.4), _cp(commit_id=999)]  # 999 is not among candidates
+    assert len(filter_by_localization(points, 0.0)) == 2
+
+
+def test_filtered_points_do_not_count_towards_the_total():
+    # total reports what matched the query, so a consumer paging on it is not
+    # told to fetch pages that the gate already emptied.
+    points = [_conf(300, 0.4), _conf(301, 0.9)]
+    out = changepoints_to_payload(
+        filter_by_localization(points, 0.75), None, None, limit=10
+    )
+    assert out["total"] == 1 and out["truncated"] is False

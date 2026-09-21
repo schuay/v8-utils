@@ -59,6 +59,27 @@ def _localization_confidence(cp: ChangePoint) -> float:
 _HASH_LEN = 12
 
 
+def filter_by_localization(
+    results: list[ChangePoint], min_confidence: float
+) -> list[ChangePoint]:
+    """Drop points whose breakpoint is not localized to at least `min_confidence`.
+
+    A consumer that only acts on well-localized points (airc's perf watcher gates
+    at 0.75, because a fuzzy point's commit wanders as data accrues and so cannot
+    be a dedup key) would otherwise receive every fuzzy point, page it across the
+    wire, and discard it. Applying the gate here instead means the points that
+    cross are the points that matter -- and since detection is stateless and
+    re-runs per page, it cuts the paging that dominates a poll.
+
+    Confidence is derived from the candidate distribution alone, so this runs
+    before commit hashes are resolved and never suppresses a point for being
+    merely unsynced.
+    """
+    if min_confidence <= 0:
+        return list(results)
+    return [cp for cp in results if _localization_confidence(cp) >= min_confidence]
+
+
 def changepoint_to_dict(
     cp: ChangePoint,
     commit_store: CommitStore | None,

@@ -20,6 +20,7 @@ from ..pd.compare import compare_snapshots
 from ..pd.detect import detect_from_df
 from ..pd.engines import sync_engine
 from ..pd.models import AnalysisConfig, AtConfig
+from ..pd.serialize import changepoints_to_payload, filter_by_localization
 from ._shared import _text_result
 
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
@@ -183,6 +184,16 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = "text",
+        min_localization_confidence: Annotated[
+            float,
+            Field(
+                description=(
+                    "drop points whose breakpoint is localized to less than this"
+                    " probability (0 keeps all); use it when only well-localized"
+                    " points are actionable"
+                )
+            ),
+        ] = 0.0,
         limit: Annotated[
             int,
             Field(
@@ -211,6 +222,8 @@ def register(mcp: FastMCP) -> None:
         format="json" returns {changepoints, total, offset, returned, truncated}.
         A truncated page means points remain: advance offset by returned to read
         the next one. Ordering is a stable total order, so pages do not overlap.
+        min_localization_confidence gates on how sharply a point is pinned to one
+        commit, and applies to both formats.
 
         """
         cfg = _load_config()
@@ -249,11 +262,12 @@ def register(mcp: FastMCP) -> None:
                 fetched = fetched[fetched["engine"] == engine]
 
             results = detect_from_df(fetched, config)
+            # Before autosync: a fuzzy point must not trigger a fetch for a hash
+            # that will not be reported anyway.
+            results = filter_by_localization(results, min_localization_confidence)
             _autosync_commits(commit_store, results, default_engine)
             if format == "json":
                 import json
-
-                from ..pd.serialize import changepoints_to_payload
 
                 out = json.dumps(
                     changepoints_to_payload(
