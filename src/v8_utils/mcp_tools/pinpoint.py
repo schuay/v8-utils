@@ -8,7 +8,6 @@ from pydantic import Field
 
 from ..api import pinpoint as pinpoint_mod
 from ..api import repo_git
-from ..api.concurrency import run_concurrent as _run_concurrent
 from ..api.pinpoint import (
     create_pinpoint_jobs,
     fetch_job_details_sorted,
@@ -52,14 +51,11 @@ BOT_ARG = (
 
 def _format_job_list(jobs: list[dict]) -> str:
     """Format job list as compact text (mirrors pp's list-jobs output)."""
-    import concurrent.futures
-
-    patches = [j.get("experiment_patch") or "" for j in jobs]
-    with concurrent.futures.ThreadPoolExecutor() as ex:
-        subjects = list(ex.map(pinpoint_mod.subject_or_none, patches))
+    subjects = pinpoint_mod.patch_subjects([j.get("experiment_patch") for j in jobs])
 
     blocks = []
-    for j, subject in zip(jobs, subjects):
+    for j in jobs:
+        subject = subjects.get(j.get("experiment_patch"))
         created = (j.get("created") or "")[:16].replace("T", " ")
         status = j.get("status") or "?"
         url = j.get("url") or ""
@@ -97,12 +93,19 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             return _text_result("No job URLs provided.")
 
         paired = fetch_job_details_sorted(urls)
+        subjects = pinpoint_mod.patch_subjects(
+            [d.get("experiment_patch") for _, d in paired]
+        )
         blocks = []
         for jid, detail in paired:
             if "error" in detail:
                 blocks.append(f"Error fetching {jid}: {detail['error']}")
             else:
-                blocks.append(format_job_detail(detail))
+                blocks.append(
+                    format_job_detail(
+                        detail, subjects.get(detail.get("experiment_patch"))
+                    )
+                )
         return _text_result("\n\n".join(blocks))
 
     @mcp.tool()
@@ -268,13 +271,8 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         job_ids = [jid for jid, _ in paired]
         detail_map = dict(paired)
 
-        fns = [
-            lambda jid=jid: format_results_table(
-                jid, False, use_cas, job=detail_map.get(jid)
-            )
-            for jid in job_ids
-        ]
-        tables = _run_concurrent(fns)
+        results = pinpoint_mod.fetch_job_results(job_ids, detail_map, use_cas)
+        tables = [format_results_table(r, False) for r in results]
 
         multi = len(job_ids) > 1
         blocks = []

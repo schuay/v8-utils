@@ -1,7 +1,5 @@
 """Text for Pinpoint jobs and their results, with optional ANSI colour."""
 
-import logging
-
 from rich import box
 from rich.console import Console
 from rich.table import Table
@@ -15,12 +13,18 @@ _CYAN = "\033[36m"
 _RESET = "\033[0m"
 
 
-def results_header(job: dict, ansi: bool = False) -> str:
-    """Build the header lines (bot/benchmark/patch/flags) for a results table."""
+def results_header(
+    job: dict, subjects: dict[str, str | None] | None = None, ansi: bool = False
+) -> str:
+    """Build the header lines (bot/benchmark/patch/flags) for a results table.
+
+    subjects: patch URL to subject, for the patches the job names.
+    """
+    subjects = subjects or {}
     experiment_patch_url = job.get("experiment_patch")
-    experiment_patch_subject = pinpoint.subject_or_none(experiment_patch_url)
+    experiment_patch_subject = subjects.get(experiment_patch_url)
     base_patch_url = job.get("base_patch")
-    base_patch_subject = pinpoint.subject_or_none(base_patch_url)
+    base_patch_subject = subjects.get(base_patch_url)
     base_hash = job.get("base_git_hash")
     base_flags = job.get("base_extra_args")
     exp_flags = job.get("experiment_extra_args")
@@ -67,50 +71,32 @@ def results_header(job: dict, ansi: bool = False) -> str:
 
 
 def format_results_table(
-    job_id: str,
+    results: pinpoint.JobResults,
     show_all: bool,
-    use_cas: bool,
     compact: bool = False,
-    job: dict | None = None,
     ansi: bool = False,
 ) -> str | None:
     """Format a results table for a single job. Returns None if no results.
 
-    job:  pre-fetched job detail dict (avoids re-fetching for header).
     ansi: if True, embed ANSI escape codes for colored terminal output.
 
-    Returns an error string (not raises) on failure so multi-job batches
-    can continue.
+    A job whose results could not be read renders as its error, so a
+    multi-job batch still shows the others.
     """
-    try:
-        all_rows = (
-            pinpoint.pivot_results_cas(job_id)
-            if use_cas
-            else pinpoint.pivot_results(job_id)
-        )
-    except Exception as e:
-        logging.getLogger("v8-utils").debug(
-            "pivot_results failed for %s", job_id, exc_info=True
-        )
-        return f"Error: {e}"
+    if results.error is not None:
+        return f"Error: {results.error}"
+    all_rows = results.rows
     if not all_rows:
         return None
 
     rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
     omitted = len(all_rows) - len(rows)
-    if job is None:
-        try:
-            job = pinpoint.fetch_job_detail(job_id)
-        except Exception:
-            logging.getLogger("v8-utils").debug(
-                "fetch_job_detail failed for %s", job_id, exc_info=True
-            )
-            job = {}
+    job = results.job
 
     d, r = (_DIM, _RESET) if ansi else ("", "")
 
     if not rows:
-        header = results_header(job, ansi=ansi)
+        header = results_header(job, results.subjects, ansi=ansi)
         no_sig = (
             f"{d}(no statistically significant results){r}"
             if ansi
@@ -186,7 +172,7 @@ def format_results_table(
         console.print(table, end="")
     table_text = capture.get()
 
-    header = results_header(job, ansi=ansi)
+    header = results_header(job, results.subjects, ansi=ansi)
     lines: list[str] = [header] if header else []
     lines.append(table_text)
     if omitted:
@@ -197,14 +183,16 @@ def format_results_table(
     return "\n".join(lines)
 
 
-def format_job_detail(j: dict) -> str:
-    """Format a job dict as compact text (mirrors pp's _print_job without ANSI)."""
+def format_job_detail(j: dict, patch_subject: str | None = None) -> str:
+    """Format a job dict as compact text (mirrors pp's _print_job without ANSI).
+
+    patch_subject: the subject of the job's experiment patch, if known.
+    """
     created = (j.get("created") or "")[:16].replace("T", " ")
     status = j.get("status") or "?"
     url = j.get("url") or ""
 
     patch_url = j.get("experiment_patch")
-    patch_subject = pinpoint.subject_or_none(patch_url)
 
     lines = [f"{created}  {status}  {url}"]
     # Merged bot + benchmark line

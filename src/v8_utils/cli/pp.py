@@ -20,7 +20,6 @@ import sys
 from datetime import datetime
 
 from ..api import config, pinpoint, watch
-from ..api.concurrency import run_concurrent as _run_concurrent
 from ..api.pinpoint import (
     create_pinpoint_jobs,
     fetch_job_details_sorted,
@@ -148,7 +147,7 @@ def _progress_ctx(label: str, total: int | None = None):
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 
-def _print_job(j: dict) -> None:
+def _print_job(j: dict, patch_subject: str | None) -> None:
     url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.get('job_id')}{_RESET}"
     created = (j.get("created") or "")[:16].replace("T", " ")
     status = j.get("status") or "?"
@@ -156,7 +155,6 @@ def _print_job(j: dict) -> None:
     print()
 
     patch_url = j.get("experiment_patch")
-    patch_subject = pinpoint.subject_or_none(patch_url)
 
     # Merged bot + benchmark line
     header_parts = []
@@ -208,13 +206,14 @@ def _print_job(j: dict) -> None:
 def _cmd_show_job(args: argparse.Namespace) -> None:
     with _progress_ctx("Fetching jobs", total=len(args.job_urls)) as on_progress:
         paired = fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
+    subjects = pinpoint.patch_subjects([d.get("experiment_patch") for _, d in paired])
     for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
         if "error" in detail:
             print(f"Error fetching {jid}: {detail['error']}")
         else:
-            _print_job(detail)
+            _print_job(detail, subjects.get(detail.get("experiment_patch")))
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
@@ -264,28 +263,27 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             if not jobs:
                 pass
             else:
-                patches = [j.get("experiment_patch") or "" for j in jobs]
-                fns = [lambda p=p: pinpoint.subject_or_none(p) for p in patches]
-                t2 = progress.add_task("Fetching details", total=len(fns))
-                subjects = _run_concurrent(
-                    fns, lambda done, total: progress.update(t2, completed=done)
+                t2 = progress.add_task("Fetching details", total=None)
+                subjects = pinpoint.patch_subjects(
+                    [j.get("experiment_patch") for j in jobs],
+                    lambda done, total: progress.update(
+                        t2, completed=done, total=total
+                    ),
                 )
     else:
         jobs = fetch_jobs_list(
             count=args.recent, user=user, filters=filters or None, since=since
         )
-        patches = [j.get("experiment_patch") or "" for j in jobs] if jobs else []
-        fns = [lambda p=p: pinpoint.subject_or_none(p) for p in patches]
-        subjects = _run_concurrent(fns) if fns else []
+        subjects = pinpoint.patch_subjects([j.get("experiment_patch") for j in jobs])
 
     if not jobs:
         print("No jobs found.")
         return
     # Display oldest first (API returns newest first).
     jobs.reverse()
-    subjects = list(reversed(subjects))
 
-    for j, subject in zip(jobs, subjects):
+    for j in jobs:
+        subject = subjects.get(j.get("experiment_patch"))
         created = (j.get("created") or "")[:16].replace("T", " ")
         status = j.get("status") or "?"
         url = j.get("url") or ""
@@ -396,23 +394,18 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
     detail_map = dict(paired)
 
     use_ansi = bool(_CYAN)
-    fns = [
-        lambda jid=jid: format_results_table(
-            jid,
-            args.show_all,
-            args.use_cas,
-            args.compact,
-            job=detail_map.get(jid),
-            ansi=use_ansi,
-        )
-        for jid in job_ids
-    ]
     if progress:
-        t_results = progress.add_task("Fetching results", total=len(fns))
-    tables = _run_concurrent(
-        fns,
+        t_results = progress.add_task("Fetching results", total=len(job_ids))
+    results = pinpoint.fetch_job_results(
+        job_ids,
+        detail_map,
+        args.use_cas,
         (lambda d, t: progress.update(t_results, completed=d)) if progress else None,
     )
+    tables = [
+        format_results_table(r, args.show_all, args.compact, ansi=use_ansi)
+        for r in results
+    ]
     if progress:
         progress.stop()
 
@@ -484,7 +477,7 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             print(f"{_DIM}[{index + 1}/{total}] {' / '.join(parts)}{_RESET}")
         if job.get("job_id"):
             created_job_ids.append(job["job_id"])
-            _print_job(job)
+            _print_job(job, pinpoint.subject_or_none(job.get("experiment_patch")))
         else:
             _out(job)
 

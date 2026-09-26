@@ -6,7 +6,7 @@ import logging
 import subprocess
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from . import config
@@ -410,3 +410,74 @@ def cancel_jobs(
             )
 
     return _run_concurrent([lambda u=u: cancel(u) for u in job_urls], on_progress)
+
+
+@dataclass(frozen=True)
+class JobResults:
+    """Everything a results table for one job shows, already fetched."""
+
+    job_id: str
+    #: Result rows as pivot_results returns them; empty when the job has none.
+    rows: list[dict]
+    #: Why the rows could not be read, else None.
+    error: str | None = None
+    #: The job's details; {} when they could not be read.
+    job: dict = field(default_factory=dict)
+    #: The subject of each patch the job names, by patch URL; None when unknown.
+    subjects: dict[str, str | None] = field(default_factory=dict)
+
+
+def fetch_job_results(
+    job_ids: list[str],
+    details: dict[str, dict] | None = None,
+    use_cas: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[JobResults]:
+    """Rows, details and patch subjects for each job, one job per worker.
+
+    details: job details already fetched, by job id; the rest are fetched here.
+    A failure is recorded on its job rather than raised, so a batch shows what
+    it can. Details and subjects are fetched only for a job that has rows.
+    """
+    details = details or {}
+    log = logging.getLogger("v8-utils")
+
+    def fetch(job_id: str) -> JobResults:
+        try:
+            rows = (
+                pinpoint.pivot_results_cas(job_id)
+                if use_cas
+                else pinpoint.pivot_results(job_id)
+            )
+        except Exception as e:
+            log.debug("pivot_results failed for %s", job_id, exc_info=True)
+            return JobResults(job_id=job_id, rows=[], error=str(e))
+        if not rows:
+            return JobResults(job_id=job_id, rows=[])
+        job = details.get(job_id)
+        if job is None:
+            try:
+                job = fetch_job_detail(job_id)
+            except Exception:
+                log.debug("fetch_job_detail failed for %s", job_id, exc_info=True)
+                job = {}
+        patches = [p for p in (job.get("experiment_patch"), job.get("base_patch")) if p]
+        return JobResults(
+            job_id=job_id,
+            rows=rows,
+            job=job,
+            subjects={p: pinpoint.subject_or_none(p) for p in patches},
+        )
+
+    return _run_concurrent([lambda j=j: fetch(j) for j in job_ids], on_progress)
+
+
+def patch_subjects(
+    patch_urls: list[str | None],
+    on_progress: Callable[[int, int], None] | None = None,
+) -> dict[str, str | None]:
+    """The subject of each distinct patch URL, fetched concurrently; None where
+    it could not be read. Empty entries are skipped."""
+    unique = list(dict.fromkeys(p for p in patch_urls if p))
+    fns = [lambda p=p: pinpoint.subject_or_none(p) for p in unique]
+    return dict(zip(unique, _run_concurrent(fns, on_progress)))
