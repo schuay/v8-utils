@@ -497,8 +497,9 @@ def test_cq_of_a_merged_external_cl_only_for_the_landed_patchset(
 def test_resolve_refuses_an_open_untrusted_cl(gerrit_api):
     trust.configure(DOMAINS)
     gerrit_api["change"] = _change(owner=UNTRUSTED)
-    with pytest.raises(ValueError, match="not shown"):
+    with pytest.raises(api_gerrit.UntrustedGerritContent, match="not shown") as exc:
         gerrit.resolve_patchset("https://chromium-review.googlesource.com/c/v8/v8/+/7")
+    assert exc.value.code == "untrusted_gerrit_content"
     assert all("DETAILED_ACCOUNTS" in p for p in gerrit_api["paths"])
 
 

@@ -214,6 +214,12 @@ class FetchedRef:
     fetch_head: str | None = None
 
 
+class UntrustedGerritContent(ValueError):
+    """A read refused because its Gerrit author policy did not trust it."""
+
+    code = "untrusted_gerrit_content"
+
+
 # ── URL parsing ───────────────────────────────────────────────────────────────
 
 
@@ -559,7 +565,7 @@ def require_trusted_change(api_base: str, cid: str, label: str) -> dict | None:
         return None
     change = _change_for_trust(api_base, cid)
     if reason := trust.untrusted_change_reason(change):
-        raise ValueError(f"CL {label} is not shown: {reason}.")
+        raise UntrustedGerritContent(f"CL {label} is not shown: {reason}.")
     return change
 
 
@@ -574,7 +580,9 @@ def require_trusted_patchset(
         return
     change = _change_for_trust(api_base, cid)
     if reason := trust.untrusted_patchset_reason(change, patchset):
-        raise ValueError(f"CL {label} patchset {patchset} is not shown: {reason}.")
+        raise UntrustedGerritContent(
+            f"CL {label} patchset {patchset} is not shown: {reason}."
+        )
 
 
 def _redact_change(change: dict, out: Change) -> Change:
@@ -1208,7 +1216,9 @@ def resolve_patchset(change_url: str) -> Patchset:
     patchset = str(rev.get("_number", url_patchset or 1))
     # The pin exists to be fetched and read, around every other read path here.
     if reason := trust.untrusted_patchset_reason(data, patchset):
-        raise ValueError(f"CL {change_id} patchset {patchset} is not shown: {reason}.")
+        raise UntrustedGerritContent(
+            f"CL {change_id} patchset {patchset} is not shown: {reason}."
+        )
     last_two = change_id[-2:].zfill(2)
     return Patchset(
         ref=f"refs/changes/{last_two}/{change_id}/{patchset}",
