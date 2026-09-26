@@ -32,6 +32,10 @@ RENDER = "v8_utils.render"
 API = "v8_utils.api"
 UPPER = (API, RENDER, *FRONTENDS)
 
+# Rendering formats results the api computed; a renderer that imports a
+# statistics library is doing analysis the api's callers cannot get as data.
+ANALYSIS_LIBS = ("numpy", "ruptures", "scipy", "statistics")
+
 
 def _module_name(path: Path) -> str:
     parts = list(path.relative_to(SRC).with_suffix("").parts)
@@ -96,6 +100,26 @@ def _violations() -> dict[str, set[str]]:
         if bad:
             out[importer] = bad
     return out
+
+
+def _top_level_imports(path: Path) -> set[str]:
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            found.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            found.add(node.module.split(".")[0])
+    return found
+
+
+def test_renderers_do_no_analysis():
+    render_dir = PKG / "render"
+    bad = {
+        _module_name(path): sorted(_top_level_imports(path) & set(ANALYSIS_LIBS))
+        for path in sorted(render_dir.rglob("*.py"))
+        if _top_level_imports(path) & set(ANALYSIS_LIBS)
+    }
+    assert not bad, f"renderers importing analysis libraries: {bad}"
 
 
 def test_imports_follow_the_layering():

@@ -22,7 +22,8 @@ import sys
 from rich.console import Console
 
 from ..api import config as cfg_module
-from ..api.jsb import Variant, format_table, run_perf, run_round_robin, run_v8log
+from ..api.jsb import Variant, compare, run_perf, run_round_robin, run_v8log
+from ..render.jsb import format_comparison
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -220,12 +221,8 @@ examples:
     if progress:
         progress.stop()
     print(
-        format_table(
-            lineitems,
-            suite,
-            args.runs,
-            variants,
-            results,
+        format_comparison(
+            compare(lineitems, suite, args.runs, variants, results),
             show_all=args.show_all,
             ansi=sys.stderr.isatty(),
         )

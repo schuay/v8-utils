@@ -12,9 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, stdev
 
-from rich import box
-from rich.console import Console
-from rich.table import Table
 from scipy.stats import ttest_ind
 
 from . import config
@@ -242,15 +239,6 @@ def _metric_sort_key(metric: str) -> tuple[int, str, int, str]:
     return (0 if bench == "Overall" else 1, bench, rank, sub)
 
 
-def _fmt_stat(vals: list[float]) -> str:
-    if len(vals) == 1:
-        return f"{vals[0]:.2f}"
-    m = mean(vals)
-    s = stdev(vals)
-    pct = 100 * s / m if m else 0.0
-    return f"{m:.2f} ±{pct:.1f}%"
-
-
 def _p_confidence(p: float) -> str:
     """Map a p-value to a human-readable confidence level."""
     if p < 0.01:
@@ -260,142 +248,107 @@ def _p_confidence(p: float) -> str:
     return "low"
 
 
-def _fmt_delta(base: list[float], exp: list[float]) -> tuple[str, float | None, str]:
-    """Return (delta_str, p_value, confidence). Welch's t-test."""
+@dataclass(frozen=True)
+class Stats:
+    """One variant's runs of one metric."""
+
+    values: list[float]
+    mean: float
+    #: 0.0 for a single run.
+    stdev: float
+    #: stdev as a percentage of the mean; 0.0 when the mean is 0.
+    stdev_pct: float
+
+
+@dataclass(frozen=True)
+class Delta:
+    """An experiment variant against the base variant, for one metric."""
+
+    #: (experiment - base) / base, in percent; None when the base mean is 0.
+    pct: float | None
+    #: Welch's t-test; None with fewer than two runs on either side, or when
+    #: pct is None.
+    p_value: float | None
+    #: "high", "medium" or "low" from the p-value; "" without one.
+    confidence: str
+
+    @property
+    def significant(self) -> bool:
+        return self.p_value is not None and self.p_value < 0.05
+
+
+@dataclass(frozen=True)
+class MetricComparison:
+    metric: str
+    #: Per variant, base first; None where the variant reported no value.
+    stats: list[Stats | None]
+    #: Per experiment variant; None where either side reported no value.
+    deltas: list[Delta | None]
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """A JetStream run of one or more variants, analysed per metric."""
+
+    lineitems: list[str] | None
+    suite: str
+    runs: int
+    #: Variant labels, base first.
+    labels: list[str]
+    #: Suite aggregates first, then grouped by benchmark, Score leading.
+    metrics: list[MetricComparison]
+
+
+def stats(values: list[float]) -> Stats:
+    m = mean(values)
+    s = stdev(values) if len(values) > 1 else 0.0
+    return Stats(values=values, mean=m, stdev=s, stdev_pct=100 * s / m if m else 0.0)
+
+
+def delta(base: list[float], exp: list[float]) -> Delta:
     bm, em = mean(base), mean(exp)
     if bm == 0:
-        return "N/A", None, ""
-    d = 100 * (em - bm) / bm
-    delta = f"{'+' if d > 0 else ''}{d:.1f}%"
+        return Delta(pct=None, p_value=None, confidence="")
+    pct = 100 * (em - bm) / bm
     if len(base) >= 2 and len(exp) >= 2:
         _, p = ttest_ind(base, exp, equal_var=False)
-        return delta, float(p), _p_confidence(p)
-    return delta, None, ""
+        return Delta(pct=pct, p_value=float(p), confidence=_p_confidence(p))
+    return Delta(pct=pct, p_value=None, confidence="")
 
 
-def format_table(
+def compare(
     lineitems: list[str] | None,
     suite: str,
-    n: int,
+    runs: int,
     variants: list[Variant],
     results: list[dict[str, list[float]]],
-    show_all: bool = False,
-    ansi: bool = False,
-) -> str:
+) -> Comparison:
+    """Per-metric statistics for each variant, and each experiment variant
+    against the first."""
     all_metrics: set[str] = set()
     for r in results:
         all_metrics.update(r.keys())
-    ordered = sorted(all_metrics, key=_metric_sort_key)
-
-    has_comparison = len(variants) >= 2
-
-    table = Table(box=box.SIMPLE, show_header=True, header_style="bold", padding=(0, 1))
-    table.add_column("metric")
-    table.add_column(variants[0].label, justify="right")
-    for v in variants[1:]:
-        table.add_column(v.label, justify="right")
-        table.add_column("chg%", justify="right")
-        table.add_column("p", justify="right")
-        table.add_column("confidence", justify="right")
-
-    omitted = 0
-    for metric in ordered:
+    metrics = []
+    for metric in sorted(all_metrics, key=_metric_sort_key):
         base_vals = results[0].get(metric, [])
-        cells: list[str] = [metric, _fmt_stat(base_vals) if base_vals else "N/A"]
-        any_sig = False
-        for i in range(1, len(variants)):
-            exp_vals = results[i].get(metric, [])
-            cells.append(_fmt_stat(exp_vals) if exp_vals else "N/A")
-            if base_vals and exp_vals:
-                delta, p, conf = _fmt_delta(base_vals, exp_vals)
-                # JetStream: bigger is always better
-                if delta.startswith("+"):
-                    style = "green"
-                elif delta.startswith("-"):
-                    style = "red"
-                else:
-                    style = ""
-                cells.append(f"[{style}]{delta}[/]" if style else delta)
-                cells.append(f"{p:.4f}" if p is not None else "")
-                cells.append(conf)
-                if p is not None and p < 0.05:
-                    any_sig = True
-            else:
-                cells.extend(["", "", ""])
-        if not has_comparison or show_all or any_sig:
-            table.add_row(*cells)
-        else:
-            omitted += 1
-
-    console = Console(
-        no_color=not ansi, highlight=False, width=200, force_terminal=ansi
+        per_variant = [stats(r[metric]) if r.get(metric) else None for r in results]
+        deltas = [
+            delta(base_vals, r[metric]) if base_vals and r.get(metric) else None
+            for r in results[1:]
+        ]
+        metrics.append(MetricComparison(metric, per_variant, deltas))
+    return Comparison(
+        lineitems=lineitems,
+        suite=suite,
+        runs=runs,
+        labels=[v.label for v in variants],
+        metrics=metrics,
     )
-    with console.capture() as capture:
-        console.print(table, end="")
-    table_text = capture.get()
-
-    title = ", ".join(lineitems) if lineitems else "full suite"
-    lines = [f"{title}  ({suite}, {n} run{'s' if n > 1 else ''})"]
-    lines.append(table_text)
-    if omitted:
-        d, r = ("\033[2m", "\033[0m") if ansi else ("", "")
-        lines.append(
-            f"{d}({omitted} non-significant result"
-            f"{'s' if omitted != 1 else ''} omitted"
-            f" — pass --show-all for all results){r}"
-        )
-    return "\n".join(lines)
 
 
-# ---------- Stats helper (used by MCP tool) ----------
-
-
-def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
-    """Convert raw run lists to per-variant summary dicts for MCP output."""
-    out = []
-    for r in results:
-        variant_summary: dict[str, dict] = {}
-        for metric, vals in r.items():
-            m = mean(vals)
-            s = stdev(vals) if len(vals) > 1 else 0.0
-            variant_summary[metric] = {
-                "values": vals,
-                "mean": round(m, 3),
-                "stdev": round(s, 3),
-                "stdev_pct": round(100 * s / m, 2) if m else 0.0,
-            }
-        out.append(variant_summary)
-
-    # Attach p-values and confidence when there are exactly two variants
-    if len(results) == 2:
-        a, b = results
-        for metric in a.keys() & b.keys():
-            va, vb = a[metric], b[metric]
-            if len(va) >= 2 and len(vb) >= 2:
-                _, p = ttest_ind(va, vb, equal_var=False)
-                p = float(p)
-                for side in (0, 1):
-                    out[side][metric]["p_value"] = round(p, 4)
-                    out[side][metric]["confidence"] = _p_confidence(p)
-
-    return out
-
-
-# ---------- CLI ----------
-
-
-def jsb_run_bench(
-    lineitems: list[str] | None = None,
-    binaries: list[str] = [],
-    runs: int = 5,
-    suite: str = "js3",
-    record: str | None = None,
-) -> str:
-    """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
-
-    Returns a comparison table with mean, stdev, delta, p-value
-    (Welch's t-test), and confidence (high/medium/low) per metric.
-    """
+def _bench_setup(binaries: list[str], suite: str):
+    """Validate the suite checkout and the binaries; the config, suite directory,
+    suite label, whether it is JetStream3, and the variants."""
     cfg = config.load()
     js3 = suite.lower() != "js2"
     key = "js3" if js3 else "js2"
@@ -437,24 +390,44 @@ def jsb_run_bench(
         if not d8.exists():
             raise ValueError(f"binary not found: {d8}")
 
-    if record is not None:
-        _RECORD_MODES = ("perf", "perf_upload", "v8log")
-        if record not in _RECORD_MODES:
-            raise ValueError(f"record must be one of {_RECORD_MODES}, got {record!r}")
-        if len(variants) != 1:
-            raise ValueError("record mode requires exactly one binary")
-        v = variants[0]
-        if record == "v8log":
-            return str(run_v8log(v, suite_dir, lineitems, cfg.v8_out))
-        return run_perf(
-            v,
-            suite_dir,
-            lineitems,
-            cfg.v8_out,
-            cfg.perf_script,
-            upload=(record == "perf_upload"),
-        )
+    return cfg, suite_dir, suite_label, js3, variants
 
+
+def jsb_record(
+    lineitems: list[str] | None,
+    binaries: list[str],
+    suite: str,
+    record: str,
+) -> str:
+    """Record one binary's run of a JetStream story: "perf" or "perf_upload"
+    returns the perf result, "v8log" the path of the recorded v8.log."""
+    cfg, suite_dir, _, _, variants = _bench_setup(binaries, suite)
+    _RECORD_MODES = ("perf", "perf_upload", "v8log")
+    if record not in _RECORD_MODES:
+        raise ValueError(f"record must be one of {_RECORD_MODES}, got {record!r}")
+    if len(variants) != 1:
+        raise ValueError("record mode requires exactly one binary")
+    v = variants[0]
+    if record == "v8log":
+        return str(run_v8log(v, suite_dir, lineitems, cfg.v8_out))
+    return run_perf(
+        v,
+        suite_dir,
+        lineitems,
+        cfg.v8_out,
+        cfg.perf_script,
+        upload=(record == "perf_upload"),
+    )
+
+
+def jsb_compare(
+    lineitems: list[str] | None,
+    binaries: list[str],
+    runs: int = 5,
+    suite: str = "js3",
+) -> Comparison:
+    """Run a JetStream2/3 story `runs` times per binary, round robin, and
+    compare the variants per metric (Welch's t-test against the first)."""
+    cfg, suite_dir, suite_label, js3, variants = _bench_setup(binaries, suite)
     results = run_round_robin(variants, suite_dir, lineitems, runs, js3, cfg.v8_out)
-
-    return format_table(lineitems, suite_label, runs, variants, results)
+    return compare(lineitems, suite_label, runs, variants, results)

@@ -6,14 +6,31 @@ import pytest
 
 from v8_utils.jsb import (
     Variant,
-    _fmt_delta,
-    _fmt_stat,
     _p_confidence,
-    format_table,
+    compare,
+    delta,
     parse_js2,
     parse_js3,
-    summarise,
+    stats,
 )
+from v8_utils.render.jsb import _fmt_pct, format_comparison
+from v8_utils.render.jsb import _fmt_stat as _render_stat
+
+
+def _fmt_stat(values):
+    return _render_stat(stats(values))
+
+
+def _fmt_delta(base, exp):
+    d = delta(base, exp)
+    return _fmt_pct(d), d.p_value, d.confidence
+
+
+def format_table(lineitems, suite, n, variants, results, show_all=False, ansi=False):
+    """Analyse, then format, as jsb and the MCP tool do."""
+    return format_comparison(
+        compare(lineitems, suite, n, variants, results), show_all=show_all, ansi=ansi
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -366,30 +383,85 @@ class TestFormatTable:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# summarise
+# compare
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-class TestSummarise:
+class TestCompare:
     def test_single_variant(self):
-        results = [{"Score": [100.0, 102.0, 98.0]}]
-        out = summarise(results)
-        assert len(out) == 1
-        assert "Score" in out[0]
-        assert out[0]["Score"]["mean"] == 100.0
-        assert "p_value" not in out[0]["Score"]
+        c = compare(
+            None, "JS3", 3, [Variant(build="a")], [{"Score": [100.0, 102.0, 98.0]}]
+        )
+        (m,) = c.metrics
+        assert m.stats[0].mean == 100.0
+        assert m.deltas == []
 
-    def test_two_variants_adds_p_and_confidence(self):
+    def test_two_variants_carry_p_and_confidence(self):
         results = [
             {"Score": [100.0, 101.0, 99.0]},
             {"Score": [200.0, 201.0, 199.0]},
         ]
-        out = summarise(results)
-        assert "p_value" in out[0]["Score"]
-        assert "confidence" in out[0]["Score"]
-        assert out[0]["Score"]["confidence"] == "high"
-        # Both sides get the same values
-        assert out[0]["Score"]["p_value"] == out[1]["Score"]["p_value"]
+        c = compare(None, "JS3", 3, [Variant(build="a"), Variant(build="b")], results)
+        (d,) = c.metrics[0].deltas
+        assert d.confidence == "high" and d.significant
+        assert round(d.pct, 1) == 100.0
+
+    def test_single_run_has_no_p(self):
+        c = compare(
+            None,
+            "JS3",
+            1,
+            [Variant(build="a"), Variant(build="b")],
+            [{"Score": [100.0]}, {"Score": [200.0]}],
+        )
+        (d,) = c.metrics[0].deltas
+        assert d.p_value is None and not d.significant
+
+    def test_stdev_pct(self):
+        assert stats([100.0, 100.0]).stdev_pct == 0.0
+        assert stats([100.0]).stdev == 0.0
+
+    def test_disjoint_metrics(self):
+        c = compare(
+            None,
+            "JS3",
+            2,
+            [Variant(build="a"), Variant(build="b")],
+            [{"A": [1.0, 2.0]}, {"B": [3.0, 4.0]}],
+        )
+        by_name = {m.metric: m for m in c.metrics}
+        assert by_name["A"].stats[1] is None and by_name["A"].deltas == [None]
+        assert by_name["B"].stats[0] is None and by_name["B"].deltas == [None]
+
+    def test_labels_follow_the_variants(self):
+        c = compare(
+            None,
+            "JS3",
+            1,
+            [Variant(build="a"), Variant(build="b", flags="--f")],
+            [{}, {}],
+        )
+        assert c.labels == ["a", "b [--f]"]
+
+
+class TestRenderingDoesNoAnalysis:
+    def test_format_runs_no_statistics(self, monkeypatch):
+        import v8_utils.jsb as jsb_mod
+
+        c = compare(
+            ["bench"],
+            "JS3",
+            2,
+            [Variant(build="a"), Variant(build="b")],
+            [{"Score": [100.0, 101.0]}, {"Score": [110.0, 111.0]}],
+        )
+
+        def boom(*a, **k):
+            raise AssertionError("rendering ran a statistic")
+
+        for name in ("ttest_ind", "mean", "stdev"):
+            monkeypatch.setattr(jsb_mod, name, boom)
+        assert "chg%" in format_comparison(c, show_all=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -432,20 +504,3 @@ class TestCliArgs:
         args = self._parse(["regexp-octane", "-b", "release"])
         lineitems = args.lineitems or None
         assert lineitems == ["regexp-octane"]
-
-    def test_two_variants_single_run_no_p(self):
-        results = [{"Score": [100.0]}, {"Score": [200.0]}]
-        out = summarise(results)
-        assert "p_value" not in out[0]["Score"]
-
-    def test_stdev_pct(self):
-        results = [{"Score": [100.0, 100.0]}]
-        out = summarise(results)
-        assert out[0]["Score"]["stdev_pct"] == 0.0
-
-    def test_disjoint_metrics(self):
-        results = [{"A": [1.0, 2.0]}, {"B": [3.0, 4.0]}]
-        out = summarise(results)
-        # No shared metrics → no p_value on either
-        assert "p_value" not in out[0]["A"]
-        assert "p_value" not in out[1]["B"]

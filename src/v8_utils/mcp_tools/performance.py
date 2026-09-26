@@ -9,6 +9,7 @@ from pydantic import Field
 
 from ..api import d8, godbolt, jsb, mca, trace_index, v8log
 from ..api import perf as perf_tools
+from ..render.jsb import format_comparison
 from ._shared import _text_result
 
 
@@ -144,14 +145,10 @@ def register(mcp: FastMCP) -> None:
         Returns a comparison table with mean, stdev, delta, p-value
         (Welch's t-test), and confidence (high/medium/low) per metric.
         """
+        if record is not None:
+            return _text_result(jsb.jsb_record(lineitems, binaries, suite, record))
         return _text_result(
-            jsb.jsb_run_bench(
-                lineitems=lineitems,
-                binaries=binaries,
-                runs=runs,
-                suite=suite,
-                record=record,
-            )
+            format_comparison(jsb.jsb_compare(lineitems, binaries, runs, suite))
         )
 
     @mcp.tool()
