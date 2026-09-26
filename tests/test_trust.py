@@ -453,3 +453,33 @@ def test_cq_of_a_merged_external_cl_only_for_the_landed_patchset(
     assert "No builds found" in cq.cq_report("7", 3)
     assert "not shown" in cq.cq_report("7", 2)
     assert len(ran) == 1
+
+
+# ── Pinning a patchset for someone else to fetch ──────────────────────────────
+
+
+def test_resolve_refuses_an_open_untrusted_cl(gerrit_api):
+    trust.configure(DOMAINS)
+    gerrit_api["change"] = _change(owner=UNTRUSTED)
+    with pytest.raises(ValueError, match="not shown"):
+        gerrit.resolve_patchset("https://chromium-review.googlesource.com/c/v8/v8/+/7")
+    assert all("DETAILED_ACCOUNTS" in p for p in gerrit_api["paths"])
+
+
+def test_resolve_pins_a_merged_external_cls_landed_patchset_only(gerrit_api):
+    trust.configure(DOMAINS)
+    gerrit_api["change"] = _merged_external()
+    url = "https://chromium-review.googlesource.com/c/v8/v8/+/7"
+    assert gerrit.resolve_patchset(url)["patchset"] == "3"
+    assert gerrit.resolve_patchset(url + "/3")["patchset"] == "3"
+    with pytest.raises(ValueError, match="patchset 2 is not shown"):
+        gerrit.resolve_patchset(url + "/2")
+
+
+def test_resolve_is_unchanged_while_unconfigured(gerrit_api):
+    gerrit_api["change"] = _change(owner=UNTRUSTED)
+    got = gerrit.resolve_patchset(
+        "https://chromium-review.googlesource.com/c/v8/v8/+/7"
+    )
+    assert got["patchset"] == "1"
+    assert not any("DETAILED_ACCOUNTS" in p for p in gerrit_api["paths"])

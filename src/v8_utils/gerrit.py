@@ -965,10 +965,21 @@ def resolve_patchset(change_url: str) -> dict:
       project:   gerrit project, e.g. v8/v8 -- authoritative even when the URL
                  omitted it, which is what lets a caller refuse a foreign one
       host:      the review host the change lives on
+
+    With trusted author domains configured, raises for a patchset whose content
+    may not be shown (trust.untrusted_patchset_reason): an open CL by an
+    untrusted owner or uploader, or a merged CL's patchset that did not land
+    and was uploaded by an untrusted account. The landed patchset of a merged
+    CL resolves whoever wrote it.
     """
     api_base, project, change_id, url_patchset = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
-    data = _get(api_base, f"/changes/{cid}?o=ALL_REVISIONS")
+    # With trusted author domains configured, the same response decides whether
+    # the pinned patchset may be read at all, so it must carry the accounts.
+    options = "?o=ALL_REVISIONS"
+    if trust.domains() is not None:
+        options += "&o=DETAILED_ACCOUNTS"
+    data = _get(api_base, f"/changes/{cid}{options}")
     if not isinstance(data, dict) or not data.get("revisions"):
         raise ValueError(f"no such change, or it has no revisions: {change_url!r}")
 
@@ -988,6 +999,9 @@ def resolve_patchset(change_url: str) -> dict:
         rev = revisions[revision]
 
     patchset = str(rev.get("_number", url_patchset or 1))
+    # The pin exists to be fetched and read, around every other read path here.
+    if reason := trust.untrusted_patchset_reason(data, patchset):
+        raise ValueError(f"CL {change_id} patchset {patchset} is not shown: {reason}.")
     last_two = change_id[-2:].zfill(2)
     return {
         "ref": f"refs/changes/{last_two}/{change_id}/{patchset}",
