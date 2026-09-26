@@ -60,6 +60,16 @@ def main() -> None:
             "(avoids exposing the operator's activity to untrusted callers)"
         ),
     )
+    parser.add_argument(
+        "--trusted-author-domains",
+        default=None,
+        metavar="DOMAINS",
+        help=(
+            "comma-separated email domains, e.g. chromium.org,google.com: redact"
+            " Gerrit content by accounts outside them and refuse CLs they own"
+            " or uploaded to (for untrusted/shared deployments)"
+        ),
+    )
     args = parser.parse_args()
 
     overrides = {n: getattr(args, n) for n in GROUPS if getattr(args, n) is not None}
@@ -67,6 +77,11 @@ def main() -> None:
         overrides,
         gerrit_drafts=args.gerrit_drafts,
         default_user=args.default_user,
+        trusted_author_domains=(
+            args.trusted_author_domains.split(",")
+            if args.trusted_author_domains is not None
+            else None
+        ),
     ).run()
 
 

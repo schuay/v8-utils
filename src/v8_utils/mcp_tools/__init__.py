@@ -28,6 +28,8 @@ from typing import NamedTuple
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 
+from ..api import gerrit as gerrit_api
+
 # Reject unknown tool parameters instead of silently ignoring them.
 ArgModelBase.model_config["extra"] = "forbid"
 
@@ -60,6 +62,7 @@ def build_server(
     *,
     gerrit_drafts: bool = True,
     default_user: bool = True,
+    trusted_author_domains: list[str] | None = None,
 ) -> FastMCP:
     """Construct a FastMCP server with the chosen groups registered.
 
@@ -71,8 +74,21 @@ def build_server(
     default_user:  when False, tools never fall back to the logged-in account:
                    pinpoint job listings require an explicit user and
                    gerrit_list_cls rejects 'self'.
+    trusted_author_domains: when set, Gerrit content by accounts outside these
+                   domains is redacted in every tool, and CLs they own or
+                   uploaded to are not read (see v8_utils.trust). Configured
+                   for the whole process, before any tool can run.
     """
     overrides = overrides or {}
+    trust_note = ""
+    if trusted_author_domains is not None:
+        gerrit_api.configure_trusted_domains(trusted_author_domains)
+        trust_note = (
+            "\n\nGerrit content by accounts outside "
+            f"{', '.join(gerrit_api.trusted_domains())} is redacted: their comment"
+            " text and author read as placeholders, and CLs they own or uploaded"
+            " to are not shown."
+        )
     mcp = FastMCP(
         "v8-utils",
         log_level="WARNING",
@@ -99,7 +115,7 @@ def build_server(
             "jsb_run_bench (run/compare JS benchmarks), "
             "pd_* (perf data: change-point detection and AB compare), "
             "pinpoint_* (Chromium Pinpoint A/B jobs), "
-            "gerrit_* (Chromium Gerrit code review)."
+            "gerrit_* (Chromium Gerrit code review)." + trust_note
         ),
     )
     for name, group in GROUPS.items():

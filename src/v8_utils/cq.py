@@ -7,7 +7,10 @@ import shutil
 import subprocess
 
 from .concurrency import _run_concurrent
+from .gerrit import require_trusted_change
 from .paging import paginate_result
+
+_REVIEW_HOST = "https://chromium-review.googlesource.com"
 
 
 def _bb_run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
@@ -271,6 +274,15 @@ def cq_report(
             cl_number = stripped
         else:
             return f"Error: cannot parse CL number from {change!r}"
+
+    if not cl_number.isdigit():
+        return f"Error: cannot parse CL number from {change!r}"
+    # Build logs are the CL's own test output; with trusted domains configured
+    # they are shown only for a CL whose owner and uploaders are trusted.
+    try:
+        require_trusted_change(_REVIEW_HOST, cl_number, cl_number)
+    except ValueError as e:
+        return f"Error: {e}"
 
     # bb matches CLs on host, change number and patchset only, so the
     # project segment is omitted rather than guessed; hardcoding one would

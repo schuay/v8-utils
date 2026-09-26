@@ -10,6 +10,8 @@ from urllib.parse import quote, urlparse
 
 import httpx
 
+from . import trust
+
 
 _XSSI = ")]}'\n"
 
@@ -354,6 +356,48 @@ def _resolve_self(query: str) -> str:
     return re.sub(r"\bself\b", cfg.user, query)
 
 
+def require_trusted_change(api_base: str, cid: str, label: str) -> None:
+    """Refuse to read a CL whose owner or any patchset uploader is outside the
+    trusted author domains. Everything read from such a CL -- comments on its
+    files, its diff, its CQ logs, its subject -- is theirs. No-op while
+    redaction is off."""
+    if trust.domains() is None:
+        return
+    change = _get(api_base, f"/changes/{cid}?o=DETAILED_ACCOUNTS&o=ALL_REVISIONS")
+    reason = trust.untrusted_change_reason(change if isinstance(change, dict) else {})
+    if reason:
+        raise ValueError(f"CL {label} is not shown: {reason}.")
+
+
+def _redact_change(change: dict, out: dict) -> dict:
+    """Redact a compact change built from `change` (a ChangeInfo with
+    DETAILED_ACCOUNTS and CURRENT_REVISION) for a reader: the subject when the
+    owner or the current uploader is untrusted, and every untrusted email."""
+    if trust.domains() is None:
+        return out
+    if trust.untrusted_change_reason(change) and "subject" in out:
+        out["subject"] = trust.REDACTED_SUBJECT
+    if "owner" in out:
+        out["owner"] = trust.shown_email(out["owner"])
+    if "reviewers" in out:
+        out["reviewers"] = [trust.shown_email(r) for r in out["reviewers"]]
+    if "attention" in out:
+        # The reason is gerrit's text but may name the account; drop it with
+        # the address.
+        out["attention"] = [
+            a
+            if trust.is_trusted(a.get("email"))
+            else {"email": trust.REDACTED_AUTHOR, "reason": ""}
+            for a in out["attention"]
+        ]
+    if "labels" in out:
+        out["labels"] = {
+            name: [(trust.shown_email(email), value) for email, value in votes]
+            for name, votes in out["labels"].items()
+        }
+    return out
+
+
 def list_cls(query: str, limit: int = 25) -> list[dict]:
     """Query Gerrit CLs and return compact change info.
 
@@ -362,8 +406,11 @@ def list_cls(query: str, limit: int = 25) -> list[dict]:
     """
     query = _resolve_self(query)
     params = f"?q={quote(query, safe=':+')}&n={limit}&o=LABELS&o=DETAILED_ACCOUNTS"
+    if trust.domains() is not None:
+        # The current uploader wrote the subject; redaction needs to see them.
+        params += "&o=CURRENT_REVISION"
     changes: list = _get(_GERRIT_HOST, f"/changes/{params}")
-    return [_compact_change(c) for c in changes]
+    return [_redact_change(c, _compact_change(c)) for c in changes]
 
 
 def open_cls(query: str, limit: int = 50) -> list[dict]:
@@ -386,14 +433,17 @@ def open_cls(query: str, limit: int = 50) -> list[dict]:
         rev = c.get("current_revision", "")
         revinfo = (c.get("revisions") or {}).get(rev, {})
         out.append(
-            {
-                "number": c.get("_number"),
-                "project": c.get("project", ""),
-                "subject": c.get("subject", ""),
-                "owner": c.get("owner", {}).get("email", ""),
-                "revision": rev,
-                "fetch_ref": revinfo.get("ref", ""),
-            }
+            _redact_change(
+                c,
+                {
+                    "number": c.get("_number"),
+                    "project": c.get("project", ""),
+                    "subject": c.get("subject", ""),
+                    "owner": c.get("owner", {}).get("email", ""),
+                    "revision": rev,
+                    "fetch_ref": revinfo.get("ref", ""),
+                },
+            )
         )
     return out
 
@@ -421,6 +471,7 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
     """
     api_base, project, change_id, _ = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    require_trusted_change(api_base, cid, change_id)
     data: dict = _get(api_base, f"/changes/{cid}/comments")
 
     # Build id → comment map
@@ -458,12 +509,43 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             root_id = _find_root(c)
             children.setdefault(root_id, []).append(c)
 
+    def _content(c: dict) -> dict:
+        """Author, text and the is_ai mark of one entry, redacted when written
+        by an untrusted account. The mark goes too: it is the poster's claim.
+        Drafts are the caller's own and are never redacted."""
+        email = trust.account_email(c.get("author")) or "unknown"
+        if c.get("_draft") or trust.is_trusted(email):
+            return {
+                "author": email,
+                "message": c.get("message", ""),
+                **({"is_ai": True} if c.get("is_ai") else {}),
+            }
+        return {
+            "author": trust.REDACTED_AUTHOR,
+            "message": trust.REDACTED_MESSAGE,
+            "redacted": True,
+        }
+
+    def _reply(r: dict) -> dict:
+        content = _content(r)
+        out = {"id": r.get("id"), "author": content["author"]}
+        out["message"] = content["message"]
+        if content.get("redacted"):
+            out["redacted"] = True
+        out["updated"] = r.get("updated", "")
+        if r.get("_draft"):
+            out["draft"] = True
+        if content.get("is_ai"):
+            out["is_ai"] = True
+        return out
+
     # Root comments only; build thread for each
     def _thread(root: dict) -> dict:
         replies = sorted(
             children.get(root["id"], []),
             key=lambda c: c.get("updated", ""),
         )
+        root_content = _content(root)
         t = {
             "file": root["_file"],
             "line": root.get("line"),
@@ -472,23 +554,15 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             "commit_id": root.get("commit_id"),
             "unresolved": (replies[-1] if replies else root).get("unresolved", False),
             "id": root.get("id"),
-            "author": root.get("author", {}).get("email", "unknown"),
-            "message": root.get("message", ""),
+            "author": root_content["author"],
+            "message": root_content["message"],
             "updated": root.get("updated", ""),
-            "replies": [
-                {
-                    "id": r.get("id"),
-                    "author": r.get("author", {}).get("email", "unknown"),
-                    "message": r.get("message", ""),
-                    "updated": r.get("updated", ""),
-                    **({"draft": True} if r.get("_draft") else {}),
-                    **({"is_ai": True} if r.get("is_ai") else {}),
-                }
-                for r in replies
-            ],
+            "replies": [_reply(r) for r in replies],
         }
-        if root.get("is_ai"):
+        if root_content.get("is_ai"):
             t["is_ai"] = True
+        if root_content.get("redacted"):
+            t["redacted"] = True
         if root.get("_draft"):
             t["draft"] = True
         return t
@@ -909,6 +983,8 @@ def fetch_ref(
       fetch_head:  commit SHA of FETCH_HEAD (only when fetch=True)
     """
     api_base, project, change_id, patchset = _parse_change_url(change_url)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    require_trusted_change(api_base, cid, change_id)
 
     if not patchset:
         patchset = _latest_patchset(api_base, change_id, project)

@@ -219,16 +219,23 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
     """Return the subject (first line of commit message) for a Gerrit change URL.
 
     Uses credentials if available via git-credential-luci, falling back to
-    unauthenticated requests. Raises on failure.
+    unauthenticated requests. Raises on failure, and when trusted author
+    domains are configured and the CL's owner or an uploader is outside them.
     """
     change_id = _gerrit_change_id_from_url(patch_url)
     if not change_id:
         raise ValueError(f"Could not extract Gerrit change ID from {patch_url!r}")
+    from . import trust
     from .gerrit import _get as _gerrit_get
 
-    data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
+    # With trusted domains configured, the subject is shown only when its
+    # owner and uploaders are trusted; the same response carries them.
+    options = "?o=DETAILED_ACCOUNTS&o=ALL_REVISIONS" if trust.domains() else ""
+    data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}{options}")
     if not isinstance(data, dict):
         raise ValueError(f"unexpected Gerrit response for {change_id}")
+    if reason := trust.untrusted_change_reason(data):
+        raise ValueError(f"subject of CL {change_id} is not shown: {reason}")
     return data.get("subject")
 
 
