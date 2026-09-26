@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 import subprocess
 import sys
 from pathlib import Path
@@ -19,7 +20,8 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from .. import config, worktree
+from ..api import config
+from ..api import worktree
 
 console = Console(highlight=False)
 
@@ -34,15 +36,15 @@ def _cmd_list(repo: Path) -> None:
     table.add_column("branch", no_wrap=True)
     table.add_column("head")
     for wt in wts:
-        path = Path(wt["path"])
-        branch = wt.get("branch", "")
+        path = Path(wt.path)
+        branch = wt.branch
         name = path.name
         # Dim the branch when it matches the name (the common case).
         branch_style = "dim" if branch == name else ""
         table.add_row(
             name,
             f"[{branch_style}]{branch}[/]" if branch_style else branch,
-            wt.get("head", ""),
+            wt.head,
         )
     console.print(table)
 
@@ -59,11 +61,11 @@ def _cmd_create(
     if json_out:
         # Machine-readable contract for callers (e.g. icompleteu). Plain stdout,
         # never routed through rich, so the path is never width-wrapped. default=str
-        # renders the Path value in result["path"].
-        print(json.dumps({"name": name, **result}, default=str))
+        # renders the Path value in result.path.
+        print(json.dumps({"name": name, **asdict(result)}, default=str))
         return
-    console.print(f"[bold green]Created[/] {result['path']}")
-    for line in result["builds"]:
+    console.print(f"[bold green]Created[/] {result.path}")
+    for line in result.builds:
         console.print(f"  {line.strip()}")
 
 
@@ -78,17 +80,17 @@ def _cmd_remove(repo: Path, name: str, force: bool, remove_branch: bool) -> bool
         return False
     console.print(f"[bold green]Removed[/] '{name}'")
     if remove_branch:
-        if result["branch_removed"]:
-            console.print(f"  [dim]branch[/] {result['branch']} [dim]deleted[/]")
+        if result.branch_removed:
+            console.print(f"  [dim]branch[/] {result.branch} [dim]deleted[/]")
         else:
-            note = result["note"] or "no branch to delete"
+            note = result.note or "no branch to delete"
             console.print(f"  [dim]branch kept:[/] {note}")
     return True
 
 
 def _cmd_refresh(repo: Path, name: str) -> None:
     result = worktree.refresh(repo, name)
-    linked = result["linked"]
+    linked = result.linked
     console.print(f"[bold green]Refreshed[/] symlinks for '{name}'")
     if linked:
         console.print(f"  [dim]linked {len(linked)} dep(s):[/] {', '.join(linked)}")

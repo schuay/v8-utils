@@ -4,7 +4,41 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class WorktreeInfo:
+    """One entry of `git worktree list`. branch is "(detached)" for a detached
+    HEAD and "" for a bare entry."""
+
+    path: str
+    branch: str = ""
+    head: str = ""
+
+
+@dataclass(frozen=True)
+class Created:
+    path: Path
+    #: One line per build directory prepared, as gm.py reported it.
+    builds: list[str]
+
+
+@dataclass(frozen=True)
+class Refreshed:
+    path: Path
+    #: Dependency paths newly symlinked; empty when all were present.
+    linked: list[str]
+
+
+@dataclass(frozen=True)
+class Removed:
+    #: The worktree's branch, None when it was detached.
+    branch: str | None
+    branch_removed: bool
+    #: Why a requested branch removal did not happen, else None.
+    note: str | None
 
 
 def _run(cmd: list[str], *, cwd: Path | None = None) -> str:
@@ -165,7 +199,7 @@ def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
     gone, and a dangling same-named branch. Safe to call when nothing is left.
     """
     registered = any(
-        Path(wt["path"]).resolve() == wt_path.resolve() for wt in list_worktrees(main)
+        Path(wt.path).resolve() == wt_path.resolve() for wt in list_worktrees(main)
     )
     if registered:
         _remove_external_symlinks(wt_path)
@@ -186,8 +220,7 @@ def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
     # Delete a dangling same-named branch, unless protected or in use elsewhere.
     if branch not in ("main", "master") and _branch_exists(main, branch):
         in_use = any(
-            wt.get("branch") == branch
-            and Path(wt["path"]).resolve() != wt_path.resolve()
+            wt.branch == branch and Path(wt.path).resolve() != wt_path.resolve()
             for wt in list_worktrees(main)
         )
         if not in_use:
@@ -205,7 +238,7 @@ def create(
     branch: str | None = None,
     upstream: str = "main",
     force: bool = False,
-) -> dict:
+) -> Created:
     """Create a worktree as a sibling of the main checkout, symlink gclient deps.
 
     upstream: base branch/ref for the new branch (default "main").
@@ -239,7 +272,7 @@ def create(
     # Set up default build directories.
     build_results = _setup_builds(wt_path, _DEFAULT_BUILDS)
 
-    return {"path": wt_path, "builds": build_results}
+    return Created(path=wt_path, builds=build_results)
 
 
 def _create_symlinks(main: Path, wt_path: Path, gclient_root: Path) -> list[str]:
@@ -260,7 +293,7 @@ def _create_symlinks(main: Path, wt_path: Path, gclient_root: Path) -> list[str]
     return linked
 
 
-def refresh(repo: Path, name: str) -> dict:
+def refresh(repo: Path, name: str) -> Refreshed:
     """Rebuild a worktree's gclient dep symlinks against the current DEPS.
 
     The symlink set is a snapshot taken at create time. After rebasing the
@@ -285,7 +318,7 @@ def refresh(repo: Path, name: str) -> dict:
     # before recreation. _remove_external_symlinks also clears dangling links.
     _remove_external_symlinks(wt_path)
     linked = _create_symlinks(main, wt_path, gclient_root)
-    return {"path": wt_path, "linked": linked}
+    return Refreshed(path=wt_path, linked=linked)
 
 
 def _remove_external_symlinks(wt_path: Path) -> None:
@@ -309,14 +342,14 @@ def remove(
     name: str,
     force: bool = False,
     remove_branch: bool = False,
-) -> dict:
+) -> Removed:
     """Remove a worktree: clean up symlinks then git worktree remove.
 
     If remove_branch is true, also delete the underlying git branch.
     Skipped for detached HEAD, `main`/`master`, or branches checked out
     in another worktree.
 
-    Returns {branch, branch_removed, note} describing the branch outcome.
+    The result describes the branch outcome.
     """
     _validate_name(name)
     main = _find_main_worktree(repo)
@@ -329,8 +362,8 @@ def remove(
     worktrees = list_worktrees(main)
     branch: str | None = None
     for wt in worktrees:
-        if Path(wt["path"]).resolve() == wt_path.resolve():
-            b = wt.get("branch")
+        if Path(wt.path).resolve() == wt_path.resolve():
+            b = wt.branch
             if b and b != "(detached)":
                 branch = b
             break
@@ -345,29 +378,26 @@ def remove(
         cmd.append("--force")
     _run(cmd, cwd=main)
 
-    result = {"branch": branch, "branch_removed": False, "note": None}
     if not remove_branch:
-        return result
+        return Removed(branch=branch, branch_removed=False, note=None)
     if branch is None:
-        result["note"] = "no branch to delete (detached HEAD)"
-        return result
+        return Removed(branch, False, "no branch to delete (detached HEAD)")
     if branch in ("main", "master"):
-        result["note"] = f"refusing to delete protected branch {branch!r}"
-        return result
+        return Removed(branch, False, f"refusing to delete protected branch {branch!r}")
     for wt in worktrees:
-        if Path(wt["path"]).resolve() == wt_path.resolve():
+        if Path(wt.path).resolve() == wt_path.resolve():
             continue
-        if wt.get("branch") == branch:
-            result["note"] = f"branch {branch!r} also checked out in {wt['path']}"
-            return result
+        if wt.branch == branch:
+            return Removed(
+                branch, False, f"branch {branch!r} also checked out in {wt.path}"
+            )
 
     _run(["git", "branch", "-D", branch], cwd=main)
-    result["branch_removed"] = True
-    return result
+    return Removed(branch=branch, branch_removed=True, note=None)
 
 
-def list_worktrees(repo: Path) -> list[dict]:
-    """List all worktrees. Returns list of {path, branch, head}."""
+def list_worktrees(repo: Path) -> list[WorktreeInfo]:
+    """Every worktree of `repo`'s repository, the main checkout first."""
     lines = _run(["git", "worktree", "list", "--porcelain"], cwd=repo)
     worktrees = []
     current: dict = {}
@@ -384,7 +414,7 @@ def list_worktrees(repo: Path) -> list[dict]:
             current["branch"] = "(detached)"
     if current:
         worktrees.append(current)
-    return worktrees
+    return [WorktreeInfo(**wt) for wt in worktrees]
 
 
 def _branch_exists(repo: Path, branch: str) -> bool:

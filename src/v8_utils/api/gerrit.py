@@ -1,0 +1,32 @@
+"""Gerrit code review on the Google-operated review hosts: listing changes,
+reading and writing comments, and resolving patchsets to git refs."""
+
+from .. import gerrit as _gerrit
+from ..gerrit import (
+    comments,
+    create_drafts,
+    fetch_ref,
+    list_cls,
+    open_cls,
+    post_review_comments,
+    publish_drafts,
+    resolve_patchset,
+)
+
+
+def credentials_available() -> bool:
+    """Whether a Gerrit access token can be obtained right now."""
+    return _gerrit._gerrit_token() is not None
+
+
+__all__ = [
+    "comments",
+    "create_drafts",
+    "credentials_available",
+    "fetch_ref",
+    "list_cls",
+    "open_cls",
+    "post_review_comments",
+    "publish_drafts",
+    "resolve_patchset",
+]

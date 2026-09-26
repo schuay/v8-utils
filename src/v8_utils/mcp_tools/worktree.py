@@ -6,8 +6,9 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from pydantic import Field
 
-from .. import worktree as worktree_mod
-from ._shared import _configured_repo, _text_result
+from ..api import repo_git
+from ..api import worktree as worktree_mod
+from ._shared import _text_result
 
 
 def register(mcp: FastMCP) -> None:
@@ -66,15 +67,15 @@ def register(mcp: FastMCP) -> None:
         # Worktree management always targets the main checkout: git worktree
         # add/remove/prune operate on the repo as a whole, and the symlink
         # helpers in v8_utils.worktree resolve the main worktree themselves.
-        repo = _configured_repo("v8")
+        repo = repo_git.configured_repo("v8")
 
         if not name:
             raise ValueError(f"'name' is required for action={action!r}")
 
         if action == "create":
             result = worktree_mod.create(repo, name, branch, upstream=upstream)
-            wt_path = result["path"]
-            builds = "\n".join(result["builds"])
+            wt_path = result.path
+            builds = "\n".join(result.builds)
             return _text_result(
                 f"Worktree created at {wt_path}\n"
                 f"\n"
@@ -87,7 +88,7 @@ def register(mcp: FastMCP) -> None:
 
         if action == "refresh":
             result = worktree_mod.refresh(repo, name)
-            linked = result["linked"]
+            linked = result.linked
             if linked:
                 body = f"Linked {len(linked)} dep(s):\n" + "\n".join(
                     f"  {dep}" for dep in linked
@@ -95,7 +96,7 @@ def register(mcp: FastMCP) -> None:
             else:
                 body = "No deps to link (already up to date)."
             return _text_result(
-                f"Symlinks refreshed for '{name}' at {result['path']}.\n{body}"
+                f"Symlinks refreshed for '{name}' at {result.path}.\n{body}"
             )
 
         if action == "remove":
@@ -104,10 +105,10 @@ def register(mcp: FastMCP) -> None:
             )
             lines = [f"Worktree '{name}' removed."]
             if remove_branch:
-                if result["branch_removed"]:
-                    lines.append(f"Branch '{result['branch']}' deleted.")
+                if result.branch_removed:
+                    lines.append(f"Branch '{result.branch}' deleted.")
                 else:
-                    note = result["note"] or "no branch to delete"
+                    note = result.note or "no branch to delete"
                     lines.append(f"Branch kept: {note}.")
             return _text_result(" ".join(lines))
 

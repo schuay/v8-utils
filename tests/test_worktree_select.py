@@ -7,7 +7,8 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 from v8_utils import config
-from v8_utils.mcp_tools import _shared, repo_git
+from v8_utils import repos
+from v8_utils.mcp_tools import repo_git
 
 
 def _git(repo, *args):
@@ -43,7 +44,7 @@ def repo(tmp_path, monkeypatch):
         config.Config(repos={"demo": config.Repo(path=root, desc="demo repo")}),
     )
     # Selection is process-global; keep tests independent of each other.
-    _shared._active_worktree.clear()
+    repos._active_worktree.clear()
     return root
 
 

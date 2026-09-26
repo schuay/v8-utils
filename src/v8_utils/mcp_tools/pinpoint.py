@@ -19,7 +19,8 @@ from ..tools import (
     resolve_patch_filter,
 )
 
-from ._shared import _resolve_repo, _text_result
+from ..api import repo_git
+from ._shared import _text_result
 
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
 # client sends it as the parameter's own schema description rather than leaving
@@ -408,7 +409,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         multiple space-separated values to create jobs in bulk, e.g.
         benchmark="js3 sp3" configuration="m1 m4" creates 4 jobs.
         """
-        repo_path = v8_repo_path or str(_resolve_repo("v8"))
+        repo_path = v8_repo_path or str(repo_git.resolve_repo("v8"))
         jobs = create_pinpoint_jobs(
             benchmarks=benchmark.split(),
             configurations=configuration.split(),

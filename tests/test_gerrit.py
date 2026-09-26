@@ -6,6 +6,7 @@ import pytest
 from mcp.server.fastmcp import FastMCP
 
 import v8_utils.gerrit as g
+from v8_utils import cq
 from v8_utils.mcp_tools import gerrit as mcp_gerrit
 
 
@@ -61,7 +62,7 @@ def cq_spec(monkeypatch):
         seen["spec"] = args[args.index("-cl") + 1]
         return types.SimpleNamespace(stdout="", stderr="", returncode=0)
 
-    monkeypatch.setattr(mcp_gerrit, "_bb_run", fake_bb_run)
+    monkeypatch.setattr(cq, "_bb_run", fake_bb_run)
     server = FastMCP("test")
     mcp_gerrit.register(server)
 

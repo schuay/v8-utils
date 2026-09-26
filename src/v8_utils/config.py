@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 import sys
 import tomllib
@@ -11,7 +12,16 @@ from pathlib import Path
 
 from platformdirs import user_config_dir
 
-CONFIG_PATH = Path(user_config_dir("v8-utils")) / "config.toml"
+# A deployment that runs v8-utils on the user's behalf (an automated reviewer,
+# say) keeps its own config -- its own repo map, no personal chat webhook --
+# rather than reading the user's. The variable is read once, at import; a
+# process that decides later uses configure().
+CONFIG_ENV = "V8_UTILS_CONFIG"
+CONFIG_PATH = (
+    Path(os.environ[CONFIG_ENV]).expanduser()
+    if os.environ.get(CONFIG_ENV)
+    else Path(user_config_dir("v8-utils")) / "config.toml"
+)
 
 _SECTION = "section"  # metadata key for section headings
 _HELP = "help"  # metadata key for description
@@ -225,6 +235,13 @@ def template() -> str:
 
 _cache: Config | None = None
 _hinted = False
+
+
+def configure(path: Path) -> None:
+    """Read and write `path` as the config file from now on, in this process."""
+    global CONFIG_PATH, _cache
+    CONFIG_PATH = Path(path).expanduser()
+    _cache = None
 
 
 def load() -> Config:

@@ -48,13 +48,6 @@ ALLOWED_VIOLATIONS: dict[str, set[str]] = {
         "v8_utils.pinpoint",
         "v8_utils.tools",
     },
-    "v8_utils.cli.vt": {"v8_utils.config", "v8_utils.worktree"},
-    "v8_utils.mcp_tools._shared": {"v8_utils.config", "v8_utils.worktree"},
-    "v8_utils.mcp_tools.gerrit": {
-        "v8_utils.concurrency",
-        "v8_utils.gerrit",
-        "v8_utils.pinpoint_cache",
-    },
     "v8_utils.mcp_tools.performance": {
         "v8_utils.config",
         "v8_utils.jsb",
@@ -66,8 +59,6 @@ ALLOWED_VIOLATIONS: dict[str, set[str]] = {
         "v8_utils.pinpoint",
         "v8_utils.tools",
     },
-    "v8_utils.mcp_tools.repo_git": {"v8_utils.config", "v8_utils.worktree"},
-    "v8_utils.mcp_tools.worktree": {"v8_utils.worktree"},
 }
 
 
