@@ -66,6 +66,6 @@ def _entry(module: str, attr: str = "main") -> Callable[[], None]:
     return lambda: run_cli(module, attr)
 
 
-pp = _entry("v8_utils.pp")
-jsb = _entry("v8_utils.jsb")
-pd = _entry("v8_utils.pd.cli", "app")
+pp = _entry("v8_utils.cli.pp")
+jsb = _entry("v8_utils.cli.jsb")
+pd = _entry("v8_utils.cli.pd", "app")

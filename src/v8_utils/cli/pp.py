@@ -19,13 +19,13 @@ import re
 import sys
 from datetime import datetime
 
-from . import chat
-from . import config
-from . import daemon
-from . import pinpoint
+from .. import chat
+from .. import config
+from .. import daemon
+from .. import pinpoint
 
-from .concurrency import _run_concurrent
-from .tools import (
+from ..concurrency import _run_concurrent
+from ..tools import (
     _fetch_job_details_sorted,
     _fetch_jobs_list,
     _format_results_table,
@@ -928,7 +928,7 @@ def main() -> None:
     if not args.verbose:
         for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
-    from . import changelog
+    from .. import changelog
 
     changelog.show_unseen()
 

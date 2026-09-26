@@ -11,11 +11,17 @@ from typing import Annotated, Optional
 
 import typer
 
-from . import api
-from .adaptor import discover
-from .commits import CommitStore
-from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir, sync_engine
-from .report import print_at_report, print_compare_report, print_detect_report
+from ..pd import api
+from ..pd.adaptor import discover
+from ..pd.commits import CommitStore
+from ..pd.engines import (
+    ENGINES,
+    get_id_regex,
+    get_path_filter,
+    get_src_dir,
+    sync_engine,
+)
+from ..pd.report import print_at_report, print_compare_report, print_detect_report
 
 app = typer.Typer(
     help="Perf data analysis -- change-point detection, AB comparison, and more."

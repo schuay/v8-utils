@@ -19,7 +19,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from . import config, worktree
+from .. import config, worktree
 
 console = Console(highlight=False)
 

@@ -78,8 +78,8 @@ v8-mcp = "v8_utils.server:main"
 pp = "v8_utils.cli_deps:pp"
 jsb = "v8_utils.cli_deps:jsb"
 pd = "v8_utils.cli_deps:pd"
-lv = "v8_utils.lv:main"
-vt = "v8_utils.vt:main"
+lv = "v8_utils.cli.lv:main"
+vt = "v8_utils.cli.vt:main"
 
 [build-system]
 requires = ["hatchling"]
