@@ -2,6 +2,7 @@
 disassembly, flame graphs, top-down analysis, and profile diffs."""
 
 from ..perf import (
+    SymbolCache,
     annotate,
     annotate_read_around,
     callers,
@@ -13,6 +14,7 @@ from ..perf import (
 )
 
 __all__ = [
+    "SymbolCache",
     "annotate",
     "annotate_read_around",
     "callers",

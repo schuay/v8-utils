@@ -11,6 +11,35 @@ import subprocess
 from pathlib import Path
 
 
+class SymbolCache:
+    """The most recent hotspots() rows per perf.data path, so a caller can
+    name a symbol as "#N" from that listing in later calls."""
+
+    def __init__(self) -> None:
+        self._rows: dict[str, list[dict]] = {}
+
+    def remember(self, perf_data: str, rows: list[dict]) -> None:
+        self._rows[perf_data] = rows
+
+    def resolve(self, perf_data: str, symbol: str) -> str:
+        """`symbol` itself, or the symbol at "#N" in the remembered listing."""
+        if not symbol.startswith("#"):
+            return symbol
+        try:
+            idx = int(symbol[1:])
+        except ValueError:
+            raise ValueError(f"Invalid symbol reference: {symbol!r}")
+        rows = self._rows.get(perf_data)
+        if rows is None:
+            raise ValueError(
+                f"No cached hotspots for {perf_data!r}. "
+                f"Run perf_hotspots first, then use #N references."
+            )
+        if idx < 1 or idx > len(rows):
+            raise ValueError(f"Symbol index {idx} out of range (1–{len(rows)})")
+        return rows[idx - 1]["symbol"]
+
+
 # ── subprocess helper ─────────────────────────────────────────────────────────
 
 

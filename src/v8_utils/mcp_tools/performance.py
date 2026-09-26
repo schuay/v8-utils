@@ -13,9 +13,9 @@ from ..render.jsb import format_comparison
 from ._shared import _text_result
 
 
-# Symbol cache: perf_hotspots stores its most recent result per perf_data path
-# so that downstream tools can accept "#3" instead of the raw symbol name.
-_symbol_cache: dict[str, list[dict]] = {}
+# perf_hotspots remembers its most recent result per perf_data path so that
+# downstream tools can accept "#3" instead of the raw symbol name.
+_symbols = perf_tools.SymbolCache()
 
 # Argument documentation lives on the argument (Annotated[..., Field(...)]), so
 # a client sends it as the parameter's own schema description instead of leaving
@@ -28,22 +28,7 @@ CONTEXT_ARG = "lines of context around each hot cluster"
 
 
 def _resolve_symbol(perf_data: str, symbol: str, **_kw: object) -> str:
-    """If *symbol* looks like ``#<n>``, resolve it from the hotspots cache."""
-    if symbol.startswith("#"):
-        try:
-            idx = int(symbol[1:])
-        except ValueError:
-            raise ValueError(f"Invalid symbol reference: {symbol!r}")
-        rows = _symbol_cache.get(perf_data)
-        if rows is None:
-            raise ValueError(
-                f"No cached hotspots for {perf_data!r}. "
-                f"Run perf_hotspots first, then use #N references."
-            )
-        if idx < 1 or idx > len(rows):
-            raise ValueError(f"Symbol index {idx} out of range (1–{len(rows)})")
-        return rows[idx - 1]["symbol"]
-    return symbol
+    return _symbols.resolve(perf_data, symbol)
 
 
 def register(mcp: FastMCP) -> None:
@@ -197,7 +182,7 @@ def register(mcp: FastMCP) -> None:
         rows = perf_tools.hotspots(perf_data, dso=dso, n=n)
         if not rows:
             return _text_result("No symbols found.")
-        _symbol_cache[perf_data] = rows
+        _symbols.remember(perf_data, rows)
         idx_w = len(str(len(rows)))
         lines = [f"{'#':>{idx_w}}  {'self%':>6}  {'total%':>6}  {'dso':<20}  symbol"]
         lines.append("-" * len(lines[0]))
