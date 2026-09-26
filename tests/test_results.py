@@ -19,9 +19,7 @@ def _format_results_table(
 
 
 def _results_header(job, ansi=False):
-    subjects = api_pinpoint.patch_subjects(
-        [job.get("experiment_patch"), job.get("base_patch")]
-    )
+    subjects = api_pinpoint.patch_subjects([job.experiment_patch, job.base_patch])
     return results_header(job, subjects, ansi=ansi)
 
 
@@ -35,18 +33,20 @@ def _row(
     unit="ms_smallerIsBetter",
     significant=True,
 ):
-    return {
-        "name": name,
-        "base_mean": base_mean,
-        "exp_mean": exp_mean,
-        "base_stdev": base_stdev,
-        "exp_stdev": exp_stdev,
-        "base_n": 30,
-        "exp_n": 30,
-        "p_value": p_value,
-        "significant": significant,
-        "unit": unit,
-    }
+    return api_pinpoint.ResultRow(
+        name=name,
+        unit=unit,
+        base_label="base",
+        base_mean=base_mean,
+        base_stdev=base_stdev,
+        base_n=30,
+        exp_label="exp",
+        exp_mean=exp_mean,
+        exp_stdev=exp_stdev,
+        exp_n=30,
+        p_value=p_value,
+        significant=significant,
+    )
 
 
 def _job(
@@ -56,14 +56,13 @@ def _job(
     created="2026-03-20T10:00:00",
     **kw,
 ):
-    d = {
-        "configuration": configuration,
-        "benchmark": benchmark,
-        "story": story,
-        "created": created,
-    }
-    d.update(kw)
-    return d
+    return api_pinpoint.Job(
+        configuration=configuration,
+        benchmark=benchmark,
+        story=story,
+        created=created,
+        **kw,
+    )
 
 
 # ── Results header ────────────────────────────────────────────────────────────
@@ -95,7 +94,7 @@ class TestResultsHeader:
         assert "exp-flags:" in h
 
     def test_empty_job(self):
-        assert _results_header({}) == ""
+        assert _results_header(api_pinpoint.Job()) == ""
 
     @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_base_hash_shown_when_present(self, _mock):
@@ -105,7 +104,7 @@ class TestResultsHeader:
 
     @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_base_hash_omitted_when_missing(self, _mock):
-        # Real Pinpoint jobs always carry a base hash, but partial dicts reach
+        # Real Pinpoint jobs always carry a base hash, but partial jobs reach
         # this formatter too; rendering "base: None" helps nobody.
         assert "base:" not in _results_header(_job())
 
@@ -312,14 +311,22 @@ class TestFetchThenFormat:
         # Asserted on the mock rather than by raising from it: the fetch
         # records failures instead of propagating them.
         (r,) = api_pinpoint.fetch_job_results(["j1"])
-        assert (r.rows, r.error, r.job, r.subjects) == ([], None, {}, {})
+        assert (r.rows, r.error, r.job, r.subjects) == (
+            [],
+            None,
+            api_pinpoint.Job(),
+            {},
+        )
         detail.assert_not_called()
 
-    @patch("v8_utils.pinpoint_jobs.fetch_job_detail", return_value={"job_id": "j1"})
-    @patch("v8_utils.pinpoint.pivot_results", return_value=[{"name": "m"}])
+    @patch(
+        "v8_utils.pinpoint_jobs.fetch_job_detail",
+        return_value=api_pinpoint.Job(job_id="j1"),
+    )
+    @patch("v8_utils.pinpoint.pivot_results", return_value=[_row("m")])
     def test_missing_details_are_fetched(self, _pivot, detail):
         (r,) = api_pinpoint.fetch_job_results(["j1"])
-        assert r.job == {"job_id": "j1"}
+        assert r.job == api_pinpoint.Job(job_id="j1")
         detail.assert_called_once_with("j1")
 
     @patch("v8_utils.pinpoint.fetch_gerrit_subject", side_effect=lambda u: u.upper())

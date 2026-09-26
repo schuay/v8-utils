@@ -25,15 +25,15 @@ def test_open_cls_extracts_revision_and_fetch_ref(monkeypatch):
     monkeypatch.setattr(g, "_get", lambda host, path: fake)
     out = g.open_cls("project:v8/v8 status:open")
     assert out == [
-        {
-            "number": 123,
-            "project": "v8/v8",
-            "subject": "Fix the thing",
-            "owner": "alice@google.com",
-            "uploaders": [],
-            "revision": "deadbeef",
-            "fetch_ref": "refs/changes/23/123/2",
-        }
+        g.OpenChange(
+            number=123,
+            project="v8/v8",
+            subject="Fix the thing",
+            owner="alice@google.com",
+            uploaders=(),
+            revision="deadbeef",
+            fetch_ref="refs/changes/23/123/2",
+        )
     ]
 
 
@@ -51,7 +51,7 @@ def test_open_cls_tolerates_missing_fields(monkeypatch):
     monkeypatch.setattr(g, "_resolve_self", lambda q: q)
     monkeypatch.setattr(g, "_get", lambda host, path: [{"_number": 5, "project": "p"}])
     (row,) = g.open_cls("x")
-    assert row["revision"] == "" and row["fetch_ref"] == "" and row["owner"] == ""
+    assert row.revision == "" and row.fetch_ref == "" and row.owner == ""
 
 
 @pytest.fixture
@@ -105,8 +105,8 @@ class TestLabelFlags:
             "Verified": {"rejected": {"email": "d@e.f"}, "all": []},
         }
         assert g._extract_label_flags(labels) == {
-            "Code-Review": {"approved": True, "rejected": False},
-            "Verified": {"approved": False, "rejected": True},
+            "Code-Review": g.LabelFlags(approved=True, rejected=False),
+            "Verified": g.LabelFlags(approved=False, rejected=True),
         }
 
     def test_label_with_no_verdict_is_omitted(self):
@@ -128,12 +128,12 @@ class TestLabelFlags:
             }
         }
         flags = g._extract_label_flags(labels)
-        assert flags["Code-Review"] == {"approved": True, "rejected": False}
+        assert flags["Code-Review"] == g.LabelFlags(approved=True, rejected=False)
         # ...and the values still carry the objection.
-        assert g._extract_label_scores(labels)["Code-Review"] == [
-            ("no@b.c", -1),
-            ("yes@b.c", 1),
-        ]
+        assert g._extract_label_scores(labels)["Code-Review"] == (
+            g.Vote("no@b.c", -1),
+            g.Vote("yes@b.c", 1),
+        )
 
     def test_compact_change_carries_flags_alongside_scores(self):
         change = {
@@ -146,9 +146,9 @@ class TestLabelFlags:
             },
         }
         out = g._compact_change(change)
-        assert out["labels"] == {"Code-Review": [("a@b.c", 1)]}
-        assert out["label_flags"] == {
-            "Code-Review": {"approved": True, "rejected": False}
+        assert out.labels == {"Code-Review": (g.Vote("a@b.c", 1),)}
+        assert out.label_flags == {
+            "Code-Review": g.LabelFlags(approved=True, rejected=False)
         }
 
 
@@ -313,7 +313,7 @@ def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(drafts):
         CL, [{"message": "Done.", "in_reply_to": "c1", "is_ai": True}]
     )
 
-    assert out[0]["ok"] is True
+    assert out[0].ok is True
     _path, body = drafts.sent[0]
     assert body["in_reply_to"] == "c1"
     # A reviewer is entitled to know a reply was not typed by a human.
@@ -434,8 +434,8 @@ def test_an_unknown_parent_is_left_for_gerrit_to_reject(drafts, monkeypatch):
         ),
     )
     (out,) = g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "nope"}])
-    assert out["ok"] is False
-    assert "Invalid inReplyTo" in out["error"]
+    assert out.ok is False
+    assert "Invalid inReplyTo" in out.error
 
 
 def test_an_unreadable_parent_fails_the_reply_instead_of_relocating_it(
@@ -449,8 +449,8 @@ def test_an_unreadable_parent_fails_the_reply_instead_of_relocating_it(
     monkeypatch.setattr(g, "_get", boom)
     (out,) = g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c1"}])
 
-    assert out["ok"] is False
-    assert "429" in out["error"]
+    assert out.ok is False
+    assert "429" in out.error
     assert drafts.sent == []
 
 
@@ -485,9 +485,9 @@ def test_one_failing_draft_does_not_sink_the_others(monkeypatch):
             {"message": "c", "in_reply_to": "good"},
         ],
     )
-    assert [r["ok"] for r in out] == [True, False, True]
-    assert "Invalid inReplyTo" in out[1]["error"]
-    assert out[1]["input"]["message"] == "b"  # enough to retry just this one
+    assert [r.ok for r in out] == [True, False, True]
+    assert "Invalid inReplyTo" in out[1].error
+    assert out[1].input["message"] == "b"  # enough to retry just this one
 
 
 def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):
@@ -714,19 +714,19 @@ def test_comments_passes_is_ai_through_on_replies(monkeypatch):
     # reviewer's: both are posted under the same human account.
     monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
     (thread,) = g.comments("https://chromium-review.googlesource.com/123")
-    assert [r["id"] for r in thread["replies"]] == ["ours", "back"]
-    assert thread["replies"][0]["is_ai"] is True
-    # Absent, not False: gerrit omits the field when unset, and "not marked"
-    # is not the same claim as "a human wrote this".
-    assert "is_ai" not in thread["replies"][1]
-    assert "is_ai" not in thread
+    assert [r.id for r in thread.replies] == ["ours", "back"]
+    assert thread.replies[0].is_ai is True
+    # Gerrit omits the field when unset, so False means "not marked", which is
+    # not the same claim as "a human wrote this".
+    assert thread.replies[1].is_ai is False
+    assert thread.is_ai is False
 
 
 def test_comments_passes_is_ai_through_on_a_thread_root(monkeypatch):
     payload = {"src/a.cc": [{"id": "r", "message": "x", "is_ai": True}]}
     monkeypatch.setattr(g, "_get", lambda host, path: payload)
     (thread,) = g.comments("https://chromium-review.googlesource.com/123")
-    assert thread["is_ai"] is True
+    assert thread.is_ai is True
 
 
 def test_comments_reads_resolution_from_the_last_entry(monkeypatch):
@@ -734,7 +734,7 @@ def test_comments_reads_resolution_from_the_last_entry(monkeypatch):
     # renders -- the root's flag says nothing about where the thread stands.
     monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
     (thread,) = g.comments("https://chromium-review.googlesource.com/123")
-    assert thread["unresolved"] is True
+    assert thread.unresolved is True
 
 
 # ── resolve_patchset ──────────────────────────────────────────────────────────
@@ -761,13 +761,13 @@ def test_resolve_patchset_pins_the_current_revision(monkeypatch):
     out = g.resolve_patchset(
         "https://chromium-review.googlesource.com/c/v8/v8/+/7650974"
     )
-    assert out == {
-        "ref": "refs/changes/74/7650974/3",
-        "patchset": "3",
-        "revision": "sha3",
-        "project": "v8/v8",
-        "host": "chromium-review.googlesource.com",
-    }
+    assert out == g.Patchset(
+        ref="refs/changes/74/7650974/3",
+        patchset="3",
+        revision="sha3",
+        project="v8/v8",
+        host="chromium-review.googlesource.com",
+    )
     # One query, and the one that carries every patchset's SHA.
     assert "o=ALL_REVISIONS" in seen["path"]
 
@@ -777,9 +777,9 @@ def test_resolve_patchset_honours_a_patchset_in_the_url(monkeypatch):
     # read, not to whatever is current when the job finally runs.
     _capture(monkeypatch, _change())
     out = g.resolve_patchset("https://chromium-review.googlesource.com/7650974/1")
-    assert out["patchset"] == "1"
-    assert out["revision"] == "sha1"
-    assert out["ref"] == "refs/changes/74/7650974/1"
+    assert out.patchset == "1"
+    assert out.revision == "sha1"
+    assert out.ref == "refs/changes/74/7650974/1"
 
 
 def test_resolve_patchset_reads_the_project_off_the_response(monkeypatch):
@@ -787,7 +787,7 @@ def test_resolve_patchset_reads_the_project_off_the_response(monkeypatch):
     # its own repo has nothing else to check.
     _capture(monkeypatch, _change(project="chromium/src"))
     out = g.resolve_patchset("https://chromium-review.googlesource.com/7650974")
-    assert out["project"] == "chromium/src"
+    assert out.project == "chromium/src"
 
 
 def test_resolve_patchset_follows_a_crrev_link(monkeypatch):
@@ -798,10 +798,10 @@ def test_resolve_patchset_follows_a_crrev_link(monkeypatch):
     seen = _capture(monkeypatch, _change())
     out = g.resolve_patchset("https://crrev.com/c/7650974/1")
     assert seen["host"] == "https://chromium-review.googlesource.com"
-    assert out["ref"] == "refs/changes/74/7650974/1"
-    assert out["revision"] == "sha1"
-    assert out["host"] == "chromium-review.googlesource.com"
-    assert g.resolve_patchset("https://crrev.com/c/7650974")["patchset"] == "3"
+    assert out.ref == "refs/changes/74/7650974/1"
+    assert out.revision == "sha1"
+    assert out.host == "chromium-review.googlesource.com"
+    assert g.resolve_patchset("https://crrev.com/c/7650974").patchset == "3"
     with pytest.raises(ValueError, match="crrev"):
         g.resolve_patchset("https://crrev.com/c/not-a-change")
 

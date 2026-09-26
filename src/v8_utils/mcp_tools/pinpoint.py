@@ -49,23 +49,23 @@ BOT_ARG = (
 )
 
 
-def _format_job_list(jobs: list[dict]) -> str:
+def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
     """Format job list as compact text (mirrors pp's list-jobs output)."""
-    subjects = pinpoint_mod.patch_subjects([j.get("experiment_patch") for j in jobs])
+    subjects = pinpoint_mod.patch_subjects([j.experiment_patch for j in jobs])
 
     blocks = []
     for j in jobs:
-        subject = subjects.get(j.get("experiment_patch"))
-        created = (j.get("created") or "")[:16].replace("T", " ")
-        status = j.get("status") or "?"
-        url = j.get("url") or ""
-        cfg = pinpoint_mod.short_configuration(j.get("configuration") or "")
-        benchmark = pinpoint_mod.short_benchmark(j.get("benchmark") or "")
-        story = j.get("story") or ""
-        diff = j.get("difference_count")
-        patch = j.get("experiment_patch") or ""
-        base_flags = j.get("base_extra_args") or ""
-        exp_flags = j.get("experiment_extra_args") or ""
+        subject = subjects.get(j.experiment_patch)
+        created = (j.created or "")[:16].replace("T", " ")
+        status = j.status or "?"
+        url = j.url or ""
+        cfg = pinpoint_mod.short_configuration(j.configuration or "")
+        benchmark = pinpoint_mod.short_benchmark(j.benchmark or "")
+        story = j.story or ""
+        diff = j.difference_count
+        patch = j.experiment_patch or ""
+        base_flags = j.base_extra_args or ""
+        exp_flags = j.experiment_extra_args or ""
 
         label = f"{benchmark} / {story}".strip(" /")
         diff_str = f"  diffs={diff}" if diff is not None else ""
@@ -93,18 +93,14 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             return _text_result("No job URLs provided.")
 
         paired = fetch_job_details_sorted(urls)
-        subjects = pinpoint_mod.patch_subjects(
-            [d.get("experiment_patch") for _, d in paired]
-        )
+        subjects = pinpoint_mod.patch_subjects([d.experiment_patch for _, d in paired])
         blocks = []
         for jid, detail in paired:
-            if "error" in detail:
-                blocks.append(f"Error fetching {jid}: {detail['error']}")
+            if detail.error is not None:
+                blocks.append(f"Error fetching {jid}: {detail.error}")
             else:
                 blocks.append(
-                    format_job_detail(
-                        detail, subjects.get(detail.get("experiment_patch"))
-                    )
+                    format_job_detail(detail, subjects.get(detail.experiment_patch))
                 )
         return _text_result("\n\n".join(blocks))
 
@@ -260,7 +256,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             since_dt = pinpoint_mod.parse_since(since_str) if since_str else None
             count = recent or 20
             jobs = fetch_jobs_list(count=count, filters=filters, since=since_dt)
-            job_ids.extend(j["job_id"] for j in jobs)
+            job_ids.extend(j.job_id for j in jobs)
 
         if not job_ids:
             return _text_result(

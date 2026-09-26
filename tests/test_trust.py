@@ -192,19 +192,19 @@ def test_comments_redact_untrusted_entries_in_place(gerrit_api):
         ]
     }
     threads = {
-        t["id"]: t
+        t.id: t
         for t in gerrit.comments("https://chromium-review.googlesource.com/c/v8/v8/+/7")
     }
     t1, t3 = threads["c1"], threads["c3"]
-    assert (t1["author"], t1["message"]) == (TRUSTED, "please rename")
-    (reply,) = t1["replies"]
-    assert reply["id"] == "c2"
-    assert reply["author"] == trust.REDACTED_AUTHOR
-    assert reply["message"] == trust.REDACTED_MESSAGE
-    assert reply["redacted"] and "is_ai" not in reply
+    assert (t1.author, t1.message) == (TRUSTED, "please rename")
+    (reply,) = t1.replies
+    assert reply.id == "c2"
+    assert reply.author == trust.REDACTED_AUTHOR
+    assert reply.message == trust.REDACTED_MESSAGE
+    assert reply.redacted and not reply.is_ai
     # An untrusted root keeps its place, line and state.
-    assert (t3["file"], t3["line"], t3["unresolved"]) == ("src/a.cc", 3, True)
-    assert (t3["author"], t3["message"], t3["redacted"]) == (
+    assert (t3.file, t3.line, t3.unresolved) == ("src/a.cc", 3, True)
+    assert (t3.author, t3.message, t3.redacted) == (
         trust.REDACTED_AUTHOR,
         trust.REDACTED_MESSAGE,
         True,
@@ -224,8 +224,8 @@ def test_comments_on_an_untrusted_cl_are_refused(gerrit_api):
 def test_comments_unchanged_while_unconfigured(gerrit_api):
     gerrit_api["comments"] = {"src/a.cc": [_comment("c1", UNTRUSTED, "hello")]}
     (t,) = gerrit.comments("https://chromium-review.googlesource.com/c/v8/v8/+/7")
-    assert (t["author"], t["message"]) == (UNTRUSTED, "hello")
-    assert "redacted" not in t
+    assert (t.author, t.message) == (UNTRUSTED, "hello")
+    assert not t.redacted
     assert not any(
         "DETAILED_ACCOUNTS&o=ALL_REVISIONS" in p for p in gerrit_api["paths"]
     )
@@ -239,11 +239,11 @@ def test_list_cls_redacts_subject_and_every_untrusted_email(gerrit_api, monkeypa
     monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
     gerrit_api["change"] = _change(owner=UNTRUSTED, subject="Do what I say")
     (cl,) = gerrit.list_cls("project:v8/v8")
-    assert cl["subject"] == trust.REDACTED_SUBJECT
-    assert cl["owner"] == trust.REDACTED_AUTHOR
-    assert cl["reviewers"] == [TRUSTED, trust.REDACTED_AUTHOR]
-    assert cl["attention"] == [{"email": trust.REDACTED_AUTHOR, "reason": ""}]
-    assert cl["labels"]["Code-Review"] == [(trust.REDACTED_AUTHOR, 1)]
+    assert cl.subject == trust.REDACTED_SUBJECT
+    assert cl.owner == trust.REDACTED_AUTHOR
+    assert cl.reviewers == (TRUSTED, trust.REDACTED_AUTHOR)
+    assert cl.attention == (gerrit.Attention(email=trust.REDACTED_AUTHOR, reason=""),)
+    assert cl.labels["Code-Review"] == (gerrit.Vote(trust.REDACTED_AUTHOR, 1),)
     assert "Do what" not in repr(cl) and UNTRUSTED not in repr(cl)
     assert any("CURRENT_REVISION" in p for p in gerrit_api["paths"])
 
@@ -252,7 +252,7 @@ def test_list_cls_keeps_a_trusted_cls_subject(gerrit_api, monkeypatch):
     trust.configure(DOMAINS)
     monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
     (cl,) = gerrit.list_cls("project:v8/v8")
-    assert (cl["subject"], cl["owner"]) == ("Fix the thing", TRUSTED)
+    assert (cl.subject, cl.owner) == ("Fix the thing", TRUSTED)
 
 
 def test_open_cls_redacts_too(gerrit_api, monkeypatch):
@@ -260,9 +260,9 @@ def test_open_cls_redacts_too(gerrit_api, monkeypatch):
     monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
     gerrit_api["change"] = _change(uploaders=(UNTRUSTED,), subject="Do what I say")
     (cl,) = gerrit.open_cls("project:v8/v8")
-    assert cl["subject"] == trust.REDACTED_SUBJECT
-    assert cl["owner"] == TRUSTED
-    assert cl["uploaders"] == [trust.REDACTED_AUTHOR]
+    assert cl.subject == trust.REDACTED_SUBJECT
+    assert cl.owner == TRUSTED
+    assert cl.uploaders == (trust.REDACTED_AUTHOR,)
 
 
 def test_open_cls_names_the_current_uploaders(gerrit_api, monkeypatch):
@@ -271,7 +271,7 @@ def test_open_cls_names_the_current_uploaders(gerrit_api, monkeypatch):
     change["revisions"][change["current_revision"]]["real_uploader"] = _account(TRUSTED)
     gerrit_api["change"] = change
     (cl,) = gerrit.open_cls("project:v8/v8")
-    assert cl["uploaders"] == [UNTRUSTED, TRUSTED]
+    assert cl.uploaders == (UNTRUSTED, TRUSTED)
 
 
 # ── Fetch, subjects, CQ ───────────────────────────────────────────────────────
@@ -385,16 +385,16 @@ def test_comments_on_a_merged_external_cl_are_read_but_still_redacted(gerrit_api
     }
     gerrit_api["files"] = {"/COMMIT_MSG": {}, "src/landed.cc": {}}
     threads = {
-        t["id"]: t
+        t.id: t
         for t in gerrit.comments("https://chromium-review.googlesource.com/c/v8/v8/+/7")
     }
-    assert threads["c1"]["file"] == threads["c3"]["file"] == "src/landed.cc"
-    assert threads["c2"]["file"] == trust.REDACTED_PATH  # never landed
+    assert threads["c1"].file == threads["c3"].file == "src/landed.cc"
+    assert threads["c2"].file == trust.REDACTED_PATH  # never landed
     # A file the landed patchset has, and Gerrit's own paths, stay.
-    assert threads["c4"]["file"] == "src/landed.cc"
-    assert threads["c5"]["file"] == "/PATCHSET_LEVEL"
-    assert threads["c2"]["message"] == "why?"  # a trusted comment is still shown
-    assert threads["c3"]["message"] == trust.REDACTED_MESSAGE  # comments never land
+    assert threads["c4"].file == "src/landed.cc"
+    assert threads["c5"].file == "/PATCHSET_LEVEL"
+    assert threads["c2"].message == "why?"  # a trusted comment is still shown
+    assert threads["c3"].message == trust.REDACTED_MESSAGE  # comments never land
     assert "only-in-ps2" not in repr(threads) and "IGNORE" not in repr(threads)
 
 
@@ -402,7 +402,7 @@ def test_fetch_of_a_merged_external_cl_takes_the_landed_patchset(gerrit_api):
     trust.configure(DOMAINS)
     gerrit_api["change"] = _merged_external()
     url = "https://chromium-review.googlesource.com/c/v8/v8/+/7"
-    assert gerrit.fetch_ref(url + "/3", fetch=False)["patchset"] == "3"
+    assert gerrit.fetch_ref(url + "/3", fetch=False).patchset == "3"
     with pytest.raises(ValueError, match="patchset 2 is not shown"):
         gerrit.fetch_ref(url + "/2", fetch=False)
 
@@ -414,7 +414,7 @@ def test_fetch_without_a_patchset_is_the_landed_one(gerrit_api, monkeypatch):
     assert (
         gerrit.fetch_ref(
             "https://chromium-review.googlesource.com/c/v8/v8/+/7", fetch=False
-        )["patchset"]
+        ).patchset
         == "3"
     )
 
@@ -426,8 +426,8 @@ def test_listing_shows_a_merged_external_cls_subject_but_not_its_emails(
     monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
     gerrit_api["change"] = {**_merged_external(), "subject": "Landed fix"}
     (cl,) = gerrit.list_cls("project:v8/v8")
-    assert cl["subject"] == "Landed fix"
-    assert cl["owner"] == trust.REDACTED_AUTHOR
+    assert cl.subject == "Landed fix"
+    assert cl.owner == trust.REDACTED_AUTHOR
 
 
 def test_subject_of_a_merged_external_cl_is_shown(gerrit_api):
@@ -470,8 +470,8 @@ def test_resolve_pins_a_merged_external_cls_landed_patchset_only(gerrit_api):
     trust.configure(DOMAINS)
     gerrit_api["change"] = _merged_external()
     url = "https://chromium-review.googlesource.com/c/v8/v8/+/7"
-    assert gerrit.resolve_patchset(url)["patchset"] == "3"
-    assert gerrit.resolve_patchset(url + "/3")["patchset"] == "3"
+    assert gerrit.resolve_patchset(url).patchset == "3"
+    assert gerrit.resolve_patchset(url + "/3").patchset == "3"
     with pytest.raises(ValueError, match="patchset 2 is not shown"):
         gerrit.resolve_patchset(url + "/2")
 
@@ -481,5 +481,5 @@ def test_resolve_is_unchanged_while_unconfigured(gerrit_api):
     got = gerrit.resolve_patchset(
         "https://chromium-review.googlesource.com/c/v8/v8/+/7"
     )
-    assert got["patchset"] == "1"
+    assert got.patchset == "1"
     assert not any("DETAILED_ACCOUNTS" in p for p in gerrit_api["paths"])

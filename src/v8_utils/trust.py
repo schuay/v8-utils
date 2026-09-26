@@ -61,6 +61,13 @@ def configure(domains: Iterable[str]) -> None:
     _domains = normalize_domains(domains)
 
 
+def reset() -> None:
+    """Turn redaction off again. For a test that must not inherit another's
+    configuration; a running process never calls it."""
+    global _domains
+    _domains = None
+
+
 def domains() -> tuple[str, ...] | None:
     """The configured domains, or None when redaction is off."""
     return _domains

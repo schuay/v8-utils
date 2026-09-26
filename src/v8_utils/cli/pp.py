@@ -147,20 +147,20 @@ def _progress_ctx(label: str, total: int | None = None):
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 
-def _print_job(j: dict, patch_subject: str | None) -> None:
-    url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.get('job_id')}{_RESET}"
-    created = (j.get("created") or "")[:16].replace("T", " ")
-    status = j.get("status") or "?"
+def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
+    url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.job_id}{_RESET}"
+    created = (j.created or "")[:16].replace("T", " ")
+    status = j.status or "?"
     print(f"{_DIM}{created}{_RESET}  {_status_color(status)}  {url}")
     print()
 
-    patch_url = j.get("experiment_patch")
+    patch_url = j.experiment_patch
 
     # Merged bot + benchmark line
     header_parts = []
-    cfg = j.get("configuration")
-    bench = j.get("benchmark")
-    story = j.get("story")
+    cfg = j.configuration
+    bench = j.benchmark
+    story = j.story
     if cfg:
         header_parts.append(f"bot: {pinpoint.short_configuration(cfg)}")
     if bench:
@@ -177,17 +177,17 @@ def _print_job(j: dict, patch_subject: str | None) -> None:
         print()
 
     fields = [
-        ("user", j.get("user")),
-        ("mode", j.get("comparison_mode")),
-        ("base", j.get("base_git_hash")),
-        ("end", j.get("end_git_hash")),
+        ("user", j.user),
+        ("mode", j.comparison_mode),
+        ("base", j.base_git_hash),
+        ("end", j.end_git_hash),
         ("patch", patch_url),
-        ("base-flags", j.get("base_extra_args")),
-        ("exp-flags", j.get("experiment_extra_args")),
-        ("diffs", j.get("difference_count")),
-        ("bug", j.get("bug_id")),
-        ("results", j.get("results_url")),
-        ("exception", j.get("exception")),
+        ("base-flags", j.base_extra_args),
+        ("exp-flags", j.experiment_extra_args),
+        ("diffs", j.difference_count),
+        ("bug", j.bug_id),
+        ("results", j.results_url),
+        ("exception", j.exception),
     ]
     w = max((len(k) for k, v in fields if v is not None), default=0)
     for key, val in fields:
@@ -206,14 +206,14 @@ def _print_job(j: dict, patch_subject: str | None) -> None:
 def _cmd_show_job(args: argparse.Namespace) -> None:
     with _progress_ctx("Fetching jobs", total=len(args.job_urls)) as on_progress:
         paired = fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
-    subjects = pinpoint.patch_subjects([d.get("experiment_patch") for _, d in paired])
+    subjects = pinpoint.patch_subjects([d.experiment_patch for _, d in paired])
     for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
-        if "error" in detail:
-            print(f"Error fetching {jid}: {detail['error']}")
+        if detail.error is not None:
+            print(f"Error fetching {jid}: {detail.error}")
         else:
-            _print_job(detail, subjects.get(detail.get("experiment_patch")))
+            _print_job(detail, subjects.get(detail.experiment_patch))
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
@@ -265,7 +265,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             else:
                 t2 = progress.add_task("Fetching details", total=None)
                 subjects = pinpoint.patch_subjects(
-                    [j.get("experiment_patch") for j in jobs],
+                    [j.experiment_patch for j in jobs],
                     lambda done, total: progress.update(
                         t2, completed=done, total=total
                     ),
@@ -274,7 +274,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         jobs = fetch_jobs_list(
             count=args.recent, user=user, filters=filters or None, since=since
         )
-        subjects = pinpoint.patch_subjects([j.get("experiment_patch") for j in jobs])
+        subjects = pinpoint.patch_subjects([j.experiment_patch for j in jobs])
 
     if not jobs:
         print("No jobs found.")
@@ -283,17 +283,17 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
     jobs.reverse()
 
     for j in jobs:
-        subject = subjects.get(j.get("experiment_patch"))
-        created = (j.get("created") or "")[:16].replace("T", " ")
-        status = j.get("status") or "?"
-        url = j.get("url") or ""
-        config_ = pinpoint.short_configuration(j.get("configuration") or "")
-        benchmark = pinpoint.short_benchmark(j.get("benchmark") or "")
-        story = j.get("story") or ""
-        diff = j.get("difference_count")
-        patch = j.get("experiment_patch") or ""
-        base_flags = j.get("base_extra_args") or ""
-        exp_flags = j.get("experiment_extra_args") or ""
+        subject = subjects.get(j.experiment_patch)
+        created = (j.created or "")[:16].replace("T", " ")
+        status = j.status or "?"
+        url = j.url or ""
+        config_ = pinpoint.short_configuration(j.configuration or "")
+        benchmark = pinpoint.short_benchmark(j.benchmark or "")
+        story = j.story or ""
+        diff = j.difference_count
+        patch = j.experiment_patch or ""
+        base_flags = j.base_extra_args or ""
+        exp_flags = j.experiment_extra_args or ""
 
         label = f"{benchmark} / {story}".strip(" /")
         diff_str = f"  {_YELLOW}diffs={diff}{_RESET}" if diff is not None else ""
@@ -310,7 +310,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             print(f"  {_DIM}exp-flags:{_RESET}  {exp_flags}")
         print()
 
-    job_ids = [j.get("job_id", "") for j in jobs]
+    job_ids = [j.job_id or "" for j in jobs]
     print(f"{_DIM}job ids:{_RESET} {' '.join(job_ids)}")
 
 
@@ -371,7 +371,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
                 progress.stop()
             print("No completed jobs found matching filters.")
             return
-        job_urls.extend(j["job_id"] for j in jobs)
+        job_urls.extend(j.job_id for j in jobs)
 
     if not job_urls:
         if progress:
@@ -475,11 +475,11 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             if exp_js_flags:
                 parts.append(f"flags:{exp_js_flags}")
             print(f"{_DIM}[{index + 1}/{total}] {' / '.join(parts)}{_RESET}")
-        if job.get("job_id"):
-            created_job_ids.append(job["job_id"])
-            _print_job(job, pinpoint.subject_or_none(job.get("experiment_patch")))
+        if job.job_id:
+            created_job_ids.append(job.job_id)
+            _print_job(job, pinpoint.subject_or_none(job.experiment_patch))
         else:
-            _out(job)
+            print(f"{_RED}error:{_RESET} {job.error}")
 
     def on_watching(url):
         print(

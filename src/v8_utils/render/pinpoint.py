@@ -14,38 +14,38 @@ _RESET = "\033[0m"
 
 
 def results_header(
-    job: dict, subjects: dict[str, str | None] | None = None, ansi: bool = False
+    job: pinpoint.Job, subjects: dict[str, str | None] | None = None, ansi: bool = False
 ) -> str:
     """Build the header lines (bot/benchmark/patch/flags) for a results table.
 
     subjects: patch URL to subject, for the patches the job names.
     """
     subjects = subjects or {}
-    experiment_patch_url = job.get("experiment_patch")
+    experiment_patch_url = job.experiment_patch
     experiment_patch_subject = subjects.get(experiment_patch_url)
-    base_patch_url = job.get("base_patch")
+    base_patch_url = job.base_patch
     base_patch_subject = subjects.get(base_patch_url)
-    base_hash = job.get("base_git_hash")
-    base_flags = job.get("base_extra_args")
-    exp_flags = job.get("experiment_extra_args")
+    base_hash = job.base_git_hash
+    base_flags = job.base_extra_args
+    exp_flags = job.experiment_extra_args
 
     b, d, c, r = (_BOLD, _DIM, _CYAN, _RESET) if ansi else ("", "", "", "")
 
     lines: list[str] = []
     header_parts = []
-    configuration = job.get("configuration")
+    configuration = job.configuration
     if configuration:
         header_parts.append(
             f"{d}bot:{r} {b}{pinpoint.short_configuration(configuration)}{r}"
         )
-    benchmark = job.get("benchmark")
-    story = job.get("story")
+    benchmark = job.benchmark
+    story = job.story
     if benchmark:
         bench_val = pinpoint.short_benchmark(benchmark)
         if story:
             bench_val += f" / {story}"
         header_parts.append(f"{d}benchmark:{r} {b}{bench_val}{r}")
-    created = job.get("created")
+    created = job.created
     if created:
         header_parts.append(f"{d}date:{r} {b}{created[:16].replace('T', ' ')}{r}")
     if header_parts:
@@ -89,7 +89,7 @@ def format_results_table(
     if not all_rows:
         return None
 
-    rows = all_rows if show_all else [r for r in all_rows if r["significant"]]
+    rows = all_rows if show_all else [r for r in all_rows if r.significant]
     omitted = len(all_rows) - len(rows)
     job = results.job
 
@@ -104,9 +104,9 @@ def format_results_table(
         )
         return f"{header}\n{no_sig}" if header else no_sig
 
-    def pct(row: dict) -> float:
-        bm = row["base_mean"] or 0
-        return (row["exp_mean"] - bm) / bm * 100 if bm else 0
+    def pct(row: pinpoint.ResultRow) -> float:
+        bm = row.base_mean or 0
+        return (row.exp_mean - bm) / bm * 100 if bm else 0
 
     rows.sort(key=pct, reverse=True)
 
@@ -138,20 +138,20 @@ def format_results_table(
         table.add_column("direction")
 
     for row in rows:
-        bm, bs = row["base_mean"] or 0, row["base_stdev"] or 0
-        em, es = row["exp_mean"] or 0, row["exp_stdev"] or 0
+        bm, bs = row.base_mean or 0, row.base_stdev or 0
+        em, es = row.exp_mean or 0, row.exp_stdev or 0
         pct_str = f"{pct(row):+.2f}%"
-        direction = _direction(row.get("unit"))
+        direction = _direction(row.unit)
         style = _pct_style(pct_str, direction)
         cols: list[str] = [
-            row["name"],
+            row.name,
             f"{_rd(bm, 4)} ±{_rd(bs, 3)}",
             f"{_rd(em, 4)} ±{_rd(es, 3)}",
             f"[{style}]{pct_str}[/]",
-            f"{row['p_value']:.4f}",
+            f"{row.p_value:.4f}",
         ]
         if not compact:
-            sig = "*" if row["significant"] else ""
+            sig = "*" if row.significant else ""
             cols.append(f"[bold green]{sig}[/]" if sig else "")
             cols.append(direction)
         table.add_row(*cols)
@@ -183,23 +183,23 @@ def format_results_table(
     return "\n".join(lines)
 
 
-def format_job_detail(j: dict, patch_subject: str | None = None) -> str:
-    """Format a job dict as compact text (mirrors pp's _print_job without ANSI).
+def format_job_detail(j: pinpoint.Job, patch_subject: str | None = None) -> str:
+    """Format a job as compact text (mirrors pp's _print_job without ANSI).
 
     patch_subject: the subject of the job's experiment patch, if known.
     """
-    created = (j.get("created") or "")[:16].replace("T", " ")
-    status = j.get("status") or "?"
-    url = j.get("url") or ""
+    created = (j.created or "")[:16].replace("T", " ")
+    status = j.status or "?"
+    url = j.url or ""
 
-    patch_url = j.get("experiment_patch")
+    patch_url = j.experiment_patch
 
     lines = [f"{created}  {status}  {url}"]
     # Merged bot + benchmark line
     header_parts = []
-    cfg = j.get("configuration")
-    bench = j.get("benchmark")
-    story = j.get("story")
+    cfg = j.configuration
+    bench = j.benchmark
+    story = j.story
     if cfg:
         header_parts.append(f"bot: {pinpoint.short_configuration(cfg)}")
     if bench:
@@ -210,17 +210,17 @@ def format_job_detail(j: dict, patch_subject: str | None = None) -> str:
     if header_parts:
         lines.append("  ".join(header_parts))
     fields = [
-        ("user", j.get("user")),
-        ("mode", j.get("comparison_mode")),
-        ("base", j.get("base_git_hash")),
-        ("end", j.get("end_git_hash")),
+        ("user", j.user),
+        ("mode", j.comparison_mode),
+        ("base", j.base_git_hash),
+        ("end", j.end_git_hash),
         ("patch", patch_url),
-        ("base-flags", j.get("base_extra_args")),
-        ("exp-flags", j.get("experiment_extra_args")),
-        ("diffs", j.get("difference_count")),
-        ("bug", j.get("bug_id")),
-        ("results", j.get("results_url")),
-        ("exception", j.get("exception")),
+        ("base-flags", j.base_extra_args),
+        ("exp-flags", j.experiment_extra_args),
+        ("diffs", j.difference_count),
+        ("bug", j.bug_id),
+        ("results", j.results_url),
+        ("exception", j.exception),
     ]
     w = max((len(k) for k, v in fields if v is not None), default=0)
     for key, val in fields:

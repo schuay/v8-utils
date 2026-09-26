@@ -12,64 +12,64 @@ from datetime import datetime
 from . import config
 from . import pinpoint
 from .concurrency import _run_concurrent
+from .pinpoint import Job, ResultRow
 
 
 def fetch_job_details_sorted(
     job_ids: list[str],
     on_progress: Callable[[int, int], None] | None = None,
-) -> list[tuple[str, dict]]:
+) -> list[tuple[str, Job]]:
     """Fetch job details in parallel, deduplicate, sort oldest-first.
 
-    Returns [(job_id, detail_dict), ...].  On fetch error the dict
-    contains an ``"error"`` key instead of normal fields.
+    Returns [(job_id, job), ...]. A job that could not be fetched carries the
+    failure in `error` and nothing else.
     """
     job_ids = list(dict.fromkeys(job_ids))
 
     log = logging.getLogger("v8-utils")
 
-    def fetch(jid: str) -> dict:
+    def fetch(jid: str) -> Job:
         try:
             return fetch_job_detail(jid)
         except Exception as e:
             log.debug("fetch_job_detail failed for %s", jid, exc_info=True)
-            return {"job_id": jid, "error": str(e)}
+            return Job(job_id=jid, error=str(e))
 
     fns = [lambda jid=jid: fetch(jid) for jid in job_ids]
     details = _run_concurrent(fns, on_progress)
     paired = list(zip(job_ids, details))
-    paired.sort(key=lambda p: p[1].get("created") or "")
+    paired.sort(key=lambda p: p[1].created or "")
     return paired
 
 
-def fetch_job_detail(job_url: str) -> dict:
-    """One job's details as a flat dict; fields Pinpoint left unset are absent."""
+def fetch_job_detail(job_url: str) -> Job:
+    """One job's details."""
     job_id = pinpoint.job_id_from_url(job_url)
     data = pinpoint.fetch_job(job_id)
     args = data.get("arguments", {})
-    result = {
-        "job_id": data.get("job_id"),
-        "url": f"https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}",
-        "name": data.get("name"),
-        "status": data.get("status"),
-        "user": data.get("user"),
-        "created": data.get("created"),
-        "updated": data.get("updated"),
-        "comparison_mode": data.get("comparison_mode"),
-        "configuration": data.get("configuration"),
-        "benchmark": args.get("benchmark"),
-        "story": args.get("story"),
-        "base_git_hash": args.get("base_git_hash"),
-        "end_git_hash": args.get("end_git_hash"),
-        "base_patch": args.get("base_patch"),
-        "experiment_patch": args.get("experiment_patch"),
-        "base_extra_args": args.get("base_extra_args"),
-        "experiment_extra_args": args.get("experiment_extra_args"),
-        "difference_count": data.get("difference_count"),
-        "exception": data.get("exception"),
-        "bug_id": data.get("bug_id"),
-        "results_url": data.get("results_url"),
-    }
-    return {k: v for k, v in result.items() if v is not None}
+    return Job(
+        job_id=data.get("job_id"),
+        url=f"https://pinpoint-dot-chromeperf.appspot.com/job/{job_id}",
+        name=data.get("name"),
+        status=data.get("status"),
+        user=data.get("user"),
+        created=data.get("created"),
+        updated=data.get("updated"),
+        comparison_mode=data.get("comparison_mode"),
+        configuration=data.get("configuration"),
+        benchmark=args.get("benchmark"),
+        story=args.get("story"),
+        base_git_hash=args.get("base_git_hash"),
+        end_git_hash=args.get("end_git_hash"),
+        base_patch=args.get("base_patch"),
+        experiment_patch=args.get("experiment_patch"),
+        base_extra_args=args.get("base_extra_args"),
+        experiment_extra_args=args.get("experiment_extra_args"),
+        difference_count=data.get("difference_count"),
+        exception=data.get("exception"),
+        bug_id=data.get("bug_id"),
+        results_url=data.get("results_url"),
+    )
 
 
 def fetch_jobs_list(
@@ -77,8 +77,9 @@ def fetch_jobs_list(
     user: str | None = None,
     filters: list[str] | None = None,
     since: datetime | None = None,
-) -> list[dict]:
-    """A user's recent jobs, newest first, summarised as dicts."""
+) -> list[Job]:
+    """A user's recent jobs, newest first, with the fields the listing
+    carries (see Job)."""
     if user is None:
         user = config.load().user or pinpoint.get_current_user_email()
     return [
@@ -231,7 +232,7 @@ def create_pinpoint_jobs(
     on_job_created: callable = None,
     on_watching: callable = None,
     watch: bool | None = None,
-) -> list[dict]:
+) -> list[Job]:
     """Shared core for creating Pinpoint A/B jobs.
 
     Creates one job per combination of configuration x benchmark x exp_patch x exp_js_flags.
@@ -246,7 +247,8 @@ def create_pinpoint_jobs(
 
     watch:  True = always watch, None = auto (when chat is configured), False = never
 
-    Returns a list of job detail dicts.
+    Returns one Job per combination, in creation order. A response without a
+    job id is reported as a Job carrying only `error`.
     """
     import itertools
 
@@ -348,10 +350,9 @@ def create_pinpoint_jobs(
         )
         job_url = result.get("url")
         if job_url:
-            job_detail = fetch_job_detail(job_url)
-            jobs.append(job_detail)
+            jobs.append(fetch_job_detail(job_url))
         else:
-            jobs.append(result)
+            jobs.append(Job(error=f"Pinpoint returned no job id: {result!r}"))
         if on_job_created:
             on_job_created(
                 i,
@@ -367,10 +368,9 @@ def create_pinpoint_jobs(
     )
     if should_watch:
         urls = [
-            j.get("url")
-            or f"https://pinpoint-dot-chromeperf.appspot.com/job/{j['job_id']}"
+            j.url or f"https://pinpoint-dot-chromeperf.appspot.com/job/{j.job_id}"
             for j in jobs
-            if j.get("job_id")
+            if j.job_id
         ]
         if urls:
             if not daemon.is_running():
@@ -418,18 +418,18 @@ class JobResults:
 
     job_id: str
     #: Result rows as pivot_results returns them; empty when the job has none.
-    rows: list[dict]
+    rows: list[ResultRow]
     #: Why the rows could not be read, else None.
     error: str | None = None
-    #: The job's details; {} when they could not be read.
-    job: dict = field(default_factory=dict)
+    #: The job's details; every field None when they could not be read.
+    job: Job = field(default_factory=Job)
     #: The subject of each patch the job names, by patch URL; None when unknown.
     subjects: dict[str, str | None] = field(default_factory=dict)
 
 
 def fetch_job_results(
     job_ids: list[str],
-    details: dict[str, dict] | None = None,
+    details: dict[str, Job] | None = None,
     use_cas: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> list[JobResults]:
@@ -460,8 +460,8 @@ def fetch_job_results(
                 job = fetch_job_detail(job_id)
             except Exception:
                 log.debug("fetch_job_detail failed for %s", job_id, exc_info=True)
-                job = {}
-        patches = [p for p in (job.get("experiment_patch"), job.get("base_patch")) if p]
+                job = Job()
+        patches = [p for p in (job.experiment_patch, job.base_patch) if p]
         return JobResults(
             job_id=job_id,
             rows=rows,

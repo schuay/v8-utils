@@ -11,6 +11,7 @@ import pytest
 from v8_utils import changelog
 from v8_utils import daemon
 from v8_utils.pinpoint import (
+    ResultRow,
     _apply_significance,
     _extract_change_and_patchset,
     _extract_change_id,
@@ -472,15 +473,26 @@ class TestJobMatchesFilter:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
+def _row(name, base, exp, unit="ms_smallerIsBetter", significant=True):
+    return ResultRow(
+        name=name,
+        unit=unit,
+        base_label="base",
+        base_mean=base,
+        base_stdev=1.0,
+        base_n=10,
+        exp_label="exp",
+        exp_mean=exp,
+        exp_stdev=1.0,
+        exp_n=10,
+        p_value=0.001 if significant else 0.5,
+        significant=significant,
+    )
+
+
 class TestFormatResultsForChat:
-    def _row(self, name, base, exp, unit="ms_smallerIsBetter", significant=True):
-        return {
-            "name": name,
-            "base_mean": base,
-            "exp_mean": exp,
-            "unit": unit,
-            "significant": significant,
-        }
+    def _row(self, *args, **kw):
+        return _row(*args, **kw)
 
     def test_no_significant_results(self):
         text = daemon._format_results_for_chat(
@@ -553,13 +565,7 @@ class TestMessageText:
         assert "Build timeout" in text
 
     def test_results_appended(self):
-        row = {
-            "name": "Score",
-            "base_mean": 100,
-            "exp_mean": 80,
-            "unit": "ms_smallerIsBetter",
-            "significant": True,
-        }
+        row = _row("Score", 100, 80, unit="ms_smallerIsBetter")
         text = daemon._message_text(self._job(), results=[row])
         assert "Results" in text
         assert "Score" in text

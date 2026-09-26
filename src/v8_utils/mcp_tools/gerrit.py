@@ -1,6 +1,7 @@
 """MCP tools for Chromium Gerrit code review."""
 
 import re as _re
+from dataclasses import asdict
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
@@ -22,43 +23,36 @@ CHANGE_URL_ARG = (
 )
 
 
-def _format_gerrit_comments(threads: list[dict]) -> str:
+def _format_gerrit_comments(threads: list[gerrit_tools.CommentThread]) -> str:
     blocks = []
     for t in threads:
-        file = t["file"]
-        if file == "/PATCHSET_LEVEL":
+        if t.file == "/PATCHSET_LEVEL":
             loc = "(top-level)"
         else:
-            loc = file
-            if t.get("line"):
-                loc += f":{t['line']}"
-        if t.get("patch_set"):
-            side = "Base" if t.get("side") == "PARENT" else f"ps{t['patch_set']}"
-            commit = f" {t['commit_id'][:9]}" if t.get("commit_id") else ""
+            loc = t.file
+            if t.line:
+                loc += f":{t.line}"
+        if t.patch_set:
+            side = "Base" if t.side == "PARENT" else f"ps{t.patch_set}"
+            commit = f" {t.commit_id[:9]}" if t.commit_id else ""
             loc += f" ({side}{commit})"
         tags = ""
-        if t.get("draft"):
+        if t.draft:
             tags += " [draft]"
-        if t.get("unresolved"):
+        if t.unresolved:
             tags += " [unresolved]"
         header = f"{loc}{tags}"
-        author = t.get("author", "unknown")
-        msg = t.get("message", "").strip()
-        root_id = t.get("id")
-        id_tag = f" [{root_id}]" if root_id else ""
-        lines = [header, f"  {author}{id_tag}: {msg}"]
-        for r in t.get("replies", []):
-            r_author = r.get("author", "unknown")
-            r_msg = r.get("message", "").strip()
-            r_id = r.get("id")
-            r_id_tag = f" [{r_id}]" if r_id else ""
-            draft_tag = " [draft]" if r.get("draft") else ""
-            lines.append(f"  {r_author}{r_id_tag}{draft_tag}: {r_msg}")
+        id_tag = f" [{t.id}]" if t.id else ""
+        lines = [header, f"  {t.author}{id_tag}: {t.message.strip()}"]
+        for r in t.replies:
+            r_id_tag = f" [{r.id}]" if r.id else ""
+            draft_tag = " [draft]" if r.draft else ""
+            lines.append(f"  {r.author}{r_id_tag}{draft_tag}: {r.message.strip()}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
 
-def _format_draft_results(results: list[dict]) -> str:
+def _format_draft_results(results: list[gerrit_tools.DraftResult]) -> str:
     def _loc(path: str | None, line: int | None) -> str:
         if path == "/PATCHSET_LEVEL" or not path:
             return "(top-level)"
@@ -66,53 +60,51 @@ def _format_draft_results(results: list[dict]) -> str:
 
     lines = []
     for i, r in enumerate(results):
-        if r.get("ok"):
-            lines.append(
-                f"[{i}] ok  {_loc(r.get('path'), r.get('line'))}  id={r.get('id', '?')}"
-            )
+        if r.ok:
+            lines.append(f"[{i}] ok  {_loc(r.path, r.line)}  id={r.id or '?'}")
         else:
-            inp = r.get("input", {})
+            inp = r.input or {}
             lines.append(
                 f"[{i}] FAIL {_loc(inp.get('path'), inp.get('line'))}  "
-                f"{r.get('error', 'unknown error')}"
+                f"{r.error or 'unknown error'}"
             )
     return "\n".join(lines)
 
 
-def _format_cl_list(cls: list[dict]) -> str:
-    """Format a list of compact change dicts into readable text."""
+def _format_cl_list(cls: list[gerrit_tools.Change]) -> str:
+    """Format a list of compact changes into readable text."""
     blocks = []
     for cl in cls:
         # Label scores
         label_parts = []
-        for label, votes in cl.get("labels", {}).items():
-            scores = " ".join(f"{'+' if v > 0 else ''}{v}" for _, v in votes)
+        for label, votes in cl.labels.items():
+            scores = " ".join(f"{'+' if v.value > 0 else ''}{v.value}" for v in votes)
             # Shorten well-known labels
             short = label.replace("Code-Review", "CR").replace("Commit-Queue", "CQ")
             label_parts.append(f"{short}:{scores}")
         labels_str = f"  [{', '.join(label_parts)}]" if label_parts else ""
 
-        wip = " (WIP)" if cl.get("wip") else ""
+        wip = " (WIP)" if cl.wip else ""
         comments = ""
-        if cl.get("unresolved_comments"):
-            comments = f"  {cl['unresolved_comments']} unresolved"
+        if cl.unresolved_comments:
+            comments = f"  {cl.unresolved_comments} unresolved"
 
-        line1 = f'{cl["number"]}  {cl["status"]}{wip}  "{cl["subject"]}"'
+        line1 = f'{cl.number}  {cl.status}{wip}  "{cl.subject}"'
         line2 = (
-            f"  {cl['owner']}  "
-            f"+{cl['insertions']}/-{cl['deletions']}  "
-            f"ps{cl.get('patchset', '?')}  "
-            f"updated {cl['updated'][:10]}"
+            f"  {cl.owner}  "
+            f"+{cl.insertions}/-{cl.deletions}  "
+            f"ps{cl.patchset if cl.patchset is not None else '?'}  "
+            f"updated {cl.updated[:10]}"
             f"{labels_str}{comments}"
         )
 
         lines = [line1, line2]
 
-        if cl.get("reviewers"):
-            lines.append(f"  reviewers: {', '.join(cl['reviewers'])}")
+        if cl.reviewers:
+            lines.append(f"  reviewers: {', '.join(cl.reviewers)}")
 
-        if cl.get("attention"):
-            attn = [f"{a['email']} ({a['reason']})" for a in cl["attention"]]
+        if cl.attention:
+            attn = [f"{a.email} ({a.reason})" for a in cl.attention]
             lines.append(f"  attention: {', '.join(attn)}")
 
         blocks.append("\n".join(lines))
@@ -290,7 +282,9 @@ def register(
 
         """
         repo_path = v8_repo_path or str(repo_git.resolve_repo("v8"))
-        return gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
+        return asdict(
+            gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
+        )
 
     @mcp.tool()
     def gerrit_list_cls(

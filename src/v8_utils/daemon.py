@@ -100,23 +100,23 @@ def _format_job_details_for_chat(job: dict) -> str:
     return "\n".join(f"  {k}: {v}" for k, v in fields if v)
 
 
-def _format_results_for_chat(rows: list[dict]) -> str:
+def _format_results_for_chat(rows: list[pinpoint.ResultRow]) -> str:
     """Format results as a Chat-friendly text block with emoji color."""
-    sig = [r for r in rows if r.get("significant")]
+    sig = [r for r in rows if r.significant]
     if not sig:
         return "\n_No statistically significant changes._"
 
-    def _pct(r: dict) -> float:
-        bm = r.get("base_mean") or 0.0
-        return ((r.get("exp_mean") or 0.0) - bm) / bm * 100 if bm else 0.0
+    def _pct(r: pinpoint.ResultRow) -> float:
+        bm = r.base_mean or 0.0
+        return ((r.exp_mean or 0.0) - bm) / bm * 100 if bm else 0.0
 
     sig.sort(key=_pct, reverse=True)
 
     lines = ["", "*Results (significant):*"]
     for r in sig:
-        unit = r.get("unit", "")
-        base_mean = r.get("base_mean") or 0.0
-        exp_mean = r.get("exp_mean") or 0.0
+        unit = r.unit or ""
+        base_mean = r.base_mean or 0.0
+        exp_mean = r.exp_mean or 0.0
         if base_mean:
             pct = (exp_mean - base_mean) / base_mean * 100
             pct_str = f"{pct:+.1f}%"
@@ -126,11 +126,11 @@ def _format_results_for_chat(rows: list[dict]) -> str:
         else:
             pct_str = "?"
             emoji = "📊"
-        lines.append(f"  {emoji} {pct_str} {r['name']}")
+        lines.append(f"  {emoji} {pct_str} {r.name}")
     return "\n".join(lines)
 
 
-def _message_text(job: dict, results: list[dict] | None = None) -> str:
+def _message_text(job: dict, results: list[pinpoint.ResultRow] | None = None) -> str:
     status = job.get("status", "Unknown")
     name = job.get("name", job.get("job_id", "unknown"))
     job_id = job.get("job_id", "")
@@ -149,7 +149,9 @@ def _message_text(job: dict, results: list[dict] | None = None) -> str:
     return text
 
 
-def _notify_webhook(webhook: str, job: dict, results: list[dict] | None = None) -> None:
+def _notify_webhook(
+    webhook: str, job: dict, results: list[pinpoint.ResultRow] | None = None
+) -> None:
     try:
         httpx.post(webhook, json={"text": _message_text(job, results)}, timeout=10)
         log.info("webhook sent for %s", job.get("job_id"))
@@ -158,7 +160,10 @@ def _notify_webhook(webhook: str, job: dict, results: list[dict] | None = None) 
 
 
 def _notify_chat_app(
-    space: str, service_account_email: str, job: dict, results: list[dict] | None = None
+    space: str,
+    service_account_email: str,
+    job: dict,
+    results: list[pinpoint.ResultRow] | None = None,
 ) -> None:
     from . import chat
 
@@ -166,7 +171,9 @@ def _notify_chat_app(
     log.info("Chat app notification sent for %s", job.get("job_id"))
 
 
-def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) -> None:
+def _notify(
+    cfg: config.Config, job: dict, results: list[pinpoint.ResultRow] | None = None
+) -> None:
     """Send a notification via Chat app (preferred) or webhook (fallback)."""
     if cfg.chat_app_space and cfg.chat_service_account_email:
         try:
@@ -185,7 +192,9 @@ def _notify(cfg: config.Config, job: dict, results: list[dict] | None = None) ->
 _RESULTS_TIMEOUT = 30 * 60  # seconds to wait for results page after job completes
 
 
-def _fetch_results_when_ready(job_id: str, poll_interval: int) -> list[dict] | None:
+def _fetch_results_when_ready(
+    job_id: str, poll_interval: int
+) -> list[pinpoint.ResultRow] | None:
     """Poll until the results page is ready, then return pivot_results.
 
     Returns None if the results page never appears within _RESULTS_TIMEOUT.

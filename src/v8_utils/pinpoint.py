@@ -10,6 +10,7 @@ import re
 import statistics
 import subprocess
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
@@ -28,6 +29,64 @@ _LOGIN_INSTRUCTIONS = (
 )
 
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
+
+
+# ── Results ───────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Job:
+    """One Pinpoint job, flattened from the API's job JSON. A field Pinpoint
+    left unset is None; a listing (fetch_jobs_list) fills the subset the jobs
+    endpoint carries and leaves the rest None."""
+
+    job_id: str | None = None
+    url: str | None = None
+    name: str | None = None
+    status: str | None = None
+    user: str | None = None
+    created: str | None = None
+    updated: str | None = None
+    comparison_mode: str | None = None
+    configuration: str | None = None
+    benchmark: str | None = None
+    story: str | None = None
+    base_git_hash: str | None = None
+    end_git_hash: str | None = None
+    base_patch: str | None = None
+    experiment_patch: str | None = None
+    base_extra_args: str | None = None
+    experiment_extra_args: str | None = None
+    difference_count: int | None = None
+    exception: str | None = None
+    bug_id: int | None = None
+    results_url: str | None = None
+    #: Set instead of the fields when the job could not be fetched.
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class ResultRow:
+    """Base against experiment for one metric of a job. Mann-Whitney U,
+    two-sided, significant at alpha 0.01 as the Pinpoint UI flags it."""
+
+    name: str
+    unit: str | None
+    base_label: str
+    base_mean: float | None
+    base_stdev: float | None
+    base_n: int
+    exp_label: str
+    exp_mean: float | None
+    exp_stdev: float | None
+    exp_n: int
+    p_value: float
+    significant: bool
+
+
+def _result_rows(rows: list[dict]) -> list[ResultRow]:
+    """Typed rows from the dicts pivot_results computes and caches."""
+    return [ResultRow(**r) for r in rows]
 
 
 # ── LUCI auth ─────────────────────────────────────────────────────────────────
@@ -629,25 +688,25 @@ def fetch_jobs(
     return all_jobs[:count]
 
 
-def summarise_job(j: dict) -> dict:
-    """Extract the key fields from a raw job dict."""
+def summarise_job(j: dict) -> Job:
+    """The key fields of a raw job dict, as the jobs listing carries them."""
     args = j.get("arguments", {})
-    return {
-        "job_id": j.get("job_id"),
-        "url": f"{_PINPOINT_BASE}/job/{j.get('job_id')}",
-        "name": j.get("name"),
-        "status": j.get("status"),
-        "created": j.get("created"),
-        "configuration": j.get("configuration"),
-        "benchmark": args.get("benchmark"),
-        "story": args.get("story"),
-        "base_git_hash": args.get("base_git_hash"),
-        "experiment_patch": args.get("experiment_patch"),
-        "base_extra_args": args.get("base_extra_args"),
-        "experiment_extra_args": args.get("experiment_extra_args"),
-        "difference_count": j.get("difference_count"),
-        "exception": j.get("exception"),
-    }
+    return Job(
+        job_id=j.get("job_id"),
+        url=f"{_PINPOINT_BASE}/job/{j.get('job_id')}",
+        name=j.get("name"),
+        status=j.get("status"),
+        created=j.get("created"),
+        configuration=j.get("configuration"),
+        benchmark=args.get("benchmark"),
+        story=args.get("story"),
+        base_git_hash=args.get("base_git_hash"),
+        experiment_patch=args.get("experiment_patch"),
+        base_extra_args=args.get("base_extra_args"),
+        experiment_extra_args=args.get("experiment_extra_args"),
+        difference_count=j.get("difference_count"),
+        exception=j.get("exception"),
+    )
 
 
 # ── Histogram parsing ─────────────────────────────────────────────────────────
@@ -737,11 +796,8 @@ def _apply_significance(
     return rows
 
 
-def pivot_results(job_id: str) -> list[dict]:
+def pivot_results(job_id: str) -> list[ResultRow]:
     """Return one row per metric comparing base vs experiment.
-
-    Each row has: name, unit, base_label, base_mean, base_stdev, base_n,
-    exp_label, exp_mean, exp_stdev, exp_n, p_value, significant.
 
     Labels with "base:"/"exp:" prefix are assigned accordingly; otherwise
     alphabetical order is used. Mann-Whitney U (two-sided), with
@@ -752,7 +808,7 @@ def pivot_results(job_id: str) -> list[dict]:
 
     cached = pinpoint_cache.get_results(job_id, source="histogram")
     if cached is not None:
-        return cached
+        return _result_rows(cached)
     histograms, guids = fetch_histograms(job_id)
     groups = _collect_groups(histograms, guids)
 
@@ -789,7 +845,7 @@ def pivot_results(job_id: str) -> list[dict]:
     rows = _apply_significance(rows)
     if rows:
         pinpoint_cache.put_results(job_id, rows, source="histogram")
-    return rows
+    return _result_rows(rows)
 
 
 def fetch_raw_values(job_id: str) -> list[dict]:
@@ -905,7 +961,7 @@ def _parse_crossbench_probe(raw: bytes) -> dict[str, list[float]] | None:
     return result or None
 
 
-def pivot_results_cas(job_id: str) -> list[dict]:
+def pivot_results_cas(job_id: str) -> list[ResultRow]:
     """Like pivot_results, but fetches raw per-run values from CAS isolates.
 
     Uses the RBE REST API directly — no `cas` binary required.
@@ -920,7 +976,7 @@ def pivot_results_cas(job_id: str) -> list[dict]:
 
     cached = pinpoint_cache.get_results(job_id, source="cas")
     if cached is not None:
-        return cached
+        return _result_rows(cached)
 
     job = fetch_job(job_id)
     if job.get("status") != "Completed":
@@ -1038,7 +1094,7 @@ def pivot_results_cas(job_id: str) -> list[dict]:
     rows = _apply_significance(rows)
     if rows:
         pinpoint_cache.put_results(job_id, rows, source="cas")
-    return rows
+    return _result_rows(rows)
 
 
 # ── Build lookup ──────────────────────────────────────────────────────────────

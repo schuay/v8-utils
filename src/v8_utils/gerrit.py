@@ -6,6 +6,7 @@ import json
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass, field, replace
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -27,6 +28,190 @@ _ALLOWED_HOST_SUFFIX = "-review.googlesource.com"
 # claimed here until someone needs it.
 _CRREV_HOST = "crrev.com"
 _CRREV_TARGET = "chromium-review.googlesource.com"
+
+
+# ── Results ───────────────────────────────────────────────────────────────────
+#
+# Every read here returns one of these rather than a dict, so a caller reads
+# fields by name and a shape change is a type error at the call site. Emails
+# and free text are already redacted per v8_utils.trust when trusted author
+# domains are configured; the types carry the marks the redaction leaves.
+
+
+@dataclass(frozen=True)
+class Vote:
+    """One non-zero vote on a label."""
+
+    email: str
+    value: int
+
+
+@dataclass(frozen=True)
+class LabelFlags:
+    """Gerrit's own verdict on a label; see _extract_label_flags for why
+    `rejected` is not a veto signal."""
+
+    approved: bool
+    rejected: bool
+
+
+@dataclass(frozen=True)
+class Attention:
+    """One attention-set entry. `reason` is Gerrit's text and goes with the
+    address when the account is redacted."""
+
+    email: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class Change:
+    """A CL as list_cls reports it: the compact view of a ChangeInfo."""
+
+    number: int
+    subject: str = ""
+    status: str = ""
+    owner: str = ""
+    project: str = ""
+    branch: str = ""
+    insertions: int = 0
+    deletions: int = 0
+    updated: str = ""
+    wip: bool = False
+    hashtags: tuple[str, ...] = ()
+    unresolved_comments: int = 0
+    #: The current patchset number, when Gerrit reported one.
+    patchset: int | None = None
+    #: Non-zero votes per label.
+    labels: dict[str, tuple[Vote, ...]] = field(default_factory=dict)
+    #: Gerrit's approved/rejected verdict, for labels that have one.
+    label_flags: dict[str, LabelFlags] = field(default_factory=dict)
+    reviewers: tuple[str, ...] = ()
+    attention: tuple[Attention, ...] = ()
+
+
+@dataclass(frozen=True)
+class OpenChange:
+    """A CL as open_cls reports it: what a watcher needs to fetch and review
+    the current patchset."""
+
+    number: int | None
+    project: str = ""
+    subject: str = ""
+    owner: str = ""
+    #: Emails of the current patchset's uploader and, when it was uploaded on
+    #: someone's behalf, the real uploader.
+    uploaders: tuple[str, ...] = ()
+    #: The current patchset's commit SHA.
+    revision: str = ""
+    #: Its refs/changes/... ref.
+    fetch_ref: str = ""
+
+
+@dataclass(frozen=True)
+class CommentEntry:
+    """One reply in a comment thread."""
+
+    id: str | None
+    author: str
+    message: str
+    updated: str = ""
+    #: The caller's own unpublished draft.
+    draft: bool = False
+    #: Marked machine-authored by whoever posted it. False means "not marked"
+    #: and is never evidence that a person wrote it.
+    is_ai: bool = False
+    #: Written by an account outside the trusted author domains: author and
+    #: message are placeholders and is_ai is dropped.
+    redacted: bool = False
+
+
+@dataclass(frozen=True)
+class CommentThread:
+    """A root comment with its replies, oldest first."""
+
+    file: str
+    line: int | None
+    patch_set: int | None
+    side: str | None
+    commit_id: str | None
+    #: Where the thread stands: its last entry's resolution.
+    unresolved: bool
+    id: str | None
+    author: str
+    message: str
+    updated: str = ""
+    replies: tuple[CommentEntry, ...] = ()
+    is_ai: bool = False
+    redacted: bool = False
+    draft: bool = False
+
+
+@dataclass(frozen=True)
+class Range:
+    start_line: int
+    start_character: int
+    end_line: int
+    end_character: int
+
+
+@dataclass(frozen=True)
+class DraftResult:
+    """The outcome of one create_drafts entry. On success the CommentInfo
+    Gerrit answered with; on failure `error`, and `input` is the entry as
+    given, so the caller can retry just that one."""
+
+    ok: bool
+    id: str | None = None
+    path: str | None = None
+    line: int | None = None
+    range: Range | None = None
+    side: str | None = None
+    patch_set: int | None = None
+    message: str | None = None
+    updated: str | None = None
+    unresolved: bool | None = None
+    in_reply_to: str | None = None
+    is_ai: bool = False
+    error: str | None = None
+    input: dict | None = None
+
+
+@dataclass(frozen=True)
+class ReviewResult:
+    """Gerrit's ReviewInfo for a review post. No labels are ever set by the
+    posts here, so `labels` reports what Gerrit applied, normally nothing."""
+
+    labels: dict[str, int] = field(default_factory=dict)
+    #: Set when the post moved the change out of work-in-progress.
+    ready: bool = False
+
+
+@dataclass(frozen=True)
+class Patchset:
+    """One patchset of a CL, pinned by resolve_patchset."""
+
+    #: refs/changes/NN/CHANGE/PATCHSET
+    ref: str
+    #: The patchset number, as Gerrit numbers them.
+    patchset: str
+    #: The commit SHA of that patchset.
+    revision: str
+    #: The Gerrit project, from the response rather than the URL.
+    project: str
+    #: The review host the change lives on.
+    host: str
+
+
+@dataclass(frozen=True)
+class FetchedRef:
+    """A patchset's git ref, and where fetch_ref left it."""
+
+    ref: str
+    remote: str
+    patchset: str
+    #: The commit SHA of FETCH_HEAD after the fetch; None without one.
+    fetch_head: str | None = None
 
 
 # ── URL parsing ───────────────────────────────────────────────────────────────
@@ -263,22 +448,22 @@ _GERRIT_HOST = "https://chromium-review.googlesource.com"
 _INTERESTING_LABELS = ("Code-Review", "Commit-Queue")
 
 
-def _extract_label_scores(labels: dict) -> dict[str, list[tuple[str, int]]]:
-    """Extract {label: [(email, value), ...]} from the labels dict."""
-    result: dict[str, list[tuple[str, int]]] = {}
+def _extract_label_scores(labels: dict) -> dict[str, tuple[Vote, ...]]:
+    """Extract {label: (Vote, ...)} from the labels dict, non-zero votes only."""
+    result: dict[str, tuple[Vote, ...]] = {}
     for label_name, label_info in labels.items():
         votes = []
         for entry in label_info.get("all", []):
             value = entry.get("value", 0)
             if value != 0:
                 email = entry.get("email", "unknown")
-                votes.append((email, value))
+                votes.append(Vote(email, value))
         if votes:
-            result[label_name] = votes
+            result[label_name] = tuple(votes)
     return result
 
 
-def _extract_label_flags(labels: dict) -> dict[str, dict[str, bool]]:
+def _extract_label_flags(labels: dict) -> dict[str, LabelFlags]:
     """Extract {label: {approved, rejected}} -- gerrit's own verdict per label.
 
     Gerrit sets `approved`/`rejected` when someone cast the label's max/min
@@ -292,16 +477,16 @@ def _extract_label_flags(labels: dict) -> dict[str, dict[str, bool]]:
     `submittable` false). Decide a veto from the vote values in
     _extract_label_scores; use these flags only for "a max/min vote exists".
     """
-    out: dict[str, dict[str, bool]] = {}
+    out: dict[str, LabelFlags] = {}
     for label_name, label_info in labels.items():
         approved, rejected = "approved" in label_info, "rejected" in label_info
         if approved or rejected:
-            out[label_name] = {"approved": approved, "rejected": rejected}
+            out[label_name] = LabelFlags(approved=approved, rejected=rejected)
     return out
 
 
-def _compact_change(change: dict) -> dict:
-    """Distill a ChangeInfo into a compact dict for display."""
+def _compact_change(change: dict) -> Change:
+    """Distill a ChangeInfo into the compact Change."""
     owner = change.get("owner", {})
     raw_labels = change.get("labels", {})
     labels = _extract_label_scores(raw_labels)
@@ -311,10 +496,10 @@ def _compact_change(change: dict) -> dict:
     for _acct_id, info in change.get("attention_set", {}).items():
         acct = info.get("account", {})
         attention.append(
-            {
-                "email": acct.get("email", f"account/{acct.get('_account_id', '?')}"),
-                "reason": info.get("reason", ""),
-            }
+            Attention(
+                email=acct.get("email", f"account/{acct.get('_account_id', '?')}"),
+                reason=info.get("reason", ""),
+            )
         )
 
     # Reviewers (just emails, skip service accounts)
@@ -324,25 +509,25 @@ def _compact_change(change: dict) -> dict:
         if "SERVICE_USER" not in r.get("tags", [])
     ]
 
-    return {
-        "number": change["_number"],
-        "subject": change.get("subject", ""),
-        "status": change.get("status", ""),
-        "owner": owner.get("email", f"account/{owner.get('_account_id', '?')}"),
-        "project": change.get("project", ""),
-        "branch": change.get("branch", ""),
-        "insertions": change.get("insertions", 0),
-        "deletions": change.get("deletions", 0),
-        "updated": change.get("updated", ""),
-        "wip": change.get("work_in_progress", False),
-        "hashtags": change.get("hashtags", []),
-        "unresolved_comments": change.get("unresolved_comment_count", 0),
-        "patchset": change.get("current_revision_number"),
-        "labels": labels,
-        "label_flags": _extract_label_flags(raw_labels),
-        "reviewers": reviewers,
-        "attention": attention,
-    }
+    return Change(
+        number=change["_number"],
+        subject=change.get("subject", ""),
+        status=change.get("status", ""),
+        owner=owner.get("email", f"account/{owner.get('_account_id', '?')}"),
+        project=change.get("project", ""),
+        branch=change.get("branch", ""),
+        insertions=change.get("insertions", 0),
+        deletions=change.get("deletions", 0),
+        updated=change.get("updated", ""),
+        wip=change.get("work_in_progress", False),
+        hashtags=tuple(change.get("hashtags", [])),
+        unresolved_comments=change.get("unresolved_comment_count", 0),
+        patchset=change.get("current_revision_number"),
+        labels=labels,
+        label_flags=_extract_label_flags(raw_labels),
+        reviewers=tuple(reviewers),
+        attention=tuple(attention),
+    )
 
 
 def _resolve_self(query: str) -> str:
@@ -392,38 +577,50 @@ def require_trusted_patchset(
         raise ValueError(f"CL {label} patchset {patchset} is not shown: {reason}.")
 
 
-def _redact_change(change: dict, out: dict) -> dict:
-    """Redact a compact change built from `change` (a ChangeInfo with
-    DETAILED_ACCOUNTS and CURRENT_REVISION) for a reader: the subject when the
-    owner or the current uploader is untrusted, and every untrusted email."""
+def _redact_change(change: dict, out: Change) -> Change:
+    """Redact a Change built from `change` (a ChangeInfo with DETAILED_ACCOUNTS
+    and CURRENT_REVISION) for a reader: the subject when the owner or the
+    current uploader is untrusted, and every untrusted email."""
     if trust.domains() is None:
         return out
-    if trust.untrusted_change_reason(change) and "subject" in out:
-        out["subject"] = trust.REDACTED_SUBJECT
-    if "owner" in out:
-        out["owner"] = trust.shown_email(out["owner"])
-    if "uploaders" in out:
-        out["uploaders"] = [trust.shown_email(u) for u in out["uploaders"]]
-    if "reviewers" in out:
-        out["reviewers"] = [trust.shown_email(r) for r in out["reviewers"]]
-    if "attention" in out:
+    return replace(
+        out,
+        subject=trust.REDACTED_SUBJECT
+        if trust.untrusted_change_reason(change)
+        else out.subject,
+        owner=trust.shown_email(out.owner),
+        reviewers=tuple(trust.shown_email(r) for r in out.reviewers),
         # The reason is gerrit's text but may name the account; drop it with
         # the address.
-        out["attention"] = [
+        attention=tuple(
             a
-            if trust.is_trusted(a.get("email"))
-            else {"email": trust.REDACTED_AUTHOR, "reason": ""}
-            for a in out["attention"]
-        ]
-    if "labels" in out:
-        out["labels"] = {
-            name: [(trust.shown_email(email), value) for email, value in votes]
-            for name, votes in out["labels"].items()
-        }
-    return out
+            if trust.is_trusted(a.email)
+            else Attention(email=trust.REDACTED_AUTHOR, reason="")
+            for a in out.attention
+        ),
+        labels={
+            name: tuple(Vote(trust.shown_email(v.email), v.value) for v in votes)
+            for name, votes in out.labels.items()
+        },
+    )
 
 
-def list_cls(query: str, limit: int = 25) -> list[dict]:
+def _redact_open_change(change: dict, out: OpenChange) -> OpenChange:
+    """_redact_change for an open_cls row: the subject, the owner and the
+    uploaders."""
+    if trust.domains() is None:
+        return out
+    return replace(
+        out,
+        subject=trust.REDACTED_SUBJECT
+        if trust.untrusted_change_reason(change)
+        else out.subject,
+        owner=trust.shown_email(out.owner),
+        uploaders=tuple(trust.shown_email(u) for u in out.uploaders),
+    )
+
+
+def list_cls(query: str, limit: int = 25) -> list[Change]:
     """Query Gerrit CLs and return compact change info.
 
     query: Gerrit search query (e.g. "owner:self status:open project:v8/v8")
@@ -438,44 +635,40 @@ def list_cls(query: str, limit: int = 25) -> list[dict]:
     return [_redact_change(c, _compact_change(c)) for c in changes]
 
 
-def open_cls(query: str, limit: int = 50) -> list[dict]:
+def open_cls(query: str, limit: int = 50) -> list[OpenChange]:
     """Open CLs matching `query`, each with its current patchset's revision and
     git-fetchable ref -- what a watcher needs to fetch and review a patchset, and
     which list_cls (LABELS/DETAILED_ACCOUNTS only) does not carry.
 
     query: a Gerrit search (e.g. "project:v8/v8 status:open owner:foo@google.com")
-    Returns [{number, project, subject, owner, uploaders, revision, fetch_ref}]:
-    owner is the author email, uploaders the emails of the current patchset's
-    uploader (and real uploader, when it was uploaded on someone's behalf),
-    revision the current patchset SHA, fetch_ref its refs/changes/... ref.
     """
     query = _resolve_self(query)
     params = (
         f"?q={quote(query, safe=':+')}&n={limit}&o=CURRENT_REVISION&o=DETAILED_ACCOUNTS"
     )
     changes: list = _get(_GERRIT_HOST, f"/changes/{params}")
-    out: list[dict] = []
+    out: list[OpenChange] = []
     for c in changes:
         rev = c.get("current_revision", "")
         revinfo = (c.get("revisions") or {}).get(rev, {})
         out.append(
-            _redact_change(
+            _redact_open_change(
                 c,
-                {
-                    "number": c.get("_number"),
-                    "project": c.get("project", ""),
-                    "subject": c.get("subject", ""),
-                    "owner": c.get("owner", {}).get("email", ""),
+                OpenChange(
+                    number=c.get("_number"),
+                    project=c.get("project", ""),
+                    subject=c.get("subject", ""),
+                    owner=c.get("owner", {}).get("email", ""),
                     # Who uploaded the current patchset (and on whose behalf):
                     # its content is theirs, whoever owns the CL.
-                    "uploaders": [
+                    uploaders=tuple(
                         trust.account_email(revinfo.get(k))
                         for k in ("uploader", "real_uploader")
                         if k in revinfo
-                    ],
-                    "revision": rev,
-                    "fetch_ref": revinfo.get("ref", ""),
-                },
+                    ),
+                    revision=rev,
+                    fetch_ref=revinfo.get("ref", ""),
+                ),
             )
         )
     return out
@@ -484,11 +677,9 @@ def open_cls(query: str, limit: int = 50) -> list[dict]:
 # ── Comments ──────────────────────────────────────────────────────────────────
 
 
-def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
-    """Return all published comments on a CL, as a flat list of threads.
-
-    Each thread has: file, line, patch_set, author, message, replies[].
-    Threads are sorted by file then line.
+def comments(change_url: str, *, include_drafts: bool = False) -> list[CommentThread]:
+    """Return all published comments on a CL, as a flat list of threads,
+    sorted by file then line.
 
     `is_ai` is passed through, on the root and on every reply, because a caller
     that reads a thread it also WRITES to has no other way to tell its own
@@ -562,66 +753,55 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
             root_id = _find_root(c)
             children.setdefault(root_id, []).append(c)
 
-    def _content(c: dict) -> dict:
-        """Author, text and the is_ai mark of one entry, redacted when written
-        by an untrusted account. The mark goes too: it is the poster's claim.
+    def _entry(c: dict) -> CommentEntry:
+        """One entry's author, text and marks, redacted when written by an
+        untrusted account. The is_ai mark goes too: it is the poster's claim.
         Drafts are the caller's own and are never redacted."""
         email = trust.account_email(c.get("author")) or "unknown"
         if c.get("_draft") or trust.is_trusted(email):
-            return {
-                "author": email,
-                "message": c.get("message", ""),
-                **({"is_ai": True} if c.get("is_ai") else {}),
-            }
-        return {
-            "author": trust.REDACTED_AUTHOR,
-            "message": trust.REDACTED_MESSAGE,
-            "redacted": True,
-        }
-
-    def _reply(r: dict) -> dict:
-        content = _content(r)
-        out = {"id": r.get("id"), "author": content["author"]}
-        out["message"] = content["message"]
-        if content.get("redacted"):
-            out["redacted"] = True
-        out["updated"] = r.get("updated", "")
-        if r.get("_draft"):
-            out["draft"] = True
-        if content.get("is_ai"):
-            out["is_ai"] = True
-        return out
+            return CommentEntry(
+                id=c.get("id"),
+                author=email,
+                message=c.get("message", ""),
+                updated=c.get("updated", ""),
+                draft=bool(c.get("_draft")),
+                is_ai=bool(c.get("is_ai")),
+            )
+        return CommentEntry(
+            id=c.get("id"),
+            author=trust.REDACTED_AUTHOR,
+            message=trust.REDACTED_MESSAGE,
+            updated=c.get("updated", ""),
+            draft=False,
+            redacted=True,
+        )
 
     # Root comments only; build thread for each
-    def _thread(root: dict) -> dict:
+    def _thread(root: dict) -> CommentThread:
         replies = sorted(
             children.get(root["id"], []),
             key=lambda c: c.get("updated", ""),
         )
-        root_content = _content(root)
-        t = {
-            "file": _shown_path(root),
-            "line": root.get("line"),
-            "patch_set": root.get("patch_set"),
-            "side": root.get("side"),
-            "commit_id": root.get("commit_id"),
-            "unresolved": (replies[-1] if replies else root).get("unresolved", False),
-            "id": root.get("id"),
-            "author": root_content["author"],
-            "message": root_content["message"],
-            "updated": root.get("updated", ""),
-            "replies": [_reply(r) for r in replies],
-        }
-        if root_content.get("is_ai"):
-            t["is_ai"] = True
-        if root_content.get("redacted"):
-            t["redacted"] = True
-        if root.get("_draft"):
-            t["draft"] = True
-        return t
+        head = _entry(root)
+        return CommentThread(
+            file=_shown_path(root),
+            line=root.get("line"),
+            patch_set=root.get("patch_set"),
+            side=root.get("side"),
+            commit_id=root.get("commit_id"),
+            unresolved=(replies[-1] if replies else root).get("unresolved", False),
+            id=head.id,
+            author=head.author,
+            message=head.message,
+            updated=head.updated,
+            replies=tuple(_entry(r) for r in replies),
+            is_ai=head.is_ai,
+            redacted=head.redacted,
+            draft=head.draft,
+        )
 
     threads = [_thread(c) for c in by_id.values() if not c.get("in_reply_to")]
-    threads.sort(key=lambda t: (t["file"], t["line"] or 0))
+    threads.sort(key=lambda t: (t.file, t.line or 0))
     return threads
 
 
@@ -686,11 +866,30 @@ def _comment_input(c: dict, src: dict, path: str) -> dict:
     return body
 
 
+def _draft_result(info: dict) -> DraftResult:
+    """A successful draft from the CommentInfo Gerrit answered with."""
+    rng = info.get("range")
+    return DraftResult(
+        ok=True,
+        id=info.get("id"),
+        path=info.get("path"),
+        line=info.get("line"),
+        range=Range(**rng) if isinstance(rng, dict) else None,
+        side=info.get("side"),
+        patch_set=info.get("patch_set"),
+        message=info.get("message"),
+        updated=info.get("updated"),
+        unresolved=info.get("unresolved"),
+        in_reply_to=info.get("in_reply_to"),
+        is_ai=bool(info.get("is_ai")),
+    )
+
+
 def create_drafts(
     change_url: str,
     comments: list[dict],
     patchset: int | str | None = None,
-) -> list[dict]:
+) -> list[DraftResult]:
     """Create one or more draft comments on a Gerrit CL revision.
 
     comments: list of per-comment dicts:
@@ -719,9 +918,8 @@ def create_drafts(
               comments that are not location-inheriting replies; those follow
               their parent's patchset, which is where the thread lives.
 
-    Returns one result per input, in order: on success a CommentInfo dict
-    with {"ok": True}, on failure {"ok": False, "error": ..., "input": ...}.
-    Continues past failures: each draft is persisted server-side independently.
+    Returns one DraftResult per input, in order. Continues past failures: each
+    draft is persisted server-side independently.
     """
     api_base, project, change_id, url_patchset = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
@@ -743,10 +941,12 @@ def create_drafts(
                 parents_error = str(e)
         return parents.get(uuid)
 
-    results: list[dict] = []
+    results: list[DraftResult] = []
     for c in comments:
         if not c.get("message"):
-            results.append({"ok": False, "error": "missing field: message", "input": c})
+            results.append(
+                DraftResult(ok=False, error="missing field: message", input=c)
+            )
             continue
 
         parent = None
@@ -756,11 +956,11 @@ def create_drafts(
             parent = _parent(c["in_reply_to"])
             if parent is None and parents_error:
                 results.append(
-                    {
-                        "ok": False,
-                        "error": f"could not read the parent comment: {parents_error}",
-                        "input": c,
-                    }
+                    DraftResult(
+                        ok=False,
+                        error=f"could not read the parent comment: {parents_error}",
+                        input=c,
+                    )
                 )
                 continue
         # An unknown uuid leaves parent None: fall through and let gerrit reject
@@ -782,16 +982,27 @@ def create_drafts(
         try:
             info = _put_json(api_base, endpoint, body)
             if isinstance(info, dict):
-                info["ok"] = True
-                results.append(info)
+                results.append(_draft_result(info))
             else:
                 results.append(
-                    {"ok": False, "error": f"unexpected response: {info!r}", "input": c}
+                    DraftResult(
+                        ok=False, error=f"unexpected response: {info!r}", input=c
+                    )
                 )
         except (httpx.HTTPError, ValueError, RuntimeError) as e:
-            results.append({"ok": False, "error": str(e), "input": c})
+            results.append(DraftResult(ok=False, error=str(e), input=c))
 
     return results
+
+
+def _review_result(out: object) -> ReviewResult:
+    if not isinstance(out, dict):
+        return ReviewResult()
+    labels = out.get("labels")
+    return ReviewResult(
+        labels=dict(labels) if isinstance(labels, dict) else {},
+        ready=bool(out.get("ready")),
+    )
 
 
 def post_review_comments(
@@ -799,7 +1010,7 @@ def post_review_comments(
     comments: list[dict],
     message: str = "",
     patchset: int | str | None = None,
-) -> dict:
+) -> ReviewResult:
     """Publish inline comments on a CL in ONE request, without drafting first.
 
     comments: the same per-comment shape create_drafts takes (message, path,
@@ -858,9 +1069,9 @@ def post_review_comments(
 
     `message` is the cover note posted alongside the comments.
 
-    Returns gerrit's ReviewInfo. Raises on transport/auth failure or a rejected
-    comment: unlike create_drafts there are no per-comment results to report,
-    because nothing partially succeeds.
+    Raises on transport/auth failure or a rejected comment: unlike
+    create_drafts there are no per-comment results to report, because nothing
+    partially succeeds.
     """
     api_base, project, change_id, url_patchset = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
@@ -889,14 +1100,14 @@ def post_review_comments(
     if not by_path and not message:
         raise ValueError("nothing to post: no comments and no message")
     out = _post_json(api_base, f"/changes/{cid}/revisions/{rev}/review", body)
-    return out if isinstance(out, dict) else {}
+    return _review_result(out)
 
 
 def publish_drafts(
     change_url: str,
     message: str = "",
     patchset: int | str | None = None,
-) -> dict:
+) -> ReviewResult:
     """Publish the calling user's draft comments on a CL, so reviewers see them.
 
     Drafts created by create_drafts are private until this runs -- gerrit has no
@@ -920,7 +1131,7 @@ def publish_drafts(
     if message:
         body["message"] = message
     out = _post_json(api_base, f"/changes/{cid}/revisions/{rev}/review", body)
-    return out if isinstance(out, dict) else {}
+    return _review_result(out)
 
 
 # ── Fetch ref ─────────────────────────────────────────────────────────────────
@@ -940,7 +1151,7 @@ def _latest_patchset(api_base: str, change_id: str, project: str = "") -> str:
     return "1"
 
 
-def resolve_patchset(change_url: str) -> dict:
+def resolve_patchset(change_url: str) -> Patchset:
     """Pin a CL URL to one patchset and the SHA of its revision, without fetching.
 
     For a caller that has to know WHICH code a CL reference names before doing
@@ -958,13 +1169,9 @@ def resolve_patchset(change_url: str) -> dict:
     discards the SHA; ALL_REVISIONS carries the same for every patchset, which is
     what lets a URL naming an older one be pinned as exactly as the current one.
 
-    Returns:
-      ref:       full git ref, e.g. refs/changes/74/7650974/3
-      patchset:  patchset number resolved (the URL's, else current)
-      revision:  commit SHA of that patchset
-      project:   gerrit project, e.g. v8/v8 -- authoritative even when the URL
-                 omitted it, which is what lets a caller refuse a foreign one
-      host:      the review host the change lives on
+    The patchset is the URL's, else the current one. The project comes from
+    the response, not the URL: the short form carries none, and a caller
+    restricting citations to its own repo needs the real one.
 
     With trusted author domains configured, raises for a patchset whose content
     may not be shown (trust.untrusted_patchset_reason): an open CL by an
@@ -1003,15 +1210,13 @@ def resolve_patchset(change_url: str) -> dict:
     if reason := trust.untrusted_patchset_reason(data, patchset):
         raise ValueError(f"CL {change_id} patchset {patchset} is not shown: {reason}.")
     last_two = change_id[-2:].zfill(2)
-    return {
-        "ref": f"refs/changes/{last_two}/{change_id}/{patchset}",
-        "patchset": patchset,
-        "revision": revision,
-        # From the response, not the URL: the short form carries no project, and
-        # a caller restricting citations to its own repo needs the real one.
-        "project": data.get("project", project),
-        "host": urlparse(api_base).netloc,
-    }
+    return Patchset(
+        ref=f"refs/changes/{last_two}/{change_id}/{patchset}",
+        patchset=patchset,
+        revision=revision,
+        project=data.get("project", project),
+        host=urlparse(api_base).netloc,
+    )
 
 
 def _git_remote_url(api_base: str, project: str) -> str:
@@ -1029,7 +1234,7 @@ def fetch_ref(
     change_url: str,
     repo_path: str = ".",
     fetch: bool = True,
-) -> dict:
+) -> FetchedRef:
     """Return the git ref for a Gerrit CL patchset, optionally fetching it.
 
     Gerrit stores patchsets at refs/changes/NN/CHANGE_ID/PATCHSET where NN is
@@ -1043,11 +1248,8 @@ def fetch_ref(
       git diff main..FETCH_HEAD    # all changes in the CL vs main
       git log FETCH_HEAD           # CL commit history
 
-    Returns:
-      ref:         full git ref, e.g. refs/changes/74/7650974/2
-      remote:      git remote URL, e.g. https://chromium.googlesource.com/v8/v8
-      patchset:    patchset number used
-      fetch_head:  commit SHA of FETCH_HEAD (only when fetch=True)
+    The remote is the git URL for the review host and project, e.g.
+    https://chromium.googlesource.com/v8/v8.
     """
     api_base, project, change_id, patchset = _parse_change_url(change_url)
 
@@ -1060,13 +1262,7 @@ def fetch_ref(
     ref = f"refs/changes/{last_two}/{change_id}/{patchset}"
     remote = _git_remote_url(api_base, project)
 
-    result: dict = {
-        "ref": ref,
-        "remote": remote,
-        "patchset": patchset,
-        "fetch_head": None,
-    }
-
+    fetch_head = None
     if fetch:
         r = subprocess.run(
             ["git", "fetch", remote, ref],
@@ -1082,6 +1278,6 @@ def fetch_ref(
             text=True,
             cwd=repo_path,
         )
-        result["fetch_head"] = head.stdout.strip()
+        fetch_head = head.stdout.strip()
 
-    return result
+    return FetchedRef(ref=ref, remote=remote, patchset=patchset, fetch_head=fetch_head)

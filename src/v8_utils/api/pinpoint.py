@@ -1,13 +1,14 @@
 """Chromium Pinpoint A/B jobs: creating, listing, cancelling, and reading
-their results."""
+their results. Jobs are `Job`, result rows `ResultRow`; a job's rows with
+its details and patch subjects are `JobResults`."""
 
 from ..pinpoint import (
     BENCHMARK_ALIASES,
     CONFIGURATION_ALIASES,
     DEFAULT_CONFIGURATIONS,
+    Job,
+    ResultRow,
     classify_show_arg,
-    fetch_job,
-    fetch_jobs,
     get_current_user_email,
     job_id_from_url,
     parse_since,
@@ -17,7 +18,6 @@ from ..pinpoint import (
     short_benchmark,
     short_configuration,
     subject_or_none,
-    summarise_job,
 )
 from ..pinpoint import _extract_change_and_patchset as parse_patch_ref
 from ..pinpoint_jobs import (
@@ -42,15 +42,15 @@ __all__ = [
     "CONFIGURATION_ALIASES",
     "DEFAULT_CONFIGURATIONS",
     "Cancelled",
+    "Job",
     "JobResults",
+    "ResultRow",
     "cancel_jobs",
     "classify_show_arg",
     "create_pinpoint_jobs",
-    "fetch_job",
     "fetch_job_detail",
     "fetch_job_details_sorted",
     "fetch_job_results",
-    "fetch_jobs",
     "fetch_jobs_list",
     "get_current_user_email",
     "get_gerrit_issue_url",
@@ -68,5 +68,4 @@ __all__ = [
     "short_benchmark",
     "short_configuration",
     "subject_or_none",
-    "summarise_job",
 ]
