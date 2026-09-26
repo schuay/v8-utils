@@ -356,17 +356,40 @@ def _resolve_self(query: str) -> str:
     return re.sub(r"\bself\b", cfg.user, query)
 
 
-def require_trusted_change(api_base: str, cid: str, label: str) -> None:
-    """Refuse to read a CL whose owner or any patchset uploader is outside the
-    trusted author domains. Everything read from such a CL -- comments on its
-    files, its diff, its CQ logs, its subject -- is theirs. No-op while
+def _change_for_trust(api_base: str, cid: str) -> dict:
+    change = _get(api_base, f"/changes/{cid}?o=DETAILED_ACCOUNTS&o=ALL_REVISIONS")
+    return change if isinstance(change, dict) else {}
+
+
+def require_trusted_change(api_base: str, cid: str, label: str) -> dict | None:
+    """Refuse to read an open CL whose owner or any patchset uploader is outside
+    the trusted author domains: everything in it -- comments on its files, its
+    diff, its CQ logs, its subject -- is theirs and unreviewed. A merged CL
+    passes; per-patchset content is require_trusted_patchset's question.
+
+    Returns the change (with ALL_REVISIONS) for further checks, or None while
+    redaction is off, when nothing is fetched.
+    """
+    if trust.domains() is None:
+        return None
+    change = _change_for_trust(api_base, cid)
+    if reason := trust.untrusted_change_reason(change):
+        raise ValueError(f"CL {label} is not shown: {reason}.")
+    return change
+
+
+def require_trusted_patchset(
+    api_base: str, cid: str, label: str, patchset: object
+) -> None:
+    """Refuse to read one patchset's content unless it may be shown: the landed
+    patchset of a merged CL, a merged CL's patchset with a trusted uploader, or
+    any patchset of an open CL that is trusted as a whole. No-op while
     redaction is off."""
     if trust.domains() is None:
         return
-    change = _get(api_base, f"/changes/{cid}?o=DETAILED_ACCOUNTS&o=ALL_REVISIONS")
-    reason = trust.untrusted_change_reason(change if isinstance(change, dict) else {})
-    if reason:
-        raise ValueError(f"CL {label} is not shown: {reason}.")
+    change = _change_for_trust(api_base, cid)
+    if reason := trust.untrusted_patchset_reason(change, patchset):
+        raise ValueError(f"CL {label} patchset {patchset} is not shown: {reason}.")
 
 
 def _redact_change(change: dict, out: dict) -> dict:
@@ -471,8 +494,28 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
     """
     api_base, project, change_id, _ = _parse_change_url(change_url)
     cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
-    require_trusted_change(api_base, cid, change_id)
+    change = require_trusted_change(api_base, cid, change_id)
     data: dict = _get(api_base, f"/changes/{cid}/comments")
+    landed_files: set[str] | None = None
+
+    def _shown_path(root: dict) -> str:
+        """A comment's path, unless it names a file only an unreviewed patchset
+        by an untrusted uploader has. Gerrit's generated paths are its own,
+        and a path the landed patchset has is landed content."""
+        nonlocal landed_files
+        path = root["_file"]
+        if change is None or path in trust.MAGIC_PATHS:
+            return path
+        if not trust.untrusted_patchset_reason(change, root.get("patch_set")):
+            return path
+        if landed_files is None:
+            landed = change.get("current_revision")
+            landed_files = (
+                set(_get(api_base, f"/changes/{cid}/revisions/{landed}/files"))
+                if trust.landed_patchset(change) is not None
+                else set()
+            )
+        return path if path in landed_files else trust.REDACTED_PATH
 
     # Build id → comment map
     by_id: dict[str, dict] = {}
@@ -547,7 +590,7 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[dict]:
         )
         root_content = _content(root)
         t = {
-            "file": root["_file"],
+            "file": _shown_path(root),
             "line": root.get("line"),
             "patch_set": root.get("patch_set"),
             "side": root.get("side"),
@@ -983,11 +1026,11 @@ def fetch_ref(
       fetch_head:  commit SHA of FETCH_HEAD (only when fetch=True)
     """
     api_base, project, change_id, patchset = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
-    require_trusted_change(api_base, cid, change_id)
 
     if not patchset:
         patchset = _latest_patchset(api_base, change_id, project)
+    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    require_trusted_patchset(api_base, cid, change_id, patchset)
 
     last_two = change_id[-2:].zfill(2)
     ref = f"refs/changes/{last_two}/{change_id}/{patchset}"

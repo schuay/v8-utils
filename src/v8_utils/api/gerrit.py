@@ -5,6 +5,7 @@ from .. import gerrit as _gerrit
 from ..trust import (
     REDACTED_AUTHOR,
     REDACTED_MESSAGE,
+    REDACTED_PATH,
     REDACTED_SUBJECT,
     email_in_domains,
     normalize_domains,
@@ -31,6 +32,7 @@ def credentials_available() -> bool:
 __all__ = [
     "REDACTED_AUTHOR",
     "REDACTED_MESSAGE",
+    "REDACTED_PATH",
     "REDACTED_SUBJECT",
     "comments",
     "configure_trusted_domains",

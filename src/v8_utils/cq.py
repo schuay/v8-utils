@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 from .concurrency import _run_concurrent
-from .gerrit import require_trusted_change
+from .gerrit import require_trusted_patchset
 from .paging import paginate_result
 
 _REVIEW_HOST = "https://chromium-review.googlesource.com"
@@ -277,10 +277,10 @@ def cq_report(
 
     if not cl_number.isdigit():
         return f"Error: cannot parse CL number from {change!r}"
-    # Build logs are the CL's own test output; with trusted domains configured
-    # they are shown only for a CL whose owner and uploaders are trusted.
+    # Build logs are the patchset's own test output; with trusted domains
+    # configured they are shown only for a patchset whose content may be.
     try:
-        require_trusted_change(_REVIEW_HOST, cl_number, cl_number)
+        require_trusted_patchset(_REVIEW_HOST, cl_number, cl_number, patchset)
     except ValueError as e:
         return f"Error: {e}"
 
