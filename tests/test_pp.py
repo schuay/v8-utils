@@ -747,7 +747,7 @@ def _make_stacked_repo(tmp_path):
 
 class TestResolveBasePatch:
     def test_parent_resolves_to_upstream_cl(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         assert (
@@ -756,7 +756,7 @@ class TestResolveBasePatch:
         )
 
     def test_parent_case_insensitive(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         assert (
@@ -765,21 +765,21 @@ class TestResolveBasePatch:
         )
 
     def test_none_returns_none(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         assert resolve_base_patch(None, cwd=repo) is None
         assert resolve_base_patch("none", cwd=repo) is None
 
     def test_explicit_url_passthrough(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         url = "https://chromium-review.googlesource.com/c/v8/v8/+/999"
         assert resolve_base_patch(url, cwd=repo) == url
 
     def test_parent_without_upstream_raises(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         # 'parent' branch has no upstream of its own.
@@ -788,7 +788,7 @@ class TestResolveBasePatch:
             resolve_base_patch("parent", cwd=repo)
 
     def test_parent_upstream_without_cl_raises(self, tmp_path):
-        from v8_utils.tools import resolve_base_patch
+        from v8_utils.pinpoint_jobs import resolve_base_patch
 
         repo = _make_stacked_repo(tmp_path)
         # Strip the parent branch's CL so the upstream has no gerritissue.
@@ -799,7 +799,7 @@ class TestResolveBasePatch:
 
 class TestGetGerritParentUrl:
     def test_detects_parent_cl(self, tmp_path):
-        from v8_utils.tools import get_gerrit_parent_url
+        from v8_utils.pinpoint_jobs import get_gerrit_parent_url
 
         repo = _make_stacked_repo(tmp_path)
         assert (
@@ -808,7 +808,7 @@ class TestGetGerritParentUrl:
         )
 
     def test_no_upstream_returns_none(self, tmp_path):
-        from v8_utils.tools import get_gerrit_parent_url
+        from v8_utils.pinpoint_jobs import get_gerrit_parent_url
 
         repo = _make_stacked_repo(tmp_path)
         _git(repo, "checkout", "-q", "parent")
@@ -854,7 +854,8 @@ class TestConfigurationValidation:
     earlier jobs of the batch already created."""
 
     def test_unknown_configuration_rejected_before_creating_jobs(self, monkeypatch):
-        from v8_utils import pinpoint, tools
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
 
         monkeypatch.setattr(
             pinpoint, "known_configurations", lambda: frozenset({"linux-r350-perf"})
@@ -957,7 +958,8 @@ class TestCreatePinpointJobsNaming:
     @staticmethod
     def _run(monkeypatch, subject_impl):
         """Create one job with Gerrit stubbed out; return the kwargs create_job saw."""
-        from v8_utils import tools, pinpoint
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
 
         created = {}
 
@@ -971,7 +973,7 @@ class TestCreatePinpointJobsNaming:
             pinpoint, "fetch_latest_build_commit", lambda cfg: ("abc1234", 1)
         )
         monkeypatch.setattr(
-            tools, "_fetch_job_detail", lambda url: {"job_id": "test_job_1"}
+            tools, "fetch_job_detail", lambda url: {"job_id": "test_job_1"}
         )
 
         jobs = tools.create_pinpoint_jobs(

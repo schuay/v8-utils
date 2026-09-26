@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from v8_utils.tools import _format_results_table, _results_header
+from v8_utils.render.pinpoint import format_results_table as _format_results_table
+from v8_utils.render.pinpoint import results_header as _results_header
 
 
 def _row(
@@ -52,7 +53,7 @@ def _job(
 
 
 class TestResultsHeader:
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_basic(self, _mock):
         h = _results_header(_job())
         assert "bot:" in h
@@ -60,7 +61,7 @@ class TestResultsHeader:
         assert "date:" in h
 
     @patch(
-        "v8_utils.tools.pinpoint.fetch_gerrit_subject",
+        "v8_utils.pinpoint.fetch_gerrit_subject",
         return_value="Fix turbofan bug",
     )
     def test_with_patch(self, _mock):
@@ -68,7 +69,7 @@ class TestResultsHeader:
         assert "https://crrev.com/c/12345" in h
         assert '"Fix turbofan bug"' in h
 
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_with_flags(self, _mock):
         h = _results_header(
             _job(base_extra_args="--no-turbo", experiment_extra_args="--turbo")
@@ -79,19 +80,19 @@ class TestResultsHeader:
     def test_empty_job(self):
         assert _results_header({}) == ""
 
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_base_hash_shown_when_present(self, _mock):
         h = _results_header(_job(base_git_hash="deadbeef"))
         assert "base:" in h
         assert "deadbeef" in h
 
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_base_hash_omitted_when_missing(self, _mock):
         # Real Pinpoint jobs always carry a base hash, but partial dicts reach
         # this formatter too; rendering "base: None" helps nobody.
         assert "base:" not in _results_header(_job())
 
-    @patch("v8_utils.tools.pinpoint.fetch_gerrit_subject", return_value=None)
+    @patch("v8_utils.pinpoint.fetch_gerrit_subject", return_value=None)
     def test_ansi_header(self, _mock):
         h = _results_header(_job(), ansi=True)
         assert "\033[1m" in h  # bold values
@@ -102,7 +103,7 @@ class TestResultsHeader:
 
 
 class TestFormatResultsTable:
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_basic(self, mock_pivot):
         mock_pivot.return_value = [
             _row("parse", 100, 95, unit="ms_smallerIsBetter"),
@@ -114,7 +115,7 @@ class TestFormatResultsTable:
         assert "compile" in t
         assert "chg%" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_compact_omits_columns(self, mock_pivot):
         mock_pivot.return_value = [_row("m1", 100, 105)]
         t = _format_results_table(
@@ -125,7 +126,7 @@ class TestFormatResultsTable:
         assert "sig" not in header
         assert "direction" not in header
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_show_all_false(self, mock_pivot):
         mock_pivot.return_value = [
             _row("sig_metric", significant=True),
@@ -136,7 +137,7 @@ class TestFormatResultsTable:
         assert "nonsig_metric" not in t
         assert "1 non-significant result omitted" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_show_all_true(self, mock_pivot):
         mock_pivot.return_value = [
             _row("sig_metric", significant=True),
@@ -147,11 +148,11 @@ class TestFormatResultsTable:
         assert "nonsig_metric" in t
         assert "omitted" not in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results", return_value=[])
+    @patch("v8_utils.api.pinpoint.pivot_results", return_value=[])
     def test_no_results(self, _mock):
         assert _format_results_table("j1", False, False, job=_job()) is None
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_all_nonsignificant(self, mock_pivot):
         mock_pivot.return_value = [
             _row("m1", significant=False, p_value=0.5),
@@ -160,14 +161,14 @@ class TestFormatResultsTable:
         assert "no statistically significant results" in t
 
     @patch(
-        "v8_utils.tools.pinpoint.pivot_results",
+        "v8_utils.api.pinpoint.pivot_results",
         side_effect=RuntimeError("timeout"),
     )
     def test_fetch_error(self, _mock):
         t = _format_results_table("j1", False, False, job=_job())
         assert "Error: timeout" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_sorted_by_pct(self, mock_pivot):
         mock_pivot.return_value = [
             _row("low", base_mean=100, exp_mean=101),  # +1%
@@ -181,21 +182,21 @@ class TestFormatResultsTable:
         assert "mid" in data[1]
         assert "low" in data[2]
 
-    @patch("v8_utils.tools.pinpoint.pivot_results_cas")
+    @patch("v8_utils.api.pinpoint.pivot_results_cas")
     def test_use_cas(self, mock_cas):
         mock_cas.return_value = [_row("m1")]
-        with patch("v8_utils.tools.pinpoint.pivot_results") as mock_pivot:
+        with patch("v8_utils.api.pinpoint.pivot_results") as mock_pivot:
             _format_results_table("j1", True, use_cas=True, job=_job())
         mock_cas.assert_called_once()
         mock_pivot.assert_not_called()
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_no_ansi_by_default(self, mock_pivot):
         mock_pivot.return_value = [_row("m1", 100, 95)]
         t = _format_results_table("j1", True, False, job=_job())
         assert "\033[" not in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_has_escape_codes(self, mock_pivot):
         """With ansi=True, output contains ANSI escape codes."""
         mock_pivot.return_value = [
@@ -204,7 +205,7 @@ class TestFormatResultsTable:
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)
         assert "\033[" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_smaller_better_negative_green(self, mock_pivot):
         """Smaller-better metric with negative change gets green."""
         mock_pivot.return_value = [
@@ -214,7 +215,7 @@ class TestFormatResultsTable:
         # green = \033[32m
         assert "\033[32m" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_smaller_better_positive_red(self, mock_pivot):
         """Smaller-better metric with positive change gets red."""
         mock_pivot.return_value = [
@@ -224,7 +225,7 @@ class TestFormatResultsTable:
         # red = \033[31m
         assert "\033[31m" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_bigger_better_positive_green(self, mock_pivot):
         mock_pivot.return_value = [
             _row("score", 100, 110, unit="score_biggerIsBetter"),  # +10%, good
@@ -232,7 +233,7 @@ class TestFormatResultsTable:
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)
         assert "\033[32m" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_survives_dumb_term(self, mock_pivot, monkeypatch):
         """ansi=True wins over $TERM, matching the header's behavior.
 
@@ -245,14 +246,14 @@ class TestFormatResultsTable:
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)
         assert "\033[32m" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_no_ansi_stays_plain_under_color_term(self, mock_pivot, monkeypatch):
         monkeypatch.setenv("TERM", "xterm-256color")
         mock_pivot.return_value = [_row("m1", 100, 95, unit="ms_smallerIsBetter")]
         t = _format_results_table("j1", True, False, job=_job(), ansi=False)
         assert "\033[" not in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_compact_colors(self, mock_pivot):
         """Regression test: compact mode still gets correct direction colors."""
         mock_pivot.return_value = [
@@ -264,7 +265,7 @@ class TestFormatResultsTable:
         # green for improvement
         assert "\033[32m" in t
 
-    @patch("v8_utils.tools.pinpoint.pivot_results")
+    @patch("v8_utils.api.pinpoint.pivot_results")
     def test_ansi_header_bold(self, mock_pivot):
         mock_pivot.return_value = [_row("m1")]
         t = _format_results_table("j1", True, False, job=_job(), ansi=True)

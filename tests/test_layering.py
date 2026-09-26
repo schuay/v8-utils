@@ -39,25 +39,11 @@ UPPER = (API, RENDER, *FRONTENDS)
 ALLOWED_VIOLATIONS: dict[str, set[str]] = {
     "v8_utils.cli.jsb": {"v8_utils.config", "v8_utils.jsb"},
     "v8_utils.cli.lv": {"v8_utils.v8log"},
-    "v8_utils.cli.pp": {
-        "v8_utils.changelog",
-        "v8_utils.chat",
-        "v8_utils.concurrency",
-        "v8_utils.config",
-        "v8_utils.daemon",
-        "v8_utils.pinpoint",
-        "v8_utils.tools",
-    },
     "v8_utils.mcp_tools.performance": {
         "v8_utils.config",
         "v8_utils.jsb",
         "v8_utils.perf",
         "v8_utils.v8log",
-    },
-    "v8_utils.mcp_tools.pinpoint": {
-        "v8_utils.concurrency",
-        "v8_utils.pinpoint",
-        "v8_utils.tools",
     },
 }
 

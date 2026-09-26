@@ -19,21 +19,17 @@ import re
 import sys
 from datetime import datetime
 
-from .. import chat
-from .. import config
-from .. import daemon
-from .. import pinpoint
-
-from ..concurrency import _run_concurrent
-from ..tools import (
-    _fetch_job_details_sorted,
-    _fetch_jobs_list,
-    _format_results_table,
+from ..api import config, pinpoint, watch
+from ..api.concurrency import run_concurrent as _run_concurrent
+from ..api.pinpoint import (
     create_pinpoint_jobs,
+    fetch_job_details_sorted,
+    fetch_jobs_list,
     resolve_base_patch,
     resolve_exp_patches,
     resolve_patch_filter,
 )
+from ..render.pinpoint import format_cancelled, format_results_table
 
 # ── ANSI colors (no-ops when not a TTY) ───────────────────────────────────────
 
@@ -211,7 +207,7 @@ def _print_job(j: dict) -> None:
 
 def _cmd_show_job(args: argparse.Namespace) -> None:
     with _progress_ctx("Fetching jobs", total=len(args.job_urls)) as on_progress:
-        paired = _fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
+        paired = fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
     for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
@@ -222,23 +218,10 @@ def _cmd_show_job(args: argparse.Namespace) -> None:
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
-    reason = args.reason
-
-    def cancel(url: str) -> str:
-        try:
-            result = pinpoint.cancel_job(url, reason=reason)
-            job_id = result.get("job_id", pinpoint.job_id_from_url(url))
-            state = result.get("state", "unknown")
-            return f"Job {job_id}: {state}"
-        except Exception as e:
-            job_id = pinpoint.job_id_from_url(url)
-            return f"Job {job_id}: Error: {e}"
-
-    fns = [lambda u=u: cancel(u) for u in args.job_urls]
-    with _progress_ctx("Cancelling", total=len(fns)) as on_progress:
-        results = _run_concurrent(fns, on_progress)
-    for line in results:
-        print(line)
+    with _progress_ctx("Cancelling", total=len(args.job_urls)) as on_progress:
+        results = pinpoint.cancel_jobs(args.job_urls, args.reason, on_progress)
+    for c in results:
+        print(format_cancelled(c))
 
 
 def _build_filters(
@@ -274,7 +257,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
     if progress:
         with progress:
             t1 = progress.add_task(label, total=None)
-            jobs = _fetch_jobs_list(
+            jobs = fetch_jobs_list(
                 count=args.recent, user=user, filters=filters or None, since=since
             )
             progress.update(t1, total=1, completed=1)
@@ -288,7 +271,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
                     fns, lambda done, total: progress.update(t2, completed=done)
                 )
     else:
-        jobs = _fetch_jobs_list(
+        jobs = fetch_jobs_list(
             count=args.recent, user=user, filters=filters or None, since=since
         )
         patches = [j.get("experiment_patch") or "" for j in jobs] if jobs else []
@@ -382,7 +365,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         if progress:
             progress.start()
             t_list = progress.add_task(_fetch_label(user, since), total=None)
-        jobs = _fetch_jobs_list(count=count, user=user, filters=filters, since=since)
+        jobs = fetch_jobs_list(count=count, user=user, filters=filters, since=since)
         if progress:
             progress.update(t_list, total=1, completed=1)
         if not jobs:
@@ -403,7 +386,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
         progress.start()
     if progress:
         t_details = progress.add_task("Fetching details", total=len(ids))
-    paired = _fetch_job_details_sorted(
+    paired = fetch_job_details_sorted(
         ids,
         on_progress=(
             (lambda d, t: progress.update(t_details, completed=d)) if progress else None
@@ -414,7 +397,7 @@ def _cmd_show_results(args: argparse.Namespace) -> None:
 
     use_ansi = bool(_CYAN)
     fns = [
-        lambda jid=jid: _format_results_table(
+        lambda jid=jid: format_results_table(
             jid,
             args.show_all,
             args.use_cas,
@@ -536,10 +519,10 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
 
 
 def _cmd_watch(args: argparse.Namespace) -> None:
-    if not daemon.is_running():
-        daemon.start_background()
+    if not watch.is_running():
+        watch.start_background()
     for job_url in args.job_urls:
-        daemon.send_job(job_url)
+        watch.send_job(job_url)
         job_id = job_url.split("/")[-1]
         print(f"{_GREEN}Watching{_RESET} {job_id} — you'll be notified on completion.")
 
@@ -547,10 +530,10 @@ def _cmd_watch(args: argparse.Namespace) -> None:
 def _cmd_daemon_stop(args: argparse.Namespace) -> None:
     import signal as sig
 
-    if not daemon.is_running():
+    if not watch.is_running():
         print(f"{_YELLOW}Daemon is not running.{_RESET}")
         return
-    pid = int(daemon.PID_PATH.read_text())
+    pid = int(watch.PID_PATH.read_text())
     os.kill(pid, sig.SIGTERM)
     print(f"{_GREEN}Stopped daemon{_RESET} (pid {pid}).")
 
@@ -559,31 +542,31 @@ def _cmd_chat_setup(args: argparse.Namespace) -> None:
     cfg = config.load()
     if not cfg.chat_service_account_email:
         print(
-            f"{_RED}error:{_RESET} chat_service_account_email not set in {config.CONFIG_PATH}",
+            f"{_RED}error:{_RESET} chat_service_account_email not set in {config.config_path()}",
             file=sys.stderr,
         )
         sys.exit(1)
 
     print(f"Service account: {_CYAN}{cfg.chat_service_account_email}{_RESET}")
     print("Identifying you via Application Default Credentials...")
-    user_id = chat.adc_user_id()
+    user_id = watch.adc_user_id()
     print(f"  {_DIM}Google user ID:{_RESET} {user_id}")
 
     print("Finding DM space with the bot...")
     print(
         f'  {_DIM}(In Google Chat, search for "v8-utils-pinpoint" and send it a message first.){_RESET}'
     )
-    space = chat.find_dm_space(cfg.chat_service_account_email, user_id)
+    space = watch.find_dm_space(cfg.chat_service_account_email, user_id)
     print(f"  {_DIM}space:{_RESET} {space}")
 
     config.update_chat_app_space(space)
-    chat.notify(
+    watch.notify(
         space,
         cfg.chat_service_account_email,
         "👋 v8-utils notifications are set up. You'll be notified here when your Pinpoint jobs complete.",
     )
-    print(f"{_GREEN}Done.{_RESET} Written to {config.CONFIG_PATH}")
-    if daemon.is_running():
+    print(f"{_GREEN}Done.{_RESET} Written to {config.config_path()}")
+    if watch.is_running():
         print(
             f"{_YELLOW}Note:{_RESET} restart the daemon so it picks up the new config:"
         )
@@ -614,7 +597,7 @@ def _cmd_upgrade(args: argparse.Namespace) -> None:
 
 
 def _cmd_logs(args: argparse.Namespace) -> None:
-    log_path = daemon.LOG_PATH
+    log_path = watch.LOG_PATH
     if not log_path.exists():
         print(f"No log file yet ({log_path})", file=sys.stderr)
         sys.exit(1)
@@ -896,7 +879,7 @@ def main() -> None:
 
     # config
     p = sub.add_parser(
-        "config", help=f"Print a config template (write to {config.CONFIG_PATH})"
+        "config", help=f"Print a config template (write to {config.config_path()})"
     )
     p.set_defaults(func=_cmd_config)
 
@@ -928,7 +911,7 @@ def main() -> None:
     if not args.verbose:
         for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
-    from .. import changelog
+    from ..api import changelog
 
     changelog.show_unseen()
 

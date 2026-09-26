@@ -6,20 +6,22 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from pydantic import Field
 
-from .. import pinpoint as pinpoint_mod
-from ..concurrency import _run_concurrent
-from ..tools import (
-    _fetch_job_details_sorted,
-    _fetch_jobs_list,
-    _format_job_detail,
-    _format_results_table,
+from ..api import pinpoint as pinpoint_mod
+from ..api import repo_git
+from ..api.concurrency import run_concurrent as _run_concurrent
+from ..api.pinpoint import (
     create_pinpoint_jobs,
+    fetch_job_details_sorted,
+    fetch_jobs_list,
     resolve_base_patch,
     resolve_exp_patches,
     resolve_patch_filter,
 )
-
-from ..api import repo_git
+from ..render.pinpoint import (
+    format_cancelled,
+    format_job_detail,
+    format_results_table,
+)
 from ._shared import _text_result
 
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
@@ -94,13 +96,13 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         if not urls:
             return _text_result("No job URLs provided.")
 
-        paired = _fetch_job_details_sorted(urls)
+        paired = fetch_job_details_sorted(urls)
         blocks = []
         for jid, detail in paired:
             if "error" in detail:
                 blocks.append(f"Error fetching {jid}: {detail['error']}")
             else:
-                blocks.append(_format_job_detail(detail))
+                blocks.append(format_job_detail(detail))
         return _text_result("\n\n".join(blocks))
 
     @mcp.tool()
@@ -113,19 +115,8 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         if not urls:
             return _text_result("No job URLs provided.")
 
-        def cancel(url: str) -> str:
-            try:
-                result = pinpoint_mod.cancel_job(url, reason)
-                job_id = result.get("job_id", pinpoint_mod.job_id_from_url(url))
-                state = result.get("state", "unknown")
-                return f"Job {job_id}: {state}"
-            except Exception as e:
-                job_id = pinpoint_mod.job_id_from_url(url)
-                return f"Job {job_id}: Error: {e}"
-
-        fns = [lambda u=u: cancel(u) for u in urls]
-        results = _run_concurrent(fns)
-        return _text_result("\n".join(results))
+        results = pinpoint_mod.cancel_jobs(urls, reason)
+        return _text_result("\n".join(format_cancelled(c) for c in results))
 
     @mcp.tool()
     def pinpoint_list_jobs(
@@ -179,7 +170,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         if bot:
             filters.append(f"bot={bot}")
         since_dt = pinpoint_mod.parse_since(since)
-        jobs = _fetch_jobs_list(count, user, filters or None, since=since_dt)
+        jobs = fetch_jobs_list(count, user, filters or None, since=since_dt)
         if not jobs:
             return _text_result("No jobs found.")
         # Display oldest first (API returns newest first).
@@ -265,7 +256,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             since_str = since or ("one month ago" if has_filters else None)
             since_dt = pinpoint_mod.parse_since(since_str) if since_str else None
             count = recent or 20
-            jobs = _fetch_jobs_list(count=count, filters=filters, since=since_dt)
+            jobs = fetch_jobs_list(count=count, filters=filters, since=since_dt)
             job_ids.extend(j["job_id"] for j in jobs)
 
         if not job_ids:
@@ -273,12 +264,12 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
                 "Provide job_urls, use recent=N, or pass filter flags (patch, benchmark, bot)."
             )
 
-        paired = _fetch_job_details_sorted(job_ids)
+        paired = fetch_job_details_sorted(job_ids)
         job_ids = [jid for jid, _ in paired]
         detail_map = dict(paired)
 
         fns = [
-            lambda jid=jid: _format_results_table(
+            lambda jid=jid: format_results_table(
                 jid, False, use_cas, job=detail_map.get(jid)
             )
             for jid in job_ids
@@ -424,4 +415,4 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
             repeat=repeat,
             bug_id=bug_id,
         )
-        return _text_result("\n\n".join(_format_job_detail(j) for j in jobs))
+        return _text_result("\n\n".join(format_job_detail(j) for j in jobs))
