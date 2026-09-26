@@ -1,82 +1,54 @@
-"""CLI for pd — perf data analysis."""
+"""CLI for pd -- perf data analysis.
+
+Argument parsing and rendering only; the operations are v8_utils.pd.api.
+"""
 
 from __future__ import annotations
 
-import time
-from fnmatch import fnmatch
+import contextlib
+import logging
 from typing import Annotated, Optional
 
 import typer
 
-from .adaptor import check_dimension_values, discover
+from . import api
+from .adaptor import discover
 from .commits import CommitStore
-from .detect import detect_from_df
 from .engines import ENGINES, get_id_regex, get_path_filter, get_src_dir, sync_engine
-from .models import AnalysisConfig
-from .report import print_compare_report, print_detect_report
+from .report import print_at_report, print_compare_report, print_detect_report
 
 app = typer.Typer(
-    help="Perf data analysis — change-point detection, AB comparison, and more."
+    help="Perf data analysis -- change-point detection, AB comparison, and more."
 )
 
 
-def _load_config() -> dict:
-    """Load sources and analysis config from v8-utils config."""
+@contextlib.contextmanager
+def _cli_errors():
+    """A ValueError from the api is the message; exit 1 with it on stderr."""
     try:
-        from .. import config as v8_config
-
-        cfg = v8_config.load()
-        return {
-            "sources": getattr(cfg, "sources", {}),
-            "analysis": getattr(cfg, "analysis", {}),
-        }
-    except Exception:
-        return {"sources": {}, "analysis": {}}
-
-
-def _make_adaptor(source: str, cfg: dict):
-    """Instantiate an adaptor for the given source name."""
-    sources = cfg.get("sources", {})
-    if source not in sources:
-        typer.echo(f"Error: unknown source '{source}'", err=True)
-        available = ", ".join(sorted(sources)) if sources else "(none configured)"
-        typer.echo(f"Available: {available}", err=True)
-        raise typer.Exit(1)
-
-    source_cfg = dict(sources[source])
-    adaptor_name = source_cfg.pop("adaptor", source)
-
-    adaptors = discover()
-    if adaptor_name not in adaptors:
-        typer.echo(f"Error: adaptor '{adaptor_name}' not found", err=True)
-        typer.echo(f"Available: {', '.join(sorted(adaptors))}", err=True)
-        raise typer.Exit(1)
-
-    return adaptors[adaptor_name](**source_cfg)
-
-
-def _engine_for_source(source: str, cfg: dict) -> str | None:
-    sources = cfg.get("sources", {})
-    return sources.get(source, {}).get("engine")
-
-
-def _validate_dimensions(adaptor, filters: dict[str, str]) -> None:
-    """CLI wrapper: turn a bad-name ValueError into echo+Exit(1)."""
-    try:
-        check_dimension_values(adaptor, filters)
+        yield
     except ValueError as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from e
 
 
-def _parse_date(value: str) -> str:
-    """Parse a date string like '2026-01-15' or '2 weeks ago' into YYYY-MM-DD."""
-    import dateparser
+def _verbose_logging(enabled: bool) -> None:
+    """--verbose: the api's timing and progress lines, on stderr."""
+    if not enabled:
+        return
+    logger = logging.getLogger("v8_utils.pd")
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        logger.addHandler(handler)
 
-    dt = dateparser.parse(value, settings={"PREFER_DATES_FROM": "past"})
-    if dt is None:
-        raise typer.BadParameter(f"Cannot parse date: {value}")
-    return dt.strftime("%Y-%m-%d")
+
+def _parse_date(value: str) -> str:
+    try:
+        return api.parse_date(value)
+    except ValueError as e:
+        raise typer.BadParameter(str(e)) from e
 
 
 # ── detect ───────────────────────────────────────────────────────────────────
@@ -126,66 +98,32 @@ def detect(
     ] = False,
 ):
     """Detect change points in benchmark time series."""
-    cfg = _load_config()
-
-    since_date = _parse_date(since) if since else None
-    until_date = _parse_date(until) if until else None
-
-    analysis_cfg = cfg.get("analysis", {})
-    config = AnalysisConfig(
-        penalty=penalty or analysis_cfg.get("penalty", 3.0),
-        min_effect_size=min_effect or analysis_cfg.get("min_effect_size", 0.5),
-        min_pct_change=min_change or analysis_cfg.get("min_pct_change", 1.0),
-    )
-
-    filter_kwargs = {}
-    if bot:
-        filter_kwargs["bot"] = bot
-    if benchmark:
-        filter_kwargs["benchmark"] = benchmark
-
-    adaptor = _make_adaptor(source, cfg)
-    engine = _engine_for_source(source, cfg)
-    commit_store = CommitStore()
-
-    def _log(msg: str) -> None:
-        if verbose:
-            typer.echo(msg, err=True)
-
-    t0 = time.monotonic()
-    _log("fetching data...")
-    fetched = adaptor.fetch(since=since_date, until=until_date, **filter_kwargs)
-    _log(f"fetch: {len(fetched)} rows in {time.monotonic() - t0:.1f}s")
-    if fetched.empty:
-        _validate_dimensions(adaptor, filter_kwargs)
-
-    # Apply --metric glob filter
-    if metric:
-        fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
-        _log(f"  after --metric filter: {len(fetched)} rows")
-
-    if engine_filter:
-        if "engine" not in fetched.columns:
-            typer.echo(
-                f"Error: source '{source}' does not expose an engine column",
-                err=True,
+    _verbose_logging(verbose)
+    store = CommitStore()
+    try:
+        with _cli_errors():
+            det = api.detect(
+                source,
+                store=store,
+                bot=bot,
+                benchmark=benchmark,
+                metric=metric,
+                engine=engine_filter,
+                since=_parse_date(since) if since else None,
+                until=_parse_date(until) if until else None,
+                penalty=penalty,
+                min_effect=min_effect,
+                min_change=min_change,
             )
-            raise typer.Exit(1)
-        fetched = fetched[fetched["engine"] == engine_filter]
-        _log(f"  after --engine filter: {len(fetched)} rows")
-
-    t0 = time.monotonic()
-    results = detect_from_df(fetched, config)
-    _log(f"detect: {len(results)} change points in {time.monotonic() - t0:.1f}s")
-
-    print_detect_report(
-        results,
-        group_by_commit=group_by_commit,
-        commit_store=commit_store,
-        default_engine=engine,
-        verbose=verbose,
-    )
-    commit_store.close()
+        print_detect_report(
+            det.points,
+            group_by_commit=group_by_commit,
+            commit_store=store,
+            default_engine=det.default_engine,
+            verbose=verbose,
+        )
+    finally:
+        store.close()
 
 
 # ── compare ──────────────────────────────────────────────────────────────────
@@ -226,98 +164,22 @@ def compare(
     ] = False,
 ):
     """Compare two configurations (A vs B) of benchmark data."""
-    from .compare import compare_snapshots
-
-    cfg = _load_config()
-
-    since_date = _parse_date(since) if since else None
-    until_date = _parse_date(until) if until else None
-
-    # Parse --a / --b overrides
-    def _parse_overrides(items: list[str]) -> dict[str, str]:
-        result = {}
-        for item in items:
-            if "=" not in item:
-                typer.echo(f"Error: override must be key=value, got: {item}", err=True)
-                raise typer.Exit(1)
-            k, v = item.split("=", 1)
-            result[k] = v
-        return result
-
-    a_overrides = _parse_overrides(a)
-    b_overrides = _parse_overrides(b)
-
-    # Build common filters
-    common = {}
-    if bot:
-        common["bot"] = bot
-    if benchmark:
-        common["benchmark"] = benchmark
-
-    adaptor = _make_adaptor(source, cfg)
-
-    def _log(msg: str) -> None:
-        if verbose:
-            typer.echo(msg, err=True)
-
-    # Fetch both sides
-    t0 = time.monotonic()
-    filters_a = {**common, **a_overrides}
-    filters_b = {**common, **b_overrides}
-    _log(f"fetching A: {filters_a}")
-    df_a = adaptor.fetch(since=since_date, until=until_date, **filters_a)
-    _log(f"fetching B: {filters_b}")
-    df_b = adaptor.fetch(since=since_date, until=until_date, **filters_b)
-    _log(f"fetch: {len(df_a)} + {len(df_b)} rows in {time.monotonic() - t0:.1f}s")
-    if df_a.empty:
-        _validate_dimensions(adaptor, filters_a)
-    if df_b.empty:
-        _validate_dimensions(adaptor, filters_b)
-
-    # Determine key columns: all dimension columns NOT mentioned in overrides
-    all_override_keys = set(a_overrides) | set(b_overrides)
-    dimension_cols = ["bot", "benchmark", "test", "variant"]
-    key_cols = [c for c in dimension_cols if c not in all_override_keys]
-
-    t0 = time.monotonic()
-    result_df = compare_snapshots(df_a, df_b, key_cols, alpha=alpha)
-    _log(f"compare: {len(result_df)} rows in {time.monotonic() - t0:.1f}s")
-
-    # Build header
-    a_desc = " ".join(f"{k}={v}" for k, v in a_overrides.items())
-    b_desc = " ".join(f"{k}={v}" for k, v in b_overrides.items())
-    common_desc = " ".join(f"{k}={v}" for k, v in common.items())
-    header = [f"A: {a_desc}  B: {b_desc}"]
-    if common_desc:
-        header.append(f"common: {common_desc}")
-
-    print_compare_report(result_df, key_cols, header, show_all=show_all)
+    _verbose_logging(verbose)
+    with _cli_errors():
+        cmp = api.compare(
+            source,
+            a,
+            b,
+            bot=bot,
+            benchmark=benchmark,
+            since=_parse_date(since) if since else None,
+            until=_parse_date(until) if until else None,
+            alpha=alpha,
+        )
+    print_compare_report(cmp.table, cmp.key_cols, cmp.header, show_all=show_all)
 
 
 # ── commit-impact ────────────────────────────────────────────────────────────
-
-
-def _resolve_target(
-    commit: str, engine: str | None, store: CommitStore
-) -> tuple[int, str | None]:
-    """Resolve a commit arg (id or hash prefix) to (commit_id, label)."""
-    if commit.isdigit():
-        cid = int(commit)
-        info = store.get(engine, cid) if engine else None
-        label = info.date if info else None
-        return cid, label
-    if not engine:
-        raise typer.BadParameter(
-            f"commit {commit!r} is a hash but the source has no engine for lookup;"
-            " pass a numeric commit position instead"
-        )
-    info = store.get_by_hash(engine, commit)
-    if info is None:
-        raise typer.BadParameter(
-            f"commit {commit!r} not found for engine {engine!r}"
-            " (run `pd sync` to populate commit metadata)"
-        )
-    return info.id, info.date
 
 
 @app.command()
@@ -363,91 +225,33 @@ def commit_impact(
     ] = False,
 ):
     """Assess what changed at a specific commit (before vs after)."""
-    from .at import at_from_df
-    from .models import AtConfig
-    from .report import print_at_report
-
-    cfg = _load_config()
-    adaptor = _make_adaptor(source, cfg)
-    engine = _engine_for_source(source, cfg)
+    _verbose_logging(verbose)
     store = CommitStore()
-
-    def _log(msg: str) -> None:
-        if verbose:
-            typer.echo(msg, err=True)
-
-    target_id, target_date = _resolve_target(commit, engine, store)
-    _log(f"target commit_id={target_id}" + (f" ({target_date})" if target_date else ""))
-
-    # Default the fetch window to a span ending well before C so the history is
-    # covered; derive from the commit date when known.
-    if since:
-        since_date = _parse_date(since)
-    else:
-        since_date = _parse_date("6 months ago")
-        if target_date:
-            from datetime import datetime, timedelta
-
-            try:
-                base = datetime.strptime(target_date, "%Y-%m-%d")
-                since_date = (base - timedelta(days=90)).strftime("%Y-%m-%d")
-            except ValueError:
-                pass
-
-    analysis_cfg = cfg.get("analysis", {})
-    config = AtConfig(
-        history=history,
-        min_pct_change=min_change or analysis_cfg.get("min_pct_change", 1.0),
-        min_z=min_z if min_z is not None else 2.0,
-    )
-
-    filter_kwargs: dict[str, str] = {}
-    if bot:
-        filter_kwargs["bot"] = bot
-    if benchmark:
-        filter_kwargs["benchmark"] = benchmark
-
-    t0 = time.monotonic()
-    _log(f"fetching data since {since_date}...")
-    fetched = adaptor.fetch(since=since_date, until=None, **filter_kwargs)
-    _log(f"fetch: {len(fetched)} rows in {time.monotonic() - t0:.1f}s")
-    if fetched.empty:
-        _validate_dimensions(adaptor, filter_kwargs)
-
-    if metric:
-        fetched = fetched[fetched["test"].apply(lambda t: fnmatch(t, metric))]
-    if variant:
-        if fetched.empty or variant not in set(fetched["variant"]):
-            _validate_dimensions(adaptor, {"variant": variant})
-        fetched = fetched[fetched["variant"] == variant]
-    if engine_filter:
-        if "engine" not in fetched.columns:
-            typer.echo(
-                f"Error: source '{source}' does not expose an engine column", err=True
+    try:
+        with _cli_errors():
+            impact = api.commit_impact(
+                source,
+                commit,
+                store=store,
+                bot=bot,
+                benchmark=benchmark,
+                variant=variant,
+                metric=metric,
+                engine=engine_filter,
+                history=history,
+                min_change=min_change,
+                min_z=min_z,
+                since=_parse_date(since) if since else None,
             )
-            raise typer.Exit(1)
-        fetched = fetched[fetched["engine"] == engine_filter]
-
-    deltas = at_from_df(fetched, target_id, config)
-    store.close()
-
-    header = [f"At commit {commit} (snap >= {target_id})"]
-    filt = " ".join(
-        f"{k}={v}"
-        for k, v in {
-            "bot": bot,
-            "benchmark": benchmark,
-            "variant": variant,
-            "engine": engine_filter,
-            "metric": metric,
-        }.items()
-        if v
+    finally:
+        store.close()
+    print_at_report(
+        impact.deltas,
+        impact.snapped_commit_id,
+        impact.header,
+        show_all=show_all,
+        chart_only=chart_only,
     )
-    if filt:
-        header.append(filt)
-
-    snapped = deltas[0].snapped_commit_id if deltas else target_id
-    print_at_report(deltas, snapped, header, show_all=show_all, chart_only=chart_only)
 
 
 # ── sync ─────────────────────────────────────────────────────────────────────
@@ -500,8 +304,7 @@ def sync(
 @app.command()
 def sources():
     """List configured data sources and available adaptors."""
-    cfg = _load_config()
-    src = cfg.get("sources", {})
+    src = api.load_config().sources
 
     if src:
         typer.echo("Configured sources:")

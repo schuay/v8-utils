@@ -14,6 +14,12 @@ server with the groups it can satisfy -- repo_git, worktree, gerrit -- and skip
 the rest with an actionable warning instead of failing to import. The v8-utils
 distribution installs every extra's dependencies, so no group is ever skipped
 there.
+
+A tool module holds argument schemas and rendering and nothing else. The
+operation behind a tool is a library function (pd.api, gerrit, pinpoint,
+worktree, ...) that the CLI and any in-process caller reach the same way, so
+the three frontends cannot drift and a daemon never has to call a tool over
+MCP to get a structured answer.
 """
 
 import importlib
