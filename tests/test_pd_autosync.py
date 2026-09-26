@@ -189,3 +189,13 @@ def test_autosync_ceiling_records_before_sync_raises(tmp_path, monkeypatch):
     pd_tools.autosync_commits(store, [_cp(200)], "v8")
     pd_tools.autosync_commits(store, [_cp(200)], "v8")
     assert calls == ["v8"]  # second poll suppressed despite the first raising
+
+
+def test_count_is_per_engine(tmp_path):
+    store = _store(tmp_path)
+    store.conn.executemany(
+        "INSERT INTO commits (engine, hash, commit_id) VALUES (?, ?, ?)",
+        [("v8", "a", 1), ("v8", "b", 2), ("jsc", "c", 1)],
+    )
+    store.conn.commit()
+    assert (store.count("v8"), store.count("jsc"), store.count("sm")) == (2, 1, 0)

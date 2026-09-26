@@ -226,9 +226,7 @@ def print_detect_report(
         engines_seen = {_resolve_engine(cp, default_engine) for cp in results}
         engines_seen.discard(None)
         for eng in sorted(engines_seen):
-            eng_count = commit_store.conn.execute(
-                "SELECT count(*) FROM commits WHERE engine=?", (eng,)
-            ).fetchone()[0]
+            eng_count = commit_store.count(eng)
             sample_cp = next(
                 cp for cp in results if _resolve_engine(cp, default_engine) == eng
             )

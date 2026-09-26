@@ -95,6 +95,12 @@ class CommitStore:
         ).fetchone()
         return row["m"] if row and row["m"] is not None else None
 
+    def count(self, engine: str) -> int:
+        """How many commits the store holds for an engine."""
+        return self.conn.execute(
+            "SELECT count(*) FROM commits WHERE engine=?", (engine,)
+        ).fetchone()[0]
+
     def get_range(self, engine: str, after_id: int, up_to_id: int) -> list[CommitInfo]:
         """All commits with after_id < commit_id <= up_to_id."""
         rows = self.conn.execute(
