@@ -1,8 +1,5 @@
 """MCP tools for V8 performance investigation: perf, d8, v8log, godbolt, llvm-mca."""
 
-import re as _re
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Annotated
 
@@ -10,14 +7,10 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from pydantic import Field
 
-from .. import config
-from .. import jsb as jsb_module
-from .. import perf as perf_tools
-from .. import v8log
+from ..api import d8, godbolt, jsb, mca, trace_index, v8log
+from ..api import perf as perf_tools
 from ._shared import _text_result
 
-
-_MAX_D8_OUTPUT = 5_000
 
 # Symbol cache: perf_hotspots stores its most recent result per perf_data path
 # so that downstream tools can accept "#3" instead of the raw symbol name.
@@ -50,375 +43,6 @@ def _resolve_symbol(perf_data: str, symbol: str, **_kw: object) -> str:
             raise ValueError(f"Symbol index {idx} out of range (1–{len(rows)})")
         return rows[idx - 1]["symbol"]
     return symbol
-
-
-# d8 trace index patterns
-
-# Each pattern: (compiled regex, category, group index for label extraction)
-_TRACE_PATTERNS: list[tuple[_re.Pattern[str], str, int | None]] = [
-    # Turbofan compilation boundaries
-    (
-        _re.compile(r"^Begin compiling method (.+) using TurboFan"),
-        "turbofan",
-        1,
-    ),
-    (
-        _re.compile(r"^Finished compiling method (.+) using TurboFan"),
-        "turbofan",
-        1,
-    ),
-    # Maglev compilation boundary
-    (
-        _re.compile(r"^Compiling 0x[0-9a-f]+ <JSFunction (\S+) .+> with Maglev"),
-        "maglev",
-        1,
-    ),
-    # Maglev inlining (must be before generic phase pattern)
-    (
-        _re.compile(
-            r"^----- Inlining 0x[0-9a-f]+ <SharedFunctionInfo (\S+)> with bytecode"
-        ),
-        "maglev-inline",
-        1,
-    ),
-    # Turbofan / Turboshaft / Maglev phases: "----- <phase> -----"
-    # Matches graph phases, schedule, instruction sequence, bytecode array, etc.
-    (_re.compile(r"^----- (.+?) -----\s*$"), "phase", 1),
-    # trace-opt: marking for optimization
-    (
-        _re.compile(
-            r"^\[marking 0x[0-9a-f]+ <JSFunction (\S+) .+> for optimization to (\S+),"
-        ),
-        "opt",
-        None,  # custom extraction below
-    ),
-    # trace-opt: compiling method
-    (
-        _re.compile(
-            r"^\[compiling method 0x[0-9a-f]+ <JSFunction (\S+) .+> \(target (\S+)\)"
-        ),
-        "compile",
-        None,
-    ),
-    # trace-opt: completed compiling
-    (
-        _re.compile(
-            r"^\[completed compiling 0x[0-9a-f]+ <JSFunction (\S+) .+> \(target (\S+)\)"
-        ),
-        "compiled",
-        None,
-    ),
-    # trace-deopt: bailout
-    (
-        _re.compile(
-            r"^\[bailout \(kind: ([^,]+), reason: ([^)]+)\): begin\. deoptimizing 0x[0-9a-f]+ <JSFunction (\S+)"
-        ),
-        "deopt",
-        None,
-    ),
-    # print-code: Code object header
-    (
-        _re.compile(r"^kind = (\S+)"),
-        "code",
-        1,
-    ),
-]
-
-
-def _extract_label(pattern_idx: int, m: _re.Match[str]) -> str:
-    """Extract a human-readable label from a regex match."""
-    cat = _TRACE_PATTERNS[pattern_idx][1]
-    if cat == "opt":
-        return f"marking {m.group(1)} → {m.group(2)}"
-    if cat in ("compile", "compiled"):
-        return f"{m.group(1)} (target {m.group(2)})"
-    if cat == "deopt":
-        return f"{m.group(3)}: {m.group(2)} ({m.group(1)})"
-    group_idx = _TRACE_PATTERNS[pattern_idx][2]
-    if group_idx is not None:
-        return m.group(group_idx)
-    return m.group(0)
-
-
-def _build_trace_index(path: str) -> str:
-    """Scan a trace file and return a table of contents."""
-    text = Path(path).read_text(errors="replace")
-    lines = text.split("\n")
-
-    entries: list[tuple[int, str, str]] = []  # (line_no, category, label)
-
-    # Track current compilation context for indentation
-    for i, line in enumerate(lines):
-        for pat_idx, (pattern, cat, _) in enumerate(_TRACE_PATTERNS):
-            m = pattern.match(line)
-            if m:
-                label = _extract_label(pat_idx, m)
-                entries.append((i + 1, cat, label))
-                break
-
-    if not entries:
-        return f"No trace sections found in {path} ({len(lines)} lines)"
-
-    # Format output with indentation for phases within compilations
-    out: list[str] = [f"{path} ({len(lines)} lines, {len(entries)} sections)"]
-    out.append("")
-
-    in_compilation = False
-    for line_no, cat, label in entries:
-        prefix = f"L{line_no:<8}"
-        if cat in ("turbofan", "maglev"):
-            if "Finished" in label or "completed" in label:
-                in_compilation = False
-                out.append(f"{prefix}[{cat}] Finished {label}")
-            else:
-                in_compilation = True
-                out.append(f"{prefix}[{cat}] {label}")
-        elif cat == "phase":
-            indent = "  " if in_compilation else ""
-            out.append(f"{prefix}{indent}[phase] {label}")
-        elif cat == "maglev-inline":
-            out.append(f"{prefix}  [inline] {label}")
-        elif cat == "opt":
-            out.append(f"{prefix}[opt] {label}")
-        elif cat == "compile":
-            out.append(f"{prefix}[compile] {label}")
-        elif cat == "compiled":
-            out.append(f"{prefix}[compiled] {label}")
-        elif cat == "deopt":
-            out.append(f"{prefix}[deopt] {label}")
-        elif cat == "code":
-            out.append(f"{prefix}[code] {label}")
-        else:
-            out.append(f"{prefix}[{cat}] {label}")
-
-    return "\n".join(out)
-
-
-# llvm-mca helpers
-
-# V8 print-opt-code format:
-#   0x7fc5e000a500    80  453bd8               cmpl r11,r8
-_RE_V8_PRINT_CODE = _re.compile(r"^0x[0-9a-f]+\s+[0-9a-f]+\s+[0-9a-f]+\s+(.*)")
-
-# perf annotate format:
-#      3.15 :   1d508c3:        testb  $0x8,(%rsi,%r14,1)
-_RE_PERF_ANNOTATE = _re.compile(r"^\s*\d+\.\d+\s*:\s+[0-9a-f]+:\s+(.*)")
-
-# GDB disassemble format (with optional => marker and /r hex bytes):
-#    0x00005555555fc5c0 <Main()+0>:	push   rbp
-# => 0x00005555555fdd64 <main+4>:	pop    rbp
-#    0x00005555555fdd6a:	int3
-#    0x00005555555fc5c0 <Main()+0>:	55                 	push   rbp   (with /r)
-_RE_GDB_DISASM = _re.compile(
-    r"^(?:=>)?\s*0x[0-9a-f]+"  # optional => marker, address
-    r"(?:\s+<[^>]+>)?:\s+"  # optional <symbol+offset>, then colon
-    r"(?:[0-9a-f]{2}(?:\s[0-9a-f]{2})*\s+)?"  # optional hex bytes (/r flag)
-    r"(.*)"  # instruction
-)
-
-# V8 code comment / ANSI escape lines
-_RE_V8_COMMENT = _re.compile(r"^\s*\[3[24]m|\s*\]")
-
-# V8 uses a hybrid syntax: AT&T size suffixes (movl, addl) with Intel operand
-# order. Strip the suffix so the Intel parser accepts them.
-_RE_SIZE_SUFFIX = _re.compile(
-    r"^(REX\.W\s+)?"  # optional REX.W prefix
-    r"(j[a-z]+|set[a-z]+|mov[sz]?|lea|add|sub|cmp|test|and|or|xor|sar|shr|shl|"
-    r"sal|inc|dec|neg|not|imul|idiv|mul|div|push|pop|call|ret|nop|"
-    r"cmov[a-z]+)"
-    r"([bwlq])\b",  # size suffix
-    _re.IGNORECASE,
-)
-
-# Trailing annotations: "<+0x104>", "(comment)", ";; comment"
-_RE_TRAILING_ANNOTATION = _re.compile(r"\s+<\+0x[0-9a-f]+>.*$|\s+\(.*\)\s*$|\s+;;.*$")
-
-# REX.W prefix — strip it, the instruction works without it in the assembler
-_RE_REX_PREFIX = _re.compile(r"^REX\.W\s+", _re.IGNORECASE)
-
-# Absolute address as jump/call target: "jne 0x7fc5..." or "jne 1d50886" → "jne .L0"
-_RE_ABS_JUMP = _re.compile(
-    r"^(j[a-z]*|call)\s+(?:0x)?([0-9a-f]{4,})\s*$", _re.IGNORECASE
-)
-
-
-def _clean_asm_for_mca(raw: str) -> str:
-    """Strip address/hex prefixes from V8 print-code or perf annotate output."""
-    cleaned: list[str] = []
-    v8_format = False
-    for line in raw.splitlines():
-        # V8 print-opt-code: "0xADDR  OFF  HEX  instruction"
-        m = _RE_V8_PRINT_CODE.match(line)
-        if m:
-            v8_format = True
-            cleaned.append(m.group(1))
-            continue
-        # perf annotate: "  pct : addr: instruction"
-        m = _RE_PERF_ANNOTATE.match(line)
-        if m:
-            cleaned.append(m.group(1))
-            continue
-        # GDB wrapper lines
-        if line.startswith("Dump of assembler code") or line.startswith(
-            "End of assembler dump"
-        ):
-            continue
-        # GDB disassemble: "   0xADDR <sym+off>:  instruction"
-        m = _RE_GDB_DISASM.match(line)
-        if m:
-            instr = m.group(1).strip()
-            if instr:
-                cleaned.append(instr)
-            continue
-        # Skip ANSI escape lines (V8 code comments with [34m prefix)
-        if _RE_V8_COMMENT.match(line):
-            continue
-        # Pass through everything else (plain asm, labels, directives)
-        cleaned.append(line)
-
-    if v8_format:
-        # V8 print-code uses hybrid syntax: AT&T suffixes + Intel operands.
-        # Strip REX.W prefixes, size suffixes, and trailing annotations.
-        fixed: list[str] = []
-        for line in cleaned:
-            line = _RE_TRAILING_ANNOTATION.sub("", line)
-            line = _RE_REX_PREFIX.sub("", line)
-            line = _RE_SIZE_SUFFIX.sub(r"\1\2", line)
-            if line.strip():
-                fixed.append(line)
-        cleaned = fixed
-
-    # Convert absolute jump/call targets to labels (both formats).
-    label_map: dict[str, str] = {}
-    fixed = []
-    for line in cleaned:
-        m = _RE_ABS_JUMP.match(line.strip())
-        if m:
-            addr = m.group(2)
-            if addr not in label_map:
-                label_map[addr] = f".L{len(label_map)}"
-            line = f"{m.group(1)} {label_map[addr]}"
-        fixed.append(line)
-
-    return "\n".join(fixed)
-
-
-def _filter_mca_output(raw: str) -> str:
-    """Filter llvm-mca output to keep only the most useful sections.
-
-    Always keeps: summary, bottleneck analysis, critical sequence,
-    instruction info. Only includes resource pressure tables when the
-    bottleneck analysis indicates resource pressure is significant (>10%).
-    """
-    sections: list[tuple[str, list[str]]] = []
-    current_name = "summary"
-    current_lines: list[str] = []
-
-    # Known section headers
-    _SECTION_STARTS = {
-        "Cycles with backend pressure": "bottleneck",
-        "Critical sequence": "critical",
-        "Instruction Info": "instruction_info",
-        "Resources:": "resources",
-        "Resource pressure per iteration": "pressure_summary",
-        "Resource pressure by instruction": "pressure_detail",
-        "Timeline view": "timeline",
-        "Average Wait times": "wait_times",
-    }
-
-    for line in raw.strip().splitlines():
-        for prefix, name in _SECTION_STARTS.items():
-            if line.startswith(prefix):
-                sections.append((current_name, current_lines))
-                current_name = name
-                current_lines = []
-                break
-        current_lines.append(line)
-    sections.append((current_name, current_lines))
-
-    # Check if resource pressure is a significant bottleneck
-    resource_pressure_pct = 0.0
-    for name, slines in sections:
-        if name == "bottleneck":
-            for sl in slines:
-                if "Resource Pressure" in sl and "%" in sl:
-                    try:
-                        resource_pressure_pct = float(
-                            sl.split("[")[1].split("%")[0].strip()
-                        )
-                    except (IndexError, ValueError):
-                        pass
-                    break
-
-    keep = {
-        "summary",
-        "bottleneck",
-        "critical",
-        "instruction_info",
-        "timeline",
-        "wait_times",
-    }
-    if resource_pressure_pct > 10:
-        keep.update({"resources", "pressure_summary", "pressure_detail"})
-
-    out: list[str] = []
-    for name, slines in sections:
-        if name in keep:
-            # Strip excessive blank lines
-            text = "\n".join(slines).strip()
-            if text:
-                out.append(text)
-
-    return "\n\n".join(out)
-
-
-# Godbolt (Compiler Explorer) helpers
-
-_godbolt_compiler_cache: dict[str, list[dict]] | None = None
-
-_GODBOLT_ISET_MAP = {
-    "x64": {"amd64", "x86-64", "x86_64"},
-    "arm64": {"aarch64", "arm64"},
-}
-
-# Default compiler IDs per arch — Godbolt-maintained trunk builds.
-_GODBOLT_DEFAULT_COMPILER = {
-    "x64": "clang_trunk",
-    "arm64": "armv8-clang-trunk",
-}
-
-_MCA_DEFAULT_CPU = {"x64": "skylake", "arm64": "cortex-a76"}
-
-
-def _godbolt_get_compilers(language: str) -> list[dict]:
-    """Fetch and cache compiler list from Godbolt. Cached per-language for process lifetime."""
-    import httpx
-
-    global _godbolt_compiler_cache
-    if _godbolt_compiler_cache is None:
-        _godbolt_compiler_cache = {}
-    if language not in _godbolt_compiler_cache:
-        r = httpx.get(
-            f"https://godbolt.org/api/compilers/{language}",
-            params={"fields": "id,name,semver,instructionSet"},
-            headers={"Accept": "application/json"},
-            timeout=30,
-        )
-        r.raise_for_status()
-        _godbolt_compiler_cache[language] = r.json()
-    return _godbolt_compiler_cache[language]
-
-
-def _godbolt_infer_arch(compiler_id: str, language: str) -> str:
-    """Infer arch from a Godbolt compiler's instruction set metadata."""
-    for c in _godbolt_get_compilers(language):
-        if c.get("id") == compiler_id:
-            iset = (c.get("instructionSet") or "").lower()
-            for arch, aliases in _GODBOLT_ISET_MAP.items():
-                if iset in aliases:
-                    return arch
-            break
-    return "x64"
 
 
 def register(mcp: FastMCP) -> None:
@@ -464,52 +88,15 @@ def register(mcp: FastMCP) -> None:
           args: ["cli.js", "--", "regexp-octane"]
           cwd:  "/absolute/path/to/JetStream3"
         """
-        cfg = config.load()
-        if d8_path:
-            d8 = Path(d8_path).expanduser()
-        else:
-            d8 = cfg.v8_out / cfg.default_build / "d8"
-        if not d8.exists():
-            raise ValueError(f"d8 not found: {d8}")
-
-        cmd = [str(d8), *args]
-        stdout = open(output_file, "w") if output_file else subprocess.PIPE
-        try:
-            result = subprocess.run(
-                cmd,
-                stdout=stdout,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=timeout,
-                errors="replace",
+        return _text_result(
+            d8.run_d8(
+                args=args,
+                d8_path=d8_path,
                 cwd=cwd,
+                timeout=timeout,
+                output_file=output_file,
             )
-        except subprocess.TimeoutExpired:
-            return _text_result(f"Error: d8 timed out after {timeout}s")
-        except Exception as e:
-            return _text_result(f"Error: {e}")
-        finally:
-            if output_file:
-                stdout.close()
-
-        parts: list[str] = []
-        if output_file:
-            parts.append(f"[output → {output_file}]")
-        elif result.stdout:
-            parts.append(result.stdout)
-        if result.returncode not in (0, 1):
-            parts.append(f"[exit {result.returncode}]")
-
-        out = "\n".join(parts).strip()
-        if not out:
-            out = "(no output)"
-        if len(out) > _MAX_D8_OUTPUT:
-            out = (
-                out[:_MAX_D8_OUTPUT]
-                + f"\n\n[truncated — {len(out) - _MAX_D8_OUTPUT:,} more chars. "
-                "Use output_file to redirect large output to a file.]"
-            )
-        return _text_result(out)
+        )
 
     @mcp.tool()
     def jsb_run_bench(
@@ -557,77 +144,14 @@ def register(mcp: FastMCP) -> None:
         Returns a comparison table with mean, stdev, delta, p-value
         (Welch's t-test), and confidence (high/medium/low) per metric.
         """
-        cfg = config.load()
-        js3 = suite.lower() != "js2"
-        key = "js3" if js3 else "js2"
-        suite_dir = cfg.repos[key].path
-        suite_label = "JS3" if js3 else "JS2"
-        # Name the path, and name it HERE. The suite is reached as
-        # `suite_dir/cli.js`, so a missing one otherwise surfaces as d8 failing to
-        # open a file several layers down -- and a caller that cannot see the
-        # configured path has no way to tell "not installed" from "installed
-        # somewhere else". Sandboxed agents read that as "JetStream is missing"
-        # and silently skip the measurement, which on a perf job is the whole
-        # deliverable. The path is not guessable either (the real one is
-        # `.../v8-perf/benchmarks/JetStream/v3.0-custom`, containing no "js3"),
-        # so stating it is the difference between an actionable error and a dead
-        # end.
-        if not (suite_dir / "cli.js").is_file():
-            raise FileNotFoundError(
-                f"{suite_label} not found: no cli.js under {suite_dir} "
-                f"(configured as repos.{key} in {config.CONFIG_PATH}). "
-                "Point that at a JetStream checkout, or pass a suite that is "
-                "installed."
-            )
-
-        for b in binaries:
-            path_part = b.split(":")[0].strip()
-            if not Path(path_part).is_absolute():
-                raise ValueError(
-                    f"binary must be an absolute path, got {path_part!r}. "
-                    f"Example: /home/user/src/v8/v8/out/x64.release/d8"
-                )
-        variants = [jsb_module.Variant.parse(b) for b in binaries]
-        for v in variants:
-            d8 = v.d8(cfg.v8_out)
-            if d8.is_dir():
-                raise ValueError(
-                    f"{d8} is a directory, not a binary. "
-                    f'Pass the executable itself, e.g. "{d8}/d8".'
-                )
-            if not d8.exists():
-                raise ValueError(f"binary not found: {d8}")
-
-        if record is not None:
-            _RECORD_MODES = ("perf", "perf_upload", "v8log")
-            if record not in _RECORD_MODES:
-                raise ValueError(
-                    f"record must be one of {_RECORD_MODES}, got {record!r}"
-                )
-            if len(variants) != 1:
-                raise ValueError("record mode requires exactly one binary")
-            v = variants[0]
-            if record == "v8log":
-                return _text_result(
-                    str(jsb_module.run_v8log(v, suite_dir, lineitems, cfg.v8_out))
-                )
-            return _text_result(
-                jsb_module.run_perf(
-                    v,
-                    suite_dir,
-                    lineitems,
-                    cfg.v8_out,
-                    cfg.perf_script,
-                    upload=(record == "perf_upload"),
-                )
-            )
-
-        results = jsb_module.run_round_robin(
-            variants, suite_dir, lineitems, runs, js3, cfg.v8_out
-        )
-
         return _text_result(
-            jsb_module.format_table(lineitems, suite_label, runs, variants, results)
+            jsb.jsb_run_bench(
+                lineitems=lineitems,
+                binaries=binaries,
+                runs=runs,
+                suite=suite,
+                record=record,
+            )
         )
 
     @mcp.tool()
@@ -944,10 +468,7 @@ def register(mcp: FastMCP) -> None:
         --trace-maglev-graph-building, --trace-opt, --trace-deopt, and
         --print-code. Use the line numbers to navigate with read_around.
         """
-        try:
-            return _text_result(_build_trace_index(path))
-        except FileNotFoundError:
-            return _text_result(f"File not found: {path}")
+        return _text_result(trace_index.d8_trace_index(path=path))
 
     @mcp.tool()
     def llvm_mca(
@@ -995,72 +516,16 @@ def register(mcp: FastMCP) -> None:
         Simulates how the CPU pipeline would execute the given instructions and
         reports throughput, latency, bottlenecks, and port pressure.
         """
-        mca = shutil.which("llvm-mca")
-        if mca is None:
-            return _text_result(
-                "Error: llvm-mca not found. Install LLVM (e.g. pacman -S llvm)."
+        return _text_result(
+            mca.llvm_mca(
+                assembly=assembly,
+                arch=arch,
+                cpu=cpu,
+                syntax=syntax,
+                bottleneck=bottleneck,
+                timeline=timeline,
             )
-
-        is_arm64 = arch.lower() in ("arm64", "aarch64")
-
-        src = _clean_asm_for_mca(assembly.strip())
-
-        if is_arm64:
-            att = False
-        else:
-            att = syntax.lower() == "att"
-            # Auto-detect AT&T syntax from % register prefixes (e.g. GDB default output)
-            if not att and _re.search(
-                r"%[re]?[abcd]x|%[re]?[sd]i|%[re]?[bs]p|%r\d+|%xmm", src
-            ):
-                att = True
-            # Prepend syntax directive if not already present
-            if ".intel_syntax" not in src and ".att_syntax" not in src:
-                if att:
-                    src = ".att_syntax\n" + src
-                else:
-                    src = ".intel_syntax noprefix\n" + src
-
-        cmd = [
-            mca,
-            "--noalias",
-            "--skip-unsupported-instructions=any",
-        ]
-        if is_arm64:
-            cmd += ["-march=aarch64", "-mtriple=aarch64-linux-gnu"]
-        else:
-            # output-asm-variant: 0=AT&T, 1=Intel
-            cmd.append(f"--output-asm-variant={'0' if att else '1'}")
-        if cpu:
-            cmd.append(f"--mcpu={cpu}")
-        if bottleneck:
-            cmd.append("--bottleneck-analysis")
-        if timeline:
-            cmd.append("--timeline")
-
-        r = subprocess.run(cmd, input=src, capture_output=True, text=True, timeout=30)
-
-        lines: list[str] = []
-        header = f"# llvm-mca{f' -mcpu={cpu}' if cpu else ''}"
-        lines.append(header)
-
-        if r.stderr.strip():
-            for line in r.stderr.strip().splitlines():
-                if (
-                    "found a return instruction" in line
-                    or "program counter updates" in line
-                ):
-                    continue
-                lines.append(line)
-
-        if r.returncode != 0 and not r.stdout.strip():
-            lines.append(f"llvm-mca exited with code {r.returncode}")
-            return _text_result("\n".join(lines))
-
-        if r.stdout.strip():
-            lines.append(_filter_mca_output(r.stdout))
-
-        return _text_result("\n".join(lines))
+        )
 
     @mcp.tool()
     def godbolt_compile(
@@ -1103,93 +568,17 @@ def register(mcp: FastMCP) -> None:
 
         By default uses the latest clang trunk and runs llvm-mca analysis.
         """
-        import httpx
-
-        compiler_id = compiler or _GODBOLT_DEFAULT_COMPILER.get(arch)
-        if compiler_id is None:
-            return _text_result(
-                f"Unknown arch {arch!r}. Use 'x64' or 'arm64', "
-                f"or pass an explicit compiler ID."
+        return _text_result(
+            godbolt.godbolt_compile(
+                source=source,
+                arch=arch,
+                compiler=compiler,
+                language=language,
+                flags=flags,
+                mca=mca,
+                opt_remarks=opt_remarks,
             )
-
-        # When compiler is explicitly specified, infer arch from metadata for MCA.
-        if compiler is not None:
-            arch = _godbolt_infer_arch(compiler_id, language)
-
-        if (mca or opt_remarks) and "clang" not in compiler_id.lower():
-            return _text_result("Error: mca and opt_remarks require a Clang compiler.")
-
-        options: dict = {
-            "userArguments": flags,
-            "filters": {
-                "intel": True,
-                "demangle": True,
-                "commentOnly": True,
-                "directives": True,
-            },
-        }
-
-        if mca:
-            cpu = _MCA_DEFAULT_CPU.get(arch, "")
-            mca_arg = f"-mcpu={cpu}" if cpu else ""
-            options["tools"] = [{"id": "llvm-mcatrunk", "args": mca_arg}]
-
-        if opt_remarks:
-            options["compilerOptions"] = {"produceOptInfo": True}
-
-        r = httpx.post(
-            f"https://godbolt.org/api/compiler/{compiler_id}/compile",
-            json={"source": source, "lang": language, "options": options},
-            headers={"Accept": "application/json"},
-            timeout=30,
         )
-        r.raise_for_status()
-        data = r.json()
-
-        lines: list[str] = [f"# {compiler_id} {flags}"]
-
-        stderr_lines = data.get("stderr") or []
-        if stderr_lines:
-            for s in stderr_lines:
-                lines.append(s.get("text", ""))
-            lines.append("")
-
-        asm_lines = data.get("asm") or []
-        for a in asm_lines:
-            lines.append(a.get("text", ""))
-
-        if mca:
-            for tool_entry in data.get("tools") or []:
-                if tool_entry.get("id") == "llvm-mcatrunk":
-                    lines.append("")
-                    lines.append("# --- llvm-mca analysis ---")
-                    for s in tool_entry.get("stderr") or []:
-                        lines.append(s.get("text", ""))
-                    for s in tool_entry.get("stdout") or []:
-                        lines.append(s.get("text", ""))
-
-        if opt_remarks:
-            opt_output = data.get("optOutput") or []
-            if opt_output:
-                lines.append("")
-                lines.append("# --- optimization remarks ---")
-                for opt_type in ("Missed", "Passed", "Analysis"):
-                    entries = [o for o in opt_output if o.get("optType") == opt_type]
-                    if not entries:
-                        continue
-                    lines.append(f"# {opt_type} ({len(entries)}):")
-                    for o in entries:
-                        loc = o.get("DebugLoc") or {}
-                        loc_str = (
-                            f"{loc.get('File', '?')}:{loc.get('Line', '?')}"
-                            if loc
-                            else ""
-                        )
-                        fn = o.get("Function", "")
-                        display = o.get("displayString", "")
-                        lines.append(f"  [{fn}] {loc_str}: {display}")
-
-        return _text_result("\n".join(lines))
 
     @mcp.tool()
     def godbolt_list_compilers(
@@ -1204,29 +593,9 @@ def register(mcp: FastMCP) -> None:
         ] = None,
     ) -> CallToolResult:
         """List available compilers on Godbolt for a language. Use filter to narrow results."""
-        compilers = _godbolt_get_compilers(language)
-
-        if filter:
-            needle = filter.lower()
-            compilers = [
-                c
-                for c in compilers
-                if needle in (c.get("id") or "").lower()
-                or needle in (c.get("name") or "").lower()
-                or needle in (c.get("instructionSet") or "").lower()
-            ]
-
-        lines = [f"{'id':<30} {'name':<45} {'instructionSet'}"]
-        lines.append("-" * len(lines[0]))
-        for c in compilers:
-            lines.append(
-                f"{c.get('id', ''):<30} {c.get('name', ''):<45} {c.get('instructionSet', '')}"
-            )
-
-        if len(lines) == 2:
-            return _text_result("No compilers matched the filter.")
-
-        return _text_result("\n".join(lines))
+        return _text_result(
+            godbolt.godbolt_list_compilers(language=language, filter=filter)
+        )
 
     @mcp.tool()
     def v8log_analyze(

@@ -12,10 +12,6 @@ Imports are read from the syntax tree, lazy ones included, and relative
 imports are resolved before the check. `from pkg import name` counts as an
 import of pkg.name when that is a module, so `from .. import config` is an
 import of v8_utils.config and not of v8_utils.
-
-ALLOWED_VIOLATIONS records the imports that predate the rule. It only
-shrinks: an entry that no longer occurs fails the test, so the list cannot
-outlive the violation it excuses.
 """
 
 from __future__ import annotations
@@ -35,17 +31,6 @@ FRONTENDS = (
 RENDER = "v8_utils.render"
 API = "v8_utils.api"
 UPPER = (API, RENDER, *FRONTENDS)
-
-ALLOWED_VIOLATIONS: dict[str, set[str]] = {
-    "v8_utils.cli.jsb": {"v8_utils.config", "v8_utils.jsb"},
-    "v8_utils.cli.lv": {"v8_utils.v8log"},
-    "v8_utils.mcp_tools.performance": {
-        "v8_utils.config",
-        "v8_utils.jsb",
-        "v8_utils.perf",
-        "v8_utils.v8log",
-    },
-}
 
 
 def _module_name(path: Path) -> str:
@@ -113,23 +98,8 @@ def _violations() -> dict[str, set[str]]:
     return out
 
 
-def test_no_new_layering_violations():
-    new = {
-        mod: sorted(bad - ALLOWED_VIOLATIONS.get(mod, set()))
-        for mod, bad in _violations().items()
-        if bad - ALLOWED_VIOLATIONS.get(mod, set())
-    }
-    assert not new, f"imports that break the layering: {new}"
-
-
-def test_allowlist_has_no_stale_entries():
-    actual = _violations()
-    stale = {
-        mod: sorted(allowed - actual.get(mod, set()))
-        for mod, allowed in ALLOWED_VIOLATIONS.items()
-        if allowed - actual.get(mod, set())
-    }
-    assert not stale, f"allowlisted imports that no longer occur, remove them: {stale}"
+def test_imports_follow_the_layering():
+    assert not _violations(), f"imports that break the layering: {_violations()}"
 
 
 def test_the_checker_sees_relative_lazy_and_from_package_imports(tmp_path, monkeypatch):

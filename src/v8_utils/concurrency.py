@@ -1,8 +1,8 @@
 """Small concurrency helpers shared by CLI and MCP code.
 
-Kept dependency-free (stdlib only) and separate from tools.py so that light
-tool groups -- e.g. the gerrit MCP group, which only needs an HTTP client -- can
-reuse it without importing tools.py and, through it, the pinpoint/scipy stack.
+Kept dependency-free (stdlib only) and separate from pinpoint_jobs so that light
+callers -- e.g. the gerrit CQ reader, which only needs an HTTP client -- can
+reuse it without importing the pinpoint/scipy stack.
 """
 
 import concurrent.futures

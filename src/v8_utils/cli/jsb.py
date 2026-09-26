@@ -21,8 +21,8 @@ import sys
 
 from rich.console import Console
 
-from .. import config as cfg_module
-from ..jsb import Variant, format_table, run_perf, run_round_robin, run_v8log
+from ..api import config as cfg_module
+from ..api.jsb import Variant, format_table, run_perf, run_round_robin, run_v8log
 
 
 def main(argv: list[str] | None = None) -> None:

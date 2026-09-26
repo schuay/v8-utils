@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.table import Table
 from scipy.stats import ttest_ind
 
+from . import config
+
 
 # ---------- Variant ----------
 
@@ -380,3 +382,79 @@ def summarise(results: list[dict[str, list[float]]]) -> list[dict]:
 
 
 # ---------- CLI ----------
+
+
+def jsb_run_bench(
+    lineitems: list[str] | None = None,
+    binaries: list[str] = [],
+    runs: int = 5,
+    suite: str = "js3",
+    record: str | None = None,
+) -> str:
+    """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
+
+    Returns a comparison table with mean, stdev, delta, p-value
+    (Welch's t-test), and confidence (high/medium/low) per metric.
+    """
+    cfg = config.load()
+    js3 = suite.lower() != "js2"
+    key = "js3" if js3 else "js2"
+    suite_dir = cfg.repos[key].path
+    suite_label = "JS3" if js3 else "JS2"
+    # Name the path, and name it HERE. The suite is reached as
+    # `suite_dir/cli.js`, so a missing one otherwise surfaces as d8 failing to
+    # open a file several layers down -- and a caller that cannot see the
+    # configured path has no way to tell "not installed" from "installed
+    # somewhere else". Sandboxed agents read that as "JetStream is missing"
+    # and silently skip the measurement, which on a perf job is the whole
+    # deliverable. The path is not guessable either (the real one is
+    # `.../v8-perf/benchmarks/JetStream/v3.0-custom`, containing no "js3"),
+    # so stating it is the difference between an actionable error and a dead
+    # end.
+    if not (suite_dir / "cli.js").is_file():
+        raise FileNotFoundError(
+            f"{suite_label} not found: no cli.js under {suite_dir} "
+            f"(configured as repos.{key} in {config.CONFIG_PATH}). "
+            "Point that at a JetStream checkout, or pass a suite that is "
+            "installed."
+        )
+
+    for b in binaries:
+        path_part = b.split(":")[0].strip()
+        if not Path(path_part).is_absolute():
+            raise ValueError(
+                f"binary must be an absolute path, got {path_part!r}. "
+                f"Example: /home/user/src/v8/v8/out/x64.release/d8"
+            )
+    variants = [Variant.parse(b) for b in binaries]
+    for v in variants:
+        d8 = v.d8(cfg.v8_out)
+        if d8.is_dir():
+            raise ValueError(
+                f"{d8} is a directory, not a binary. "
+                f'Pass the executable itself, e.g. "{d8}/d8".'
+            )
+        if not d8.exists():
+            raise ValueError(f"binary not found: {d8}")
+
+    if record is not None:
+        _RECORD_MODES = ("perf", "perf_upload", "v8log")
+        if record not in _RECORD_MODES:
+            raise ValueError(f"record must be one of {_RECORD_MODES}, got {record!r}")
+        if len(variants) != 1:
+            raise ValueError("record mode requires exactly one binary")
+        v = variants[0]
+        if record == "v8log":
+            return str(run_v8log(v, suite_dir, lineitems, cfg.v8_out))
+        return run_perf(
+            v,
+            suite_dir,
+            lineitems,
+            cfg.v8_out,
+            cfg.perf_script,
+            upload=(record == "perf_upload"),
+        )
+
+    results = run_round_robin(variants, suite_dir, lineitems, runs, js3, cfg.v8_out)
+
+    return format_table(lineitems, suite_label, runs, variants, results)

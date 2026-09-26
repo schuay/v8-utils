@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .. import v8log
+from ..api import v8log
 
 # ── ANSI colors (no-ops when not a TTY) ──────────────────────────────────────
 
