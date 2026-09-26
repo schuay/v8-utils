@@ -3,8 +3,8 @@
 Anyone with a Gerrit account can comment on a public CL, upload one, and choose
 its subject; their email address is theirs to choose too. Text from an
 arbitrary account is untrusted input for a model that reads it. Once trusted
-domains are configured -- the MCP server's --trusted-author-domains, or
-configure() in-process -- every Gerrit read path applies the same rule:
+domains are bound to a GerritReader, supplied to the MCP server, or configured
+in the current execution context, every Gerrit read path applies the same rule:
 
 - landed content is trusted whoever wrote it: the landed patchset of a
   merged CL (its diff, commit message, file paths, CQ logs) passed human
@@ -18,8 +18,9 @@ configure() in-process -- every Gerrit read path applies the same rule:
   and a merged CL's other patchsets need a trusted uploader, since they never
   passed review.
 
-Unconfigured, nothing is redacted: the command-line tools a developer runs on
-their own behalf read Gerrit as it is.
+Unconfigured, nothing is redacted: command-line tools a developer runs on their
+own behalf read Gerrit as it is. Daemons bind a policy to their reader instead
+of changing process state.
 
 Trust is decided by email domain, exact or a subdomain of a trusted one, and
 fails closed: a missing, malformed or non-ASCII address is untrusted.
@@ -29,6 +30,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 REDACTED_MESSAGE = "<comment text by non-whitelisted author omitted>"
 REDACTED_AUTHOR = "<non-whitelisted author>"
@@ -40,7 +43,9 @@ MAGIC_PATHS = frozenset({"/COMMIT_MSG", "/MERGE_LIST", "/PATCHSET_LEVEL"})
 
 _DOMAIN_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)+$")
 
-_domains: tuple[str, ...] | None = None
+_domains: ContextVar[tuple[str, ...] | None] = ContextVar(
+    "v8_utils_trusted_author_domains", default=None
+)
 
 
 def normalize_domains(domains: Iterable[str]) -> tuple[str, ...]:
@@ -56,21 +61,29 @@ def normalize_domains(domains: Iterable[str]) -> tuple[str, ...]:
 
 
 def configure(domains: Iterable[str]) -> None:
-    """Trust only accounts in `domains` (and their subdomains) from now on."""
-    global _domains
-    _domains = normalize_domains(domains)
+    """Trust only accounts in `domains` in the current execution context."""
+    _domains.set(normalize_domains(domains))
 
 
 def reset() -> None:
     """Turn redaction off again. For a test that must not inherit another's
     configuration; a running process never calls it."""
-    global _domains
-    _domains = None
+    _domains.set(None)
 
 
 def domains() -> tuple[str, ...] | None:
     """The configured domains, or None when redaction is off."""
-    return _domains
+    return _domains.get()
+
+
+@contextmanager
+def use(domains: Iterable[str]):
+    """Apply one normalized trust policy for the duration of a read."""
+    token = _domains.set(normalize_domains(domains))
+    try:
+        yield
+    finally:
+        _domains.reset(token)
 
 
 def email_in_domains(email: object, domains: Iterable[str]) -> bool:
@@ -89,7 +102,8 @@ def email_in_domains(email: object, domains: Iterable[str]) -> bool:
 def is_trusted(email: object) -> bool:
     """Whether content by `email` may be shown as written. Always true while
     redaction is off."""
-    return _domains is None or email_in_domains(email, _domains)
+    configured = domains()
+    return configured is None or email_in_domains(email, configured)
 
 
 def shown_email(email: object) -> str:
@@ -141,7 +155,8 @@ def untrusted_change_reason(change: dict) -> str | None:
     subject, its existence in a listing; a single patchset's content is
     untrusted_patchset_reason's question.
     """
-    if _domains is None or landed_patchset(change) is not None:
+    configured = domains()
+    if configured is None or landed_patchset(change) is not None:
         return None
     accounts = [("owner", change.get("owner"))]
     revisions = change.get("revisions")
@@ -150,7 +165,7 @@ def untrusted_change_reason(change: dict) -> str | None:
     for rev in revisions.values():
         accounts += [("patchset uploader", a) for a in _uploaders(rev)]
     for role, account in accounts:
-        if not email_in_domains(account_email(account), _domains):
+        if not email_in_domains(account_email(account), configured):
             return f"its {role} is outside the trusted author domains"
     return None
 
@@ -164,7 +179,8 @@ def untrusted_patchset_reason(change: dict, patchset: object) -> str | None:
     uploader. A patchset of an open CL is trusted only when the whole CL is.
     `change` must carry ALL_REVISIONS.
     """
-    if _domains is None:
+    configured = domains()
+    if configured is None:
         return None
     landed = landed_patchset(change)
     if landed is None:
@@ -184,7 +200,7 @@ def untrusted_patchset_reason(change: dict, patchset: object) -> str | None:
     if revision is None:
         return f"patchset {patchset} is not known"
     if not all(
-        email_in_domains(account_email(a), _domains) for a in _uploaders(revision)
+        email_in_domains(account_email(a), configured) for a in _uploaders(revision)
     ):
         return (
             f"patchset {patchset} did not land and its uploader is outside the"

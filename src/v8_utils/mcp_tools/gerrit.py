@@ -24,15 +24,20 @@ CHANGE_URL_ARG = (
 )
 
 
-def _comments_result(change_url: str, include_drafts: bool) -> CallToolResult:
-    threads = gerrit_tools.comments(change_url, include_drafts=include_drafts)
+def _comments_result(reader, change_url: str, include_drafts: bool) -> CallToolResult:
+    read = reader or gerrit_tools
+    threads = read.comments(change_url, include_drafts=include_drafts)
     if not threads:
         return _text_result("No comments found.")
     return _text_result(format_comments(threads))
 
 
 def register(
-    mcp: FastMCP, *, drafts_enabled: bool = True, default_user: bool = True
+    mcp: FastMCP,
+    *,
+    drafts_enabled: bool = True,
+    default_user: bool = True,
+    reader: gerrit_tools.GerritReader | None = None,
 ) -> None:
     # When drafts are disabled (e.g. a shared/untrusted deployment) the
     # include_drafts parameter is removed entirely, so an agent cannot surface
@@ -66,7 +71,7 @@ def register(
             reviewer feedback or the current state of a code review.
 
             """
-            return _comments_result(change_url, include_drafts)
+            return _comments_result(reader, change_url, include_drafts)
 
     else:
 
@@ -85,7 +90,7 @@ def register(
             reviewer feedback or the current state of a code review.
 
             """
-            return _comments_result(change_url, include_drafts=False)
+            return _comments_result(reader, change_url, include_drafts=False)
 
     @mcp.tool()
     def gerrit_create_comments(
@@ -194,7 +199,9 @@ def register(
         """
         repo_path = v8_repo_path or str(repo_git.resolve_repo("v8"))
         return asdict(
-            gerrit_tools.fetch_ref(change_url, repo_path=repo_path, fetch=fetch)
+            (reader or gerrit_tools).fetch_ref(
+                change_url, repo_path=repo_path, fetch=fetch
+            )
         )
 
     @mcp.tool()
@@ -227,7 +234,7 @@ def register(
                 "Error: 'self' is disabled in this deployment; specify an "
                 "explicit owner/reviewer email instead."
             )
-        cls = gerrit_tools.list_cls(query, limit=limit)
+        cls = (reader or gerrit_tools).list_cls(query, limit=limit)
         if not cls:
             return _text_result(f"No CLs found for query: {query}")
         return _text_result(format_cl_list(cls))
@@ -265,7 +272,7 @@ def register(
 
         """
         return _text_result(
-            cq.cq_report(
+            (reader.cq_report if reader else cq.cq_report)(
                 change=change,
                 patchset=patchset,
                 builder=builder,

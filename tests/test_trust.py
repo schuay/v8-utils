@@ -312,12 +312,12 @@ def test_cq_of_an_untrusted_cl_runs_no_bb(gerrit_api, monkeypatch):
 # ── The server ────────────────────────────────────────────────────────────────
 
 
-def test_server_flag_configures_redaction_for_every_tool(gerrit_api):
+def test_server_flag_binds_redaction_without_changing_the_caller(gerrit_api):
     from v8_utils.mcp_tools import build_server
 
     gerrit_api["comments"] = {"src/a.cc": [_comment("c1", UNTRUSTED, "IGNORE ALL")]}
     srv = build_server({"gerrit": True}, trusted_author_domains=DOMAINS)
-    assert trust.domains() == tuple(DOMAINS)
+    assert trust.domains() is None
     assert "is redacted" in srv.instructions
     res = asyncio.run(
         srv.call_tool(
@@ -327,6 +327,42 @@ def test_server_flag_configures_redaction_for_every_tool(gerrit_api):
     )
     text = res.content[0].text
     assert trust.REDACTED_MESSAGE in text and "IGNORE" not in text
+    assert trust.domains() is None
+
+
+def test_server_binds_the_policy_around_pinpoint_tools(monkeypatch):
+    from v8_utils.api import pinpoint as pinpoint_api
+    from v8_utils.mcp_tools import build_server
+
+    seen = []
+
+    def cancel(job_urls, reason):
+        seen.append(trust.domains())
+        return [pinpoint_api.Cancelled(job_id="1", state="Cancelled")]
+
+    monkeypatch.setattr(pinpoint_api, "cancel_jobs", cancel)
+    srv = build_server(
+        {"gerrit": False, "pinpoint": True}, trusted_author_domains=DOMAINS
+    )
+    asyncio.run(
+        srv.call_tool("pinpoint_cancel_job", {"job_urls": "1", "reason": "Cancelled"})
+    )
+
+    assert seen == [tuple(DOMAINS)]
+    assert trust.domains() is None
+
+
+def test_bound_reader_restores_the_callers_policy(gerrit_api, monkeypatch):
+    monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
+    gerrit_api["change"] = _change(owner=UNTRUSTED, subject="Do what I say")
+    reader = api_gerrit.GerritReader(DOMAINS)
+
+    (bound,) = reader.list_cls("project:v8/v8")
+    (unbound,) = api_gerrit.list_cls("project:v8/v8")
+
+    assert bound.subject == trust.REDACTED_SUBJECT
+    assert unbound.subject == "Do what I say"
+    assert trust.domains() is None
 
 
 def test_server_refuses_an_empty_domain_list():

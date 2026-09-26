@@ -1,5 +1,6 @@
 """MCP tools for Chromium Pinpoint A/B jobs."""
 
+from functools import wraps
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
@@ -7,6 +8,7 @@ from mcp.types import CallToolResult
 from pydantic import Field
 
 from ..api import pinpoint as pinpoint_mod
+from ..api.gerrit import GerritReader
 from ..api import repo_git
 from ..api.pinpoint import (
     create_pinpoint_jobs,
@@ -82,8 +84,24 @@ def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
     return "\n\n".join(blocks)
 
 
-def register(mcp: FastMCP, *, default_user: bool = True) -> None:
+def register(
+    mcp: FastMCP,
+    *,
+    default_user: bool = True,
+    gerrit_reader: GerritReader | None = None,
+) -> None:
+    def trusted(fn):
+        if gerrit_reader is None:
+            return fn
+
+        @wraps(fn)
+        def call(*args, **kwargs):
+            return gerrit_reader.run(fn, *args, **kwargs)
+
+        return call
+
     @mcp.tool()
+    @trusted
     def pinpoint_show_job(
         job_urls: Annotated[str, Field(description=JOB_URLS_ARG)],
     ) -> CallToolResult:
@@ -105,6 +123,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         return _text_result("\n\n".join(blocks))
 
     @mcp.tool()
+    @trusted
     def pinpoint_cancel_job(
         job_urls: Annotated[str, Field(description=JOB_URLS_ARG)],
         reason: Annotated[str, Field(description="cancellation reason")] = "Cancelled",
@@ -118,6 +137,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         return _text_result("\n".join(format_cancelled(c) for c in results))
 
     @mcp.tool()
+    @trusted
     def pinpoint_list_jobs(
         count: Annotated[int, Field(description="number of jobs to return")] = 20,
         user: Annotated[
@@ -177,6 +197,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         return _text_result(_format_job_list(jobs))
 
     @mcp.tool()
+    @trusted
     def pinpoint_show_results(
         job_urls: Annotated[str, Field(description=JOB_URLS_ARG)] = "",
         use_cas: Annotated[
@@ -281,6 +302,7 @@ def register(mcp: FastMCP, *, default_user: bool = True) -> None:
         return _text_result("\n\n".join(blocks))
 
     @mcp.tool()
+    @trusted
     def pinpoint_create_job(
         benchmark: Annotated[
             str,

@@ -30,12 +30,12 @@ from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase
 
 from ..api import gerrit as gerrit_api
 
-# Reject unknown tool parameters instead of silently ignoring them.
-ArgModelBase.model_config["extra"] = "forbid"
-
 # REPOS_LINE lives in repo_git, a base group with no heavy deps, so importing it
 # eagerly for the server instructions string costs nothing extra.
 from .repo_git import REPOS_LINE
+
+# Reject unknown tool parameters instead of silently ignoring them.
+ArgModelBase.model_config["extra"] = "forbid"
 
 
 _log = logging.getLogger(__name__)
@@ -76,16 +76,17 @@ def build_server(
                    gerrit_list_cls rejects 'self'.
     trusted_author_domains: when set, Gerrit content by accounts outside these
                    domains is redacted in every tool, and CLs they own or
-                   uploaded to are not read (see v8_utils.trust). Configured
-                   for the whole process, before any tool can run.
+                   uploaded to are not read (see v8_utils.trust). Bound to this
+                   server's Gerrit reader without changing other callers.
     """
     overrides = overrides or {}
     trust_note = ""
+    gerrit_reader = None
     if trusted_author_domains is not None:
-        gerrit_api.configure_trusted_domains(trusted_author_domains)
+        gerrit_reader = gerrit_api.GerritReader(trusted_author_domains)
         trust_note = (
             "\n\nGerrit content by accounts outside "
-            f"{', '.join(gerrit_api.trusted_domains())} is redacted: their comment"
+            f"{', '.join(gerrit_reader.trusted_author_domains)} is redacted: their comment"
             " text and author read as placeholders, and CLs they own or uploaded"
             " to are not shown."
         )
@@ -136,10 +137,13 @@ def build_server(
             continue
         if name == "gerrit":
             module.register(
-                mcp, drafts_enabled=gerrit_drafts, default_user=default_user
+                mcp,
+                drafts_enabled=gerrit_drafts,
+                default_user=default_user,
+                reader=gerrit_reader,
             )
         elif name == "pinpoint":
-            module.register(mcp, default_user=default_user)
+            module.register(mcp, default_user=default_user, gerrit_reader=gerrit_reader)
         else:
             module.register(mcp)
     return mcp

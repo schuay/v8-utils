@@ -5,7 +5,7 @@ from v8_utils import trust
 
 @pytest.fixture(autouse=True)
 def _trust_off():
-    """Trusted author domains are process-wide; no test inherits another's."""
-    trust._domains = None
+    """No test inherits trusted author domains from another's context."""
+    trust.reset()
     yield
-    trust._domains = None
+    trust.reset()
