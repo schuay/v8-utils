@@ -262,6 +262,16 @@ def test_open_cls_redacts_too(gerrit_api, monkeypatch):
     (cl,) = gerrit.open_cls("project:v8/v8")
     assert cl["subject"] == trust.REDACTED_SUBJECT
     assert cl["owner"] == TRUSTED
+    assert cl["uploaders"] == [trust.REDACTED_AUTHOR]
+
+
+def test_open_cls_names_the_current_uploaders(gerrit_api, monkeypatch):
+    monkeypatch.setattr(gerrit, "_resolve_self", lambda q: q)
+    change = _change(uploaders=(TRUSTED, UNTRUSTED))
+    change["revisions"][change["current_revision"]]["real_uploader"] = _account(TRUSTED)
+    gerrit_api["change"] = change
+    (cl,) = gerrit.open_cls("project:v8/v8")
+    assert cl["uploaders"] == [UNTRUSTED, TRUSTED]
 
 
 # ── Fetch, subjects, CQ ───────────────────────────────────────────────────────

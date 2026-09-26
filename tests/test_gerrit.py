@@ -30,6 +30,7 @@ def test_open_cls_extracts_revision_and_fetch_ref(monkeypatch):
             "project": "v8/v8",
             "subject": "Fix the thing",
             "owner": "alice@google.com",
+            "uploaders": [],
             "revision": "deadbeef",
             "fetch_ref": "refs/changes/23/123/2",
         }

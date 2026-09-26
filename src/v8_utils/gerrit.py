@@ -402,6 +402,8 @@ def _redact_change(change: dict, out: dict) -> dict:
         out["subject"] = trust.REDACTED_SUBJECT
     if "owner" in out:
         out["owner"] = trust.shown_email(out["owner"])
+    if "uploaders" in out:
+        out["uploaders"] = [trust.shown_email(u) for u in out["uploaders"]]
     if "reviewers" in out:
         out["reviewers"] = [trust.shown_email(r) for r in out["reviewers"]]
     if "attention" in out:
@@ -442,9 +444,10 @@ def open_cls(query: str, limit: int = 50) -> list[dict]:
     which list_cls (LABELS/DETAILED_ACCOUNTS only) does not carry.
 
     query: a Gerrit search (e.g. "project:v8/v8 status:open owner:foo@google.com")
-    Returns [{number, project, subject, owner, revision, fetch_ref}]: owner is the
-    author email, revision the current patchset SHA, fetch_ref its refs/changes/...
-    ref.
+    Returns [{number, project, subject, owner, uploaders, revision, fetch_ref}]:
+    owner is the author email, uploaders the emails of the current patchset's
+    uploader (and real uploader, when it was uploaded on someone's behalf),
+    revision the current patchset SHA, fetch_ref its refs/changes/... ref.
     """
     query = _resolve_self(query)
     params = (
@@ -463,6 +466,13 @@ def open_cls(query: str, limit: int = 50) -> list[dict]:
                     "project": c.get("project", ""),
                     "subject": c.get("subject", ""),
                     "owner": c.get("owner", {}).get("email", ""),
+                    # Who uploaded the current patchset (and on whose behalf):
+                    # its content is theirs, whoever owns the CL.
+                    "uploaders": [
+                        trust.account_email(revinfo.get(k))
+                        for k in ("uploader", "real_uploader")
+                        if k in revinfo
+                    ],
                     "revision": rev,
                     "fetch_ref": revinfo.get("ref", ""),
                 },
