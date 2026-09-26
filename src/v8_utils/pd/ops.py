@@ -1,5 +1,4 @@
-"""The pd operations, as functions: what the CLI, the MCP tools, and any
-in-process consumer call.
+"""The pd operations, as functions. Reached through v8_utils.api.pd.
 
 A frontend parses arguments and renders results. Everything between -- source
 lookup, fetch, filtering, detection, commit resolution -- is here, once. The
@@ -33,7 +32,7 @@ from .compare import compare_snapshots
 from .detect import detect_from_df
 from .engines import sync_engine
 from .models import AnalysisConfig, AtConfig, ChangePoint, CommitDelta
-from .serialize import filter_by_localization
+from .serialize import ResolvedChangePoint, filter_by_localization, resolve_changepoint
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -250,6 +249,21 @@ def detect(
     if autosync:
         autosync_commits(store, points, default_engine)
     return Detection(points=points, default_engine=default_engine)
+
+
+def detect_resolved(source: str, **kwargs) -> list[ResolvedChangePoint]:
+    """detect(), with every point's commits resolved and no store to manage.
+
+    Takes detect()'s keyword arguments except `store`. The commit store is
+    opened, auto-synced and closed here, so a caller that only needs the
+    points never handles it.
+    """
+    store = CommitStore()
+    try:
+        det = detect(source, store=store, **kwargs)
+        return [resolve_changepoint(cp, store, det.default_engine) for cp in det.points]
+    finally:
+        store.close()
 
 
 def resolve_commit(

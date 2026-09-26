@@ -1,6 +1,6 @@
 """MCP tools for pd -- perf data analysis (change-point detection and AB compare).
 
-Argument schemas and rendering only; the operations are v8_utils.pd.api.
+Argument schemas and rendering only; the operations are v8_utils.api.pd.
 """
 
 import io
@@ -12,9 +12,9 @@ from mcp.types import CallToolResult
 from pydantic import Field
 from rich.console import Console
 
-from ..pd import api, report
-from ..pd.commits import CommitStore
-from ..pd.serialize import changepoints_to_payload
+from ..api import pd as api
+from ..api.pd import CommitStore, changepoints_to_payload
+from ..render import pd as report
 from ._shared import _text_result
 
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 
 
 def _render(fn, *args, **kwargs) -> str:
-    """Run a pd.report print function, capturing its rich output as plain text."""
+    """Run a render.pd print function, capturing its rich output as plain text."""
     buf = io.StringIO()
     old = report.console
     report.console = Console(

@@ -1,4 +1,4 @@
-"""pd.api: the operations under the CLI and the MCP tools, driven with an
+"""api.pd: the operations under the CLI and the MCP tools, driven with an
 in-memory adaptor."""
 
 from __future__ import annotations
@@ -6,8 +6,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from v8_utils.pd import api
-from v8_utils.pd.commits import CommitStore
+from v8_utils.api.pd import CommitStore
+from v8_utils.pd import ops as api
 
 COLUMNS = [
     "bot",
@@ -215,3 +215,44 @@ def test_parse_date_rejects_nonsense():
     with pytest.raises(ValueError, match="Cannot parse date"):
         api.parse_date("not a date at all zzz")
     assert api.parse_date("2026-01-15") == "2026-01-15"
+
+
+def test_detect_resolved_owns_the_store_and_resolves_hashes(cfg, monkeypatch, tmp_path):
+    from dataclasses import asdict
+
+    from v8_utils.api import pd as public
+    from v8_utils.pd import commits
+
+    db = tmp_path / "commits.db"
+    monkeypatch.setattr(commits, "_DEFAULT_PATH", db)
+    seed = CommitStore(db)
+    seed.conn.executemany(
+        "INSERT INTO commits (engine, hash, commit_id, title) VALUES (?, ?, ?, ?)",
+        [("v8", "a" * 40, 1009, "before"), ("v8", "b" * 40, 1010, "the step")],
+    )
+    seed.conn.commit()
+    seed.close()
+    c = cfg(_step_rows("Total"))
+    (point,) = public.detect_resolved("fake", cfg=c, autosync=False)
+    assert isinstance(point, public.ResolvedChangePoint)
+    assert (point.prev_commit_hash, point.commit_hash) == ("a" * 12, "b" * 12)
+    assert point.commit_title == "the step"
+    assert point.series.engine == "v8"
+    # asdict is the wire form: the keys and order the JSON consumers read.
+    assert list(asdict(point)) == [
+        "series",
+        "commit_id",
+        "commit_hash",
+        "commit_title",
+        "prev_commit_id",
+        "prev_commit_hash",
+        "direction",
+        "pct_change",
+        "cohens_d",
+        "p_value",
+        "confidence",
+        "localization_confidence",
+        "seg_before_mean",
+        "seg_after_mean",
+        "candidates",
+    ]

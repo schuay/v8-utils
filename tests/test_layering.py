@@ -39,13 +39,6 @@ UPPER = (API, RENDER, *FRONTENDS)
 ALLOWED_VIOLATIONS: dict[str, set[str]] = {
     "v8_utils.cli.jsb": {"v8_utils.config", "v8_utils.jsb"},
     "v8_utils.cli.lv": {"v8_utils.v8log"},
-    "v8_utils.cli.pd": {
-        "v8_utils.pd.adaptor",
-        "v8_utils.pd.api",
-        "v8_utils.pd.commits",
-        "v8_utils.pd.engines",
-        "v8_utils.pd.report",
-    },
     "v8_utils.cli.pp": {
         "v8_utils.changelog",
         "v8_utils.chat",
@@ -61,12 +54,6 @@ ALLOWED_VIOLATIONS: dict[str, set[str]] = {
         "v8_utils.concurrency",
         "v8_utils.gerrit",
         "v8_utils.pinpoint_cache",
-    },
-    "v8_utils.mcp_tools.pd": {
-        "v8_utils.pd.api",
-        "v8_utils.pd.commits",
-        "v8_utils.pd.report",
-        "v8_utils.pd.serialize",
     },
     "v8_utils.mcp_tools.performance": {
         "v8_utils.config",

@@ -4,12 +4,13 @@ The text report is for humans; this is the machine contract consumed by airc's
 perf watcher, which keys and dedups change points programmatically and must read
 the localization probability -- data that does not survive the rendered table.
 
-Deliberately a hand-built shape, not `dataclasses.asdict(ChangePoint)`: the
-dataclass is an internal detail that may grow fields or rename them, whereas this
-dict is a wire contract. It also enriches each point with resolved git hashes
-(the consumer process has no CommitStore) and a single `localization_confidence`
-number -- the probability mass the candidate distribution puts on the chosen
-breakpoint -- which is the gate the consumer applies before reporting a point.
+The contract is ResolvedChangePoint, not `ChangePoint`: the latter is an
+internal detail that may grow or rename fields. A resolved point carries the git
+hashes looked up in the commit store, so a consumer needs no store of its own,
+and a single `localization_confidence` number -- the probability mass the
+candidate distribution puts on the chosen breakpoint -- which is the gate the
+consumer applies before reporting a point. The JSON form is its `asdict`, so the
+Python and wire shapes are one definition.
 
 The payload is a paged envelope rather than a bare list. An unfiltered detect
 run reports hundreds of points at ~1 KB each, and a consumer that caps tool
@@ -28,6 +29,7 @@ repeat a point, which the consumer's dedup absorbs and the next poll corrects.
 
 from __future__ import annotations
 
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING
 
 from .models import ChangePoint
@@ -80,11 +82,55 @@ def filter_by_localization(
     return [cp for cp in results if _localization_confidence(cp) >= min_confidence]
 
 
-def changepoint_to_dict(
+@dataclass(frozen=True)
+class Series:
+    bot: str
+    benchmark: str
+    metric: str
+    variant: str
+    submetric: str
+    engine: str
+
+
+@dataclass(frozen=True)
+class Candidate:
+    commit_id: int
+    prob: float
+
+
+@dataclass(frozen=True)
+class ResolvedChangePoint:
+    """A change point with its commits resolved against the commit store.
+
+    Self-contained: a hash or title that could not be resolved is "". This is
+    the structured result a consumer reads, and the field order is the JSON
+    key order.
+    """
+
+    series: Series
+    commit_id: int
+    commit_hash: str
+    commit_title: str
+    prev_commit_id: int
+    prev_commit_hash: str
+    direction: str
+    pct_change: float
+    cohens_d: float
+    p_value: float
+    # The categorical series-noise tag (high/medium/low), distinct from
+    # localization_confidence (how sure we are of the commit).
+    confidence: str
+    localization_confidence: float
+    seg_before_mean: float
+    seg_after_mean: float
+    candidates: list[Candidate] = field(default_factory=list)
+
+
+def resolve_changepoint(
     cp: ChangePoint,
     commit_store: CommitStore | None,
     default_engine: str | None,
-) -> dict:
+) -> ResolvedChangePoint:
     engine = cp.engine or default_engine
 
     def hash_of(commit_id: int) -> str:
@@ -101,32 +147,38 @@ def changepoint_to_dict(
                 return info.title
         return ""
 
-    return {
-        "series": {
-            "bot": cp.bot,
-            "benchmark": cp.benchmark,
-            "metric": cp.metric,
-            "variant": cp.variant,
-            "submetric": cp.submetric,
-            "engine": engine or "",
-        },
-        "commit_id": cp.commit_id,
-        "commit_hash": hash_of(cp.commit_id),
-        "commit_title": title_of(cp.commit_id),
-        "prev_commit_id": cp.prev_commit_id,
-        "prev_commit_hash": hash_of(cp.prev_commit_id),
-        "direction": cp.direction,
-        "pct_change": cp.pct_change,
-        "cohens_d": cp.cohens_d,
-        "p_value": cp.p_value,
-        # cp.confidence is the categorical series-noise tag (high/medium/low),
-        # distinct from localization_confidence (how sure we are of the commit).
-        "confidence": cp.confidence,
-        "localization_confidence": _localization_confidence(cp),
-        "seg_before_mean": cp.seg_before_mean,
-        "seg_after_mean": cp.seg_after_mean,
-        "candidates": [{"commit_id": cid, "prob": prob} for cid, prob in cp.candidates],
-    }
+    return ResolvedChangePoint(
+        series=Series(
+            bot=cp.bot,
+            benchmark=cp.benchmark,
+            metric=cp.metric,
+            variant=cp.variant,
+            submetric=cp.submetric,
+            engine=engine or "",
+        ),
+        commit_id=cp.commit_id,
+        commit_hash=hash_of(cp.commit_id),
+        commit_title=title_of(cp.commit_id),
+        prev_commit_id=cp.prev_commit_id,
+        prev_commit_hash=hash_of(cp.prev_commit_id),
+        direction=cp.direction,
+        pct_change=cp.pct_change,
+        cohens_d=cp.cohens_d,
+        p_value=cp.p_value,
+        confidence=cp.confidence,
+        localization_confidence=_localization_confidence(cp),
+        seg_before_mean=cp.seg_before_mean,
+        seg_after_mean=cp.seg_after_mean,
+        candidates=[Candidate(commit_id=cid, prob=prob) for cid, prob in cp.candidates],
+    )
+
+
+def changepoint_to_dict(
+    cp: ChangePoint,
+    commit_store: CommitStore | None,
+    default_engine: str | None,
+) -> dict:
+    return asdict(resolve_changepoint(cp, commit_store, default_engine))
 
 
 def changepoints_to_json(

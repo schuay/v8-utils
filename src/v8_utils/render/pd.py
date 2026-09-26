@@ -1,4 +1,4 @@
-"""Rich table reporting for detect and compare results."""
+"""Rich table reporting for pd detect, compare and commit-impact results."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from rich.console import Console
 from rich.markup import escape as rich_escape
 from rich.table import Table
 
-from .models import ChangePoint, CommitDelta, CommitInfo
+from ..api.pd import ChangePoint, CommitDelta, CommitInfo
 
 if TYPE_CHECKING:
-    from .commits import CommitStore
+    from ..api.pd import CommitStore
 
 console = Console()
 

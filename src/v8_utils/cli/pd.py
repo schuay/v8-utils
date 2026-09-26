@@ -1,6 +1,6 @@
 """CLI for pd -- perf data analysis.
 
-Argument parsing and rendering only; the operations are v8_utils.pd.api.
+Argument parsing and rendering only; the operations are v8_utils.api.pd.
 """
 
 from __future__ import annotations
@@ -11,17 +11,17 @@ from typing import Annotated, Optional
 
 import typer
 
-from ..pd import api
-from ..pd.adaptor import discover
-from ..pd.commits import CommitStore
-from ..pd.engines import (
+from ..api import pd as api
+from ..api.pd import (
     ENGINES,
+    CommitStore,
     get_id_regex,
     get_path_filter,
     get_src_dir,
     sync_engine,
 )
-from ..pd.report import print_at_report, print_compare_report, print_detect_report
+from ..api.pd import adaptors as discover
+from ..render.pd import print_at_report, print_compare_report, print_detect_report
 
 app = typer.Typer(
     help="Perf data analysis -- change-point detection, AB comparison, and more."

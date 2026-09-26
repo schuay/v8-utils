@@ -1,10 +1,10 @@
-"""Tests for the commit-store staleness signal and pd.api.detect's lazy auto-sync."""
+"""Tests for the commit-store staleness signal and pd.ops.detect's lazy auto-sync."""
 
 from __future__ import annotations
 
 import pytest
 
-from v8_utils.pd import api as pd_tools
+from v8_utils.pd import ops as pd_tools
 from v8_utils.pd.commits import CommitStore
 from v8_utils.pd.models import ChangePoint
 
