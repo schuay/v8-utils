@@ -7,7 +7,8 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field, replace
-from urllib.parse import quote, urlparse
+from typing import NamedTuple
+from urllib.parse import quote, urlparse, urlsplit
 
 import httpx
 
@@ -223,9 +224,25 @@ class UntrustedGerritContent(ValueError):
 # ── URL parsing ───────────────────────────────────────────────────────────────
 
 
-def _check_host(netloc: str) -> None:
+class _ChangeRef(NamedTuple):
+    #: https://<review host>, lowercased.
+    api_base: str
+    #: "" from _parse_change_url for the short forms; never "" from
+    #: _canonical_change.
+    project: str
+    #: The change number, decimal without leading zeros.
+    number: str
+    patchset: str | None
+
+
+# One path segment of a project name. Gerrit allows more, but the projects on
+# these hosts fit this, and a name that does not is refused rather than put into
+# a REST path or a git remote. No leading ".", which excludes "." and "..".
+_PROJECT_SEGMENT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*")
+
+
+def _check_host(host: str) -> None:
     """Reject any host that is not a Google-operated Gerrit review host."""
-    host = netloc.rsplit("@", 1)[-1].rsplit(":", 1)[0].lower()
     if not host.endswith(_ALLOWED_HOST_SUFFIX):
         raise ValueError(
             f"Refusing Gerrit request to non-allowlisted host {host!r}; "
@@ -233,18 +250,22 @@ def _check_host(netloc: str) -> None:
         )
 
 
-def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
-    """Parse a Gerrit change URL into (api_base, project, change_id, patchset).
+def _checked_project(project: str) -> str:
+    """Return `project` if every /-separated segment matches _PROJECT_SEGMENT.
+    Applied to a project from a URL and to one from gerrit alike."""
+    if not all(_PROJECT_SEGMENT.fullmatch(s) for s in project.split("/")):
+        raise ValueError(f"not a gerrit project name: {project!r}")
+    return project
 
-    Accepts:
-      https://chromium-review.googlesource.com/c/v8/v8/+/7650974
-      https://chromium-review.googlesource.com/c/v8/v8/+/7650974/1
-      https://chromium-review.googlesource.com/c/7650974
-      https://chromium-review.googlesource.com/c/7650974/1
-      https://chromium-review.googlesource.com/7650974
-      https://chromium-review.googlesource.com/7650974/1
-      https://crrev.com/c/7650974
-      https://crrev.com/c/7650974/1
+
+def _parse_change_url(url: str) -> _ChangeRef:
+    """Parse a Gerrit change URL. Makes no request.
+
+    Accepts, with or without a trailing slash, query or fragment:
+      https://chromium-review.googlesource.com/c/v8/v8/+/7650974[/1]
+      https://chromium-review.googlesource.com/c/7650974[/1]
+      https://chromium-review.googlesource.com/7650974[/1]
+      https://crrev.com/c/7650974[/1]
 
     crrev.com is not a gerrit host, it is the redirector people paste: /c/N
     lands on chromium-review's short form, so it is rewritten to that here and
@@ -252,30 +273,36 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
     refuse it as a non-review host -- the one URL shape a chat thread cites
     most, refused as if it were hostile.
 
-    A pure parse: the project is "" for the short forms, which name none.
-    Callers go through _canonical_change, which looks it up.
+    The project is "" for the short forms, which name none. Callers go through
+    _canonical_change, which looks it up.
     """
-    p = urlparse(url)
-    if p.scheme != "https":
-        raise ValueError(f"Gerrit URL must be https, got {p.scheme!r}: {url!r}")
-    if p.netloc.lower() == _CRREV_HOST:
-        m = re.match(r"^/c/(\d+)(?:/(\d+))?$", p.path.rstrip("/"))
+    u = urlsplit(url)
+    if u.scheme != "https":
+        raise ValueError(f"Gerrit URL must be https, got {u.scheme!r}: {url!r}")
+    # hostname is lowercased and drops userinfo and port, so neither reaches
+    # api_base. [0-9] rather than \d, which also matches non-ASCII digits.
+    host = u.hostname or ""
+    path = u.path.rstrip("/")
+    if host == _CRREV_HOST:
+        m = re.fullmatch(r"/c/([0-9]+)(?:/([0-9]+))?", path)
         if not m:
             raise ValueError(f"Cannot parse crrev change URL: {url!r}")
-        return f"https://{_CRREV_TARGET}", "", m.group(1), m.group(2)
-    _check_host(p.netloc)
-    api_base = f"{p.scheme}://{p.netloc}"
-    path = p.path.rstrip("/")
-
-    m = re.match(r"^/c/(.+)/\+/(\d+)(?:/(\d+))?$", path)
-    if m:
-        return api_base, m.group(1), m.group(2), m.group(3)
-
-    m = re.match(r"^(?:/c)?/(\d+)(?:/(\d+))?$", path)
-    if m:
-        return api_base, "", m.group(1), m.group(2)
-
-    raise ValueError(f"Cannot parse Gerrit change URL: {url!r}")
+        host, project, number, patchset = _CRREV_TARGET, "", m[1], m[2]
+    else:
+        _check_host(host)
+        if m := re.fullmatch(r"/c/(.+)/\+/([0-9]+)(?:/([0-9]+))?", path):
+            project, number, patchset = _checked_project(m[1]), m[2], m[3]
+        elif m := re.fullmatch(r"(?:/c)?/([0-9]+)(?:/([0-9]+))?", path):
+            project, number, patchset = "", m[1], m[2]
+        else:
+            raise ValueError(f"Cannot parse Gerrit change URL: {url!r}")
+    # int() drops leading zeros, so /c/007 and /c/7 name one change.
+    return _ChangeRef(
+        f"https://{host}",
+        project,
+        str(int(number)),
+        str(int(patchset)) if patchset else None,
+    )
 
 
 def _change_project(api_base: str, change_id: str) -> str:
@@ -285,13 +312,13 @@ def _change_project(api_base: str, change_id: str) -> str:
     finds the change in any project on the host.
     """
     data = _get(api_base, f"/changes/{change_id}")
-    project = data.get("project", "") if isinstance(data, dict) else ""
-    if not project:
+    project = data.get("project") if isinstance(data, dict) else None
+    if not isinstance(project, str) or not project:
         raise ValueError(f"gerrit names no project for change {change_id}")
-    return project
+    return _checked_project(project)
 
 
-def _canonical_change(url: str) -> tuple[str, str, str, str | None]:
+def _canonical_change(url: str) -> _ChangeRef:
     """_parse_change_url, with the project filled in when the URL omits it.
 
     The canonical form of a change is /c/<project>/+/<N>. Gerrit's web UI
@@ -301,23 +328,15 @@ def _canonical_change(url: str) -> tuple[str, str, str, str | None]:
 
     Costs one request for a short-form URL and none for the canonical form.
     """
-    api_base, project, change_id, patchset = _parse_change_url(url)
-    if not project:
-        project = _change_project(api_base, change_id)
-    return api_base, project, change_id, patchset
+    ref = _parse_change_url(url)
+    if ref.project:
+        return ref
+    return ref._replace(project=_change_project(ref.api_base, ref.number))
 
 
 def _change_cid(project: str, change_id: str) -> str:
     """The REST change identifier, project~number."""
     return f"{quote(project, safe='')}~{change_id}"
-
-
-def canonical_change_url(change_url: str) -> str:
-    """Return the canonical URL, host/c/<project>/+/<N>[/<patchset>], for a
-    change URL in any accepted form."""
-    api_base, project, change_id, patchset = _canonical_change(change_url)
-    url = f"{api_base}/c/{project}/+/{change_id}"
-    return f"{url}/{patchset}" if patchset else url
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
@@ -1288,8 +1307,8 @@ def _git_remote_url(api_base: str, project: str) -> str:
     """
     if not project:
         raise ValueError("a git remote needs a gerrit project")
-    host = urlparse(api_base).netloc
-    git_host = re.sub(r"-review\.", ".", host)
+    host = urlsplit(api_base).hostname or ""
+    git_host = host.removesuffix(_ALLOWED_HOST_SUFFIX) + ".googlesource.com"
     return f"https://{git_host}/{project}"
 
 

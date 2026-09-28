@@ -868,6 +868,8 @@ def test_fetch_ref_refuses_a_change_gerrit_names_no_project_for(monkeypatch):
 
 # ── Canonicalization ──────────────────────────────────────────────────────────
 
+_CR = "https://chromium-review.googlesource.com"
+
 
 def _recording_get(monkeypatch, payload):
     paths = []
@@ -878,49 +880,27 @@ def _recording_get(monkeypatch, payload):
 
 
 @pytest.mark.parametrize(
-    "url, canonical",
+    "url, patchset",
     [
-        (
-            "https://crrev.com/c/7650974",
-            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
-        ),
-        (
-            "https://crrev.com/c/7650974/2",
-            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
-        ),
-        (
-            "https://chromium-review.googlesource.com/7650974/2",
-            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
-        ),
-        (
-            "https://chromium-review.googlesource.com/c/7650974",
-            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
-        ),
-        (
-            "https://chromium-review.googlesource.com/c/7650974/2/",
-            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
-        ),
+        ("https://crrev.com/c/7650974", None),
+        ("https://crrev.com/c/7650974/2", "2"),
+        (f"{_CR}/7650974/2", "2"),
+        (f"{_CR}/c/7650974", None),
+        (f"{_CR}/c/7650974/2/", "2"),
     ],
 )
-def test_a_short_url_is_canonicalized_by_asking_gerrit(monkeypatch, url, canonical):
-    paths = _recording_get(monkeypatch, _change())
-    assert g.canonical_change_url(url) == canonical
+def test_a_short_url_is_canonicalized_by_asking_gerrit(monkeypatch, url, patchset):
+    paths = _recording_get(monkeypatch, _change(project="chromium/src"))
+    assert g._canonical_change(url) == (_CR, "chromium/src", "7650974", patchset)
     # The bare number: change numbers are unique per host, not per project.
     assert paths == ["/changes/7650974"]
 
 
 def test_a_canonical_url_is_not_looked_up(monkeypatch):
     paths = _recording_get(monkeypatch, _change(project="chromium/src"))
-    url = "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2"
-    assert g.canonical_change_url(url) == url
+    ref = g._canonical_change(f"{_CR}/c/v8/v8/+/7650974/2")
+    assert ref == (_CR, "v8/v8", "7650974", "2")
     assert paths == []
-
-
-def test_the_project_comes_from_gerrit_not_a_default(monkeypatch):
-    _recording_get(monkeypatch, _change(project="chromium/src"))
-    assert g.canonical_change_url("https://crrev.com/c/7650974") == (
-        "https://chromium-review.googlesource.com/c/chromium/src/+/7650974"
-    )
 
 
 def test_a_short_url_reaches_the_rest_api_by_project(monkeypatch):
@@ -936,3 +916,43 @@ def test_a_short_url_reaches_the_rest_api_by_project(monkeypatch):
     assert g.comments("https://crrev.com/c/7650974") == []
     assert paths[0] == "/changes/7650974"
     assert paths[-1] == "/changes/v8%2Fv8~7650974/comments"
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        (
+            f"{_CR}/c/infra/luci/luci-go/+/1/2?tab=comments#x",
+            (_CR, "infra/luci/luci-go", "1", "2"),
+        ),
+        # One host, one spelling; userinfo and port do not reach api_base.
+        ("https://u@Chromium-Review.googlesource.com:443/12", (_CR, "", "12", None)),
+        (f"{_CR}/c/007", (_CR, "", "7", None)),
+    ],
+)
+def test_parse_change_url_normalizes(url, expected):
+    assert g._parse_change_url(url) == expected
+
+
+@pytest.mark.parametrize(
+    "url, match",
+    [
+        # \d would accept this, and int() would convert it.
+        (f"{_CR}/c/\u0663\u0663", "Cannot parse"),
+        (f"{_CR}/c/../../x/+/7650974", "project name"),
+        (f"{_CR}/c/v8//v8/+/7650974", "project name"),
+        (f"{_CR}/c/a/+/b/+/7650974", "project name"),
+    ],
+)
+def test_parse_change_url_refuses(url, match):
+    with pytest.raises(ValueError, match=match):
+        g._parse_change_url(url)
+
+
+@pytest.mark.parametrize("project", ["../x", "a b", 7])
+def test_a_project_gerrit_answers_with_is_validated(monkeypatch, project):
+    # The answer goes into the same REST paths and git remote as a project
+    # named in a URL.
+    _recording_get(monkeypatch, _change(project=project))
+    with pytest.raises(ValueError, match="project"):
+        g._canonical_change("https://crrev.com/c/7650974")
