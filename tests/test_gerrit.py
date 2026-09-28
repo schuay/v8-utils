@@ -825,3 +825,34 @@ def test_resolve_patchset_refuses_a_change_with_no_current_revision(monkeypatch)
     _capture(monkeypatch, _change(current="gone"))
     with pytest.raises(ValueError, match="no current revision"):
         g.resolve_patchset("https://chromium-review.googlesource.com/7650974")
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://crrev.com/c/7650974/2",
+        "https://chromium-review.googlesource.com/7650974/2",
+        "https://chromium-review.googlesource.com/7650974",
+    ],
+)
+def test_fetch_ref_of_a_short_url_fetches_from_the_project(monkeypatch, url):
+    # The short forms carry no project; the remote must still be the project's
+    # repository, not the bare git host.
+    _capture(monkeypatch, _change())
+    ran = []
+
+    def fake_run(cmd, **kw):
+        ran.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout="abc\n", stderr="")
+
+    monkeypatch.setattr(g.subprocess, "run", fake_run)
+    out = g.fetch_ref(url)
+    assert out.remote == "https://chromium.googlesource.com/v8/v8"
+    assert ran[0][:3] == ["git", "fetch", "https://chromium.googlesource.com/v8/v8"]
+    assert out.fetch_head == "abc"
+
+
+def test_fetch_ref_refuses_a_change_gerrit_names_no_project_for(monkeypatch):
+    _capture(monkeypatch, _change(project=""))
+    with pytest.raises(ValueError, match="no project"):
+        g.fetch_ref("https://crrev.com/c/7650974/2", fetch=False)

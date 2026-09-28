@@ -1229,15 +1229,29 @@ def resolve_patchset(change_url: str) -> Patchset:
     )
 
 
+def _change_project(api_base: str, change_id: str) -> str:
+    """Return the project a change belongs to, as gerrit reports it."""
+    data = _get(api_base, f"/changes/{change_id}")
+    project = data.get("project", "") if isinstance(data, dict) else ""
+    if not project:
+        raise ValueError(f"gerrit names no project for change {change_id}")
+    return project
+
+
 def _git_remote_url(api_base: str, project: str) -> str:
     """Infer the git fetch URL from a Gerrit review host + project.
 
     chromium-review.googlesource.com + v8/v8
       → https://chromium.googlesource.com/v8/v8
+
+    The project is required: the bare git host is not a repository, and
+    fetching from it fails with "repository not found".
     """
+    if not project:
+        raise ValueError("a git remote needs a gerrit project")
     host = urlparse(api_base).netloc
     git_host = re.sub(r"-review\.", ".", host)
-    return f"https://{git_host}/{project}" if project else f"https://{git_host}"
+    return f"https://{git_host}/{project}"
 
 
 def fetch_ref(
@@ -1262,6 +1276,10 @@ def fetch_ref(
     https://chromium.googlesource.com/v8/v8.
     """
     api_base, project, change_id, patchset = _parse_change_url(change_url)
+    if not project:
+        # The short forms (host/N, crrev.com/c/N) name no project, and the
+        # remote is the project's git URL.
+        project = _change_project(api_base, change_id)
 
     if not patchset:
         patchset = _latest_patchset(api_base, change_id, project)
