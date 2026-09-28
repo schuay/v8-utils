@@ -24,6 +24,8 @@ import warnings
 
 import httpx
 
+from . import gauth
+
 # Suppress noisy google-auth diagnostics (quota project, project ID).
 warnings.filterwarnings("ignore", category=UserWarning, module="google.auth")
 logging.getLogger("google.auth").setLevel(logging.ERROR)
@@ -35,11 +37,10 @@ _SCOPES_BOT = ["https://www.googleapis.com/auth/chat.bot"]
 
 def _impersonated_token(service_account_email: str, scopes: list[str]) -> str:
     """Mint a short-lived access token by impersonating a service account via ADC."""
-    import google.auth
     from google.auth import impersonated_credentials
     from google.auth.transport.requests import Request
 
-    source, _ = google.auth.default()
+    source = gauth.credentials()
     target = impersonated_credentials.Credentials(
         source_credentials=source,
         target_principal=service_account_email,
@@ -73,10 +74,9 @@ def notify(space: str, service_account_email: str, text: str) -> None:
 
 def adc_user_id() -> str:
     """Return the Google account user ID for the current ADC credentials."""
-    import google.auth
     from google.auth.transport.requests import Request
 
-    credentials, _ = google.auth.default(
+    credentials = gauth.credentials(
         scopes=["https://www.googleapis.com/auth/userinfo.email"],
     )
     credentials.refresh(Request())

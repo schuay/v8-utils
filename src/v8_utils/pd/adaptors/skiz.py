@@ -14,6 +14,9 @@ Or with a single URL:
 
 Requires Application Default Credentials:
     gcloud auth application-default login
+
+Optional `quota_project` bills Spanner API usage to that project. Without it,
+usage bills to the ADC credential's OAuth client (see v8_utils.gauth).
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ import re
 from urllib.parse import urlparse
 
 import pandas as pd
+
+from ... import gauth
 
 _AGG_TABLE = "benchmarks"
 
@@ -33,7 +38,9 @@ _KNOWN_ENGINES = {"v8", "jsc", "chromium"}
 _ENGINE_SEP_RE = re.compile(r"[ _]")
 
 
-def _connect(project: str, instance: str, database: str):
+def _connect(
+    project: str, instance: str, database: str, quota_project: str | None = None
+):
     import os
     import warnings
 
@@ -68,7 +75,14 @@ def _connect(project: str, instance: str, database: str):
             "google-cloud-spanner required: uv add google-cloud-spanner"
         ) from e
 
-    con = dbapi_connect(instance, database, project=project)
+    con = dbapi_connect(
+        instance,
+        database,
+        project=project,
+        # Explicit, so a host process's ADC path or quota-project variables do
+        # not apply here (see v8_utils.gauth).
+        credentials=gauth.credentials(quota_project=quota_project),
+    )
     con.autocommit = True
 
     # Validate creds with a cheap query. Without this the first failure is a
@@ -121,6 +135,7 @@ class SkizAdaptor:
         instance: str | None = None,
         database: str | None = None,
         url: str | None = None,
+        quota_project: str | None = None,
         **_kwargs,
     ):
         if url is not None:
@@ -130,7 +145,7 @@ class SkizAdaptor:
                 "skiz adaptor requires either url=spanner://... or "
                 "project/instance/database keys"
             )
-        self._con = _connect(project, instance, database)
+        self._con = _connect(project, instance, database, quota_project)
 
     def fetch(
         self,
