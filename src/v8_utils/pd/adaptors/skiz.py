@@ -44,6 +44,15 @@ def _connect(project: str, instance: str, database: str):
     # google-cloud-spanner < 3.50 used SPANNER_ENABLE_BUILTIN_METRICS=false.
     os.environ.setdefault("SPANNER_DISABLE_BUILTIN_METRICS", "true")
 
+    # google-auth also treats CLOUDSDK_CONTEXT_AWARE_USE_CLIENT_CERTIFICATE=true,
+    # which some managed hosts export for gcloud, as a request for mTLS. The
+    # Spanner client then asks the host's cert provider for a client cert, and
+    # on a host without one that fails (the provider can crash) before any
+    # query runs. Plain ADC is enough for Spanner. GOOGLE_API_USE_CLIENT_CERTIFICATE
+    # takes precedence over the CLOUDSDK variable, and setdefault keeps an
+    # explicit caller choice.
+    os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
+
     # google-auth ADC fires a quota-project UserWarning on every connection.
     warnings.filterwarnings(
         "ignore",
