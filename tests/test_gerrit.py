@@ -305,7 +305,7 @@ def drafts(monkeypatch):
     return types.SimpleNamespace(sent=sent, reads=reads, published=published)
 
 
-CL = "https://chromium-review.googlesource.com/8174846"
+CL = "https://chromium-review.googlesource.com/c/v8/v8/+/8174846"
 
 
 def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(drafts):
@@ -477,8 +477,10 @@ def test_one_failing_draft_does_not_sink_the_others(monkeypatch):
         return {"id": "ok"}
 
     monkeypatch.setattr(g, "_put_json", fake_put)
+    # The replies' parents are read to place them; answer that read here.
+    monkeypatch.setattr(g, "_get", lambda base, path, **kw: {})
     out = g.create_drafts(
-        "https://chromium-review.googlesource.com/8174846",
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
         [
             {"message": "a", "in_reply_to": "good"},
             {"message": "b", "in_reply_to": "bad"},
@@ -503,7 +505,8 @@ def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):
     )
 
     g.publish_drafts(
-        "https://chromium-review.googlesource.com/8174846", message="Addressed."
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
+        message="Addressed.",
     )
 
     path, body = sent[0]
@@ -558,7 +561,7 @@ def test_review_post_keeps_existing_drafts(review_posts):
     caller's unpublished drafts on the revision -- someone else's data, lost
     silently. depot_tools sends KEEP on every SetReview for this reason."""
     g.post_review_comments(
-        "https://chromium-review.googlesource.com/8174846",
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
         [{"path": "src/a.cc", "line": 1, "message": "x"}],
     )
     assert review_posts[0][1]["drafts"] == "KEEP"
@@ -566,7 +569,7 @@ def test_review_post_keeps_existing_drafts(review_posts):
 
 def test_review_post_marks_machine_authored_comments(review_posts):
     g.post_review_comments(
-        "https://chromium-review.googlesource.com/8174846",
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
         [{"path": "src/a.cc", "line": 1, "message": "x", "is_ai": True}],
     )
     assert review_posts[0][1]["comments"]["src/a.cc"][0]["is_ai"] is True
@@ -577,7 +580,7 @@ def test_review_post_files_a_pathless_comment_at_change_level(review_posts):
     normalizes to the canonical one -- a trailing slash makes gerrit treat it as
     a literal file nobody can see. Gerrit also rejects line/side/range there."""
     g.post_review_comments(
-        "https://chromium-review.googlesource.com/8174846",
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
         [
             {"message": "overall: looks good"},
             {"path": "/PATCHSET_LEVEL/", "line": 3, "message": "also top-level"},
@@ -596,7 +599,7 @@ def test_review_post_pins_the_patchset_it_was_given(review_posts):
     """A review written against patchset 3 must not land on a 4 that was uploaded
     mid-review -- those comments would be about code nobody read."""
     g.post_review_comments(
-        "https://chromium-review.googlesource.com/8174846",
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
         [{"path": "src/a.cc", "line": 1, "message": "x"}],
         patchset=3,
     )
@@ -609,7 +612,7 @@ def test_review_post_validates_before_sending_anything(review_posts):
     an error naming none of them."""
     with pytest.raises(ValueError, match="comment 1: missing field: message"):
         g.post_review_comments(
-            "https://chromium-review.googlesource.com/8174846",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
             [{"path": "a.cc", "line": 1, "message": "ok"}, {"path": "a.cc", "line": 2}],
         )
     assert review_posts == []  # nothing reached gerrit
@@ -621,7 +624,7 @@ def test_review_post_refuses_a_reply(review_posts):
     top-level comment. Refuse loudly and name the alternative."""
     with pytest.raises(ValueError, match="in_reply_to is not supported"):
         g.post_review_comments(
-            "https://chromium-review.googlesource.com/8174846",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
             [{"message": "agreed", "in_reply_to": "c1"}],
         )
     assert review_posts == []
@@ -631,7 +634,9 @@ def test_review_post_refuses_an_empty_review(review_posts):
     # A bare {"drafts": "KEEP"} would be a no-op request that still reads as
     # success to the caller.
     with pytest.raises(ValueError, match="nothing to post"):
-        g.post_review_comments("https://chromium-review.googlesource.com/8174846", [])
+        g.post_review_comments(
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8174846", []
+        )
     assert review_posts == []
 
 
@@ -639,7 +644,7 @@ def test_review_post_may_carry_a_message_alone(review_posts):
     """A cover note with no inline comments is a legitimate review post; only the
     truly empty one is refused."""
     g.post_review_comments(
-        "https://chromium-review.googlesource.com/8174846", [], message="lgtm"
+        "https://chromium-review.googlesource.com/c/v8/v8/+/8174846", [], message="lgtm"
     )
     body = review_posts[0][1]
     assert body["message"] == "lgtm" and "comments" not in body
@@ -713,7 +718,7 @@ def test_comments_passes_is_ai_through_on_replies(monkeypatch):
     # The flag is the only thing separating a caller's OWN replies from a
     # reviewer's: both are posted under the same human account.
     monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
-    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    (thread,) = g.comments("https://chromium-review.googlesource.com/c/v8/v8/+/123")
     assert [r.id for r in thread.replies] == ["ours", "back"]
     assert thread.replies[0].is_ai is True
     # Gerrit omits the field when unset, so False means "not marked", which is
@@ -725,7 +730,7 @@ def test_comments_passes_is_ai_through_on_replies(monkeypatch):
 def test_comments_passes_is_ai_through_on_a_thread_root(monkeypatch):
     payload = {"src/a.cc": [{"id": "r", "message": "x", "is_ai": True}]}
     monkeypatch.setattr(g, "_get", lambda host, path: payload)
-    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    (thread,) = g.comments("https://chromium-review.googlesource.com/c/v8/v8/+/123")
     assert thread.is_ai is True
 
 
@@ -733,7 +738,7 @@ def test_comments_reads_resolution_from_the_last_entry(monkeypatch):
     # A thread's standing is its LAST entry's, which is what gerrit's own UI
     # renders -- the root's flag says nothing about where the thread stands.
     monkeypatch.setattr(g, "_get", lambda host, path: _comments_payload())
-    (thread,) = g.comments("https://chromium-review.googlesource.com/123")
+    (thread,) = g.comments("https://chromium-review.googlesource.com/c/v8/v8/+/123")
     assert thread.unresolved is True
 
 
@@ -809,10 +814,13 @@ def test_resolve_patchset_follows_a_crrev_link(monkeypatch):
 def test_resolve_patchset_refuses_a_change_that_does_not_exist(monkeypatch):
     # fetch_ref(fetch=False) answers a URL naming a patchset without asking
     # gerrit anything, so a mistyped change resolves there and fails later,
-    # wherever the ref is first used. This always asks.
+    # wherever the ref is first used. This always asks. The canonical form, so
+    # the project lookup for a short-form URL does not answer first.
     _capture(monkeypatch, {})
     with pytest.raises(ValueError, match="no such change"):
-        g.resolve_patchset("https://chromium-review.googlesource.com/7650974/2")
+        g.resolve_patchset(
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2"
+        )
 
 
 def test_resolve_patchset_refuses_a_patchset_the_change_has_not_got(monkeypatch):
@@ -856,3 +864,75 @@ def test_fetch_ref_refuses_a_change_gerrit_names_no_project_for(monkeypatch):
     _capture(monkeypatch, _change(project=""))
     with pytest.raises(ValueError, match="no project"):
         g.fetch_ref("https://crrev.com/c/7650974/2", fetch=False)
+
+
+# ── Canonicalization ──────────────────────────────────────────────────────────
+
+
+def _recording_get(monkeypatch, payload):
+    paths = []
+    monkeypatch.setattr(
+        g, "_get", lambda host, path, **kw: paths.append(path) or payload
+    )
+    return paths
+
+
+@pytest.mark.parametrize(
+    "url, canonical",
+    [
+        (
+            "https://crrev.com/c/7650974",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
+        ),
+        (
+            "https://crrev.com/c/7650974/2",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
+        ),
+        (
+            "https://chromium-review.googlesource.com/7650974/2",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
+        ),
+        (
+            "https://chromium-review.googlesource.com/c/7650974",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974",
+        ),
+        (
+            "https://chromium-review.googlesource.com/c/7650974/2/",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2",
+        ),
+    ],
+)
+def test_a_short_url_is_canonicalized_by_asking_gerrit(monkeypatch, url, canonical):
+    paths = _recording_get(monkeypatch, _change())
+    assert g.canonical_change_url(url) == canonical
+    # The bare number: change numbers are unique per host, not per project.
+    assert paths == ["/changes/7650974"]
+
+
+def test_a_canonical_url_is_not_looked_up(monkeypatch):
+    paths = _recording_get(monkeypatch, _change(project="chromium/src"))
+    url = "https://chromium-review.googlesource.com/c/v8/v8/+/7650974/2"
+    assert g.canonical_change_url(url) == url
+    assert paths == []
+
+
+def test_the_project_comes_from_gerrit_not_a_default(monkeypatch):
+    _recording_get(monkeypatch, _change(project="chromium/src"))
+    assert g.canonical_change_url("https://crrev.com/c/7650974") == (
+        "https://chromium-review.googlesource.com/c/chromium/src/+/7650974"
+    )
+
+
+def test_a_short_url_reaches_the_rest_api_by_project(monkeypatch):
+    # Every entry point canonicalizes, so a change cited in short form is
+    # addressed as project~N like one cited in full.
+    paths = []
+
+    def fake_get(host, path, **kw):
+        paths.append(path)
+        return {} if path.endswith("/comments") else _change()
+
+    monkeypatch.setattr(g, "_get", fake_get)
+    assert g.comments("https://crrev.com/c/7650974") == []
+    assert paths[0] == "/changes/7650974"
+    assert paths[-1] == "/changes/v8%2Fv8~7650974/comments"

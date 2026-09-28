@@ -239,6 +239,8 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
     Accepts:
       https://chromium-review.googlesource.com/c/v8/v8/+/7650974
       https://chromium-review.googlesource.com/c/v8/v8/+/7650974/1
+      https://chromium-review.googlesource.com/c/7650974
+      https://chromium-review.googlesource.com/c/7650974/1
       https://chromium-review.googlesource.com/7650974
       https://chromium-review.googlesource.com/7650974/1
       https://crrev.com/c/7650974
@@ -249,6 +251,9 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
     never talked to. Rewritten BEFORE the host check, which would otherwise
     refuse it as a non-review host -- the one URL shape a chat thread cites
     most, refused as if it were hostile.
+
+    A pure parse: the project is "" for the short forms, which name none.
+    Callers go through _canonical_change, which looks it up.
     """
     p = urlparse(url)
     if p.scheme != "https":
@@ -266,11 +271,53 @@ def _parse_change_url(url: str) -> tuple[str, str, str, str | None]:
     if m:
         return api_base, m.group(1), m.group(2), m.group(3)
 
-    m = re.match(r"^/(\d+)(?:/(\d+))?$", path)
+    m = re.match(r"^(?:/c)?/(\d+)(?:/(\d+))?$", path)
     if m:
         return api_base, "", m.group(1), m.group(2)
 
     raise ValueError(f"Cannot parse Gerrit change URL: {url!r}")
+
+
+def _change_project(api_base: str, change_id: str) -> str:
+    """Return the project a change belongs to, as gerrit reports it.
+
+    Change numbers are allocated per host, not per project, so the bare number
+    finds the change in any project on the host.
+    """
+    data = _get(api_base, f"/changes/{change_id}")
+    project = data.get("project", "") if isinstance(data, dict) else ""
+    if not project:
+        raise ValueError(f"gerrit names no project for change {change_id}")
+    return project
+
+
+def _canonical_change(url: str) -> tuple[str, str, str, str | None]:
+    """_parse_change_url, with the project filled in when the URL omits it.
+
+    The canonical form of a change is /c/<project>/+/<N>. Gerrit's web UI
+    redirects the short forms there after looking the change up; this makes the
+    same lookup, so every caller sees the same identity for a change however it
+    was cited. The returned project is never empty.
+
+    Costs one request for a short-form URL and none for the canonical form.
+    """
+    api_base, project, change_id, patchset = _parse_change_url(url)
+    if not project:
+        project = _change_project(api_base, change_id)
+    return api_base, project, change_id, patchset
+
+
+def _change_cid(project: str, change_id: str) -> str:
+    """The REST change identifier, project~number."""
+    return f"{quote(project, safe='')}~{change_id}"
+
+
+def canonical_change_url(change_url: str) -> str:
+    """Return the canonical URL, host/c/<project>/+/<N>[/<patchset>], for a
+    change URL in any accepted form."""
+    api_base, project, change_id, patchset = _canonical_change(change_url)
+    url = f"{api_base}/c/{project}/+/{change_id}"
+    return f"{url}/{patchset}" if patchset else url
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────
@@ -701,8 +748,8 @@ def comments(change_url: str, *, include_drafts: bool = False) -> list[CommentTh
     (requires authentication via `luci-auth login`).  Drafts are marked
     with draft=True.
     """
-    api_base, project, change_id, _ = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
     change = require_trusted_change(api_base, cid, change_id)
     data: dict = _get(api_base, f"/changes/{cid}/comments")
     landed_files: set[str] | None = None
@@ -929,8 +976,8 @@ def create_drafts(
     Returns one DraftResult per input, in order. Continues past failures: each
     draft is persisted server-side independently.
     """
-    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    api_base, project, change_id, url_patchset = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
 
     default_rev = patchset if patchset is not None else (url_patchset or "current")
 
@@ -1081,8 +1128,8 @@ def post_review_comments(
     create_drafts there are no per-comment results to report, because nothing
     partially succeeds.
     """
-    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    api_base, project, change_id, url_patchset = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
     rev = patchset if patchset is not None else (url_patchset or "current")
 
     # Validate everything before sending anything. The request is atomic, so a
@@ -1132,8 +1179,8 @@ def publish_drafts(
     private; publishing is neither, and an agent that can publish on the
     operator's behalf can speak as them on any CL they can reach.
     """
-    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    api_base, project, change_id, url_patchset = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
     rev = patchset if patchset is not None else (url_patchset or "current")
     body: dict = {"drafts": "PUBLISH_ALL_REVISIONS"}
     if message:
@@ -1145,9 +1192,8 @@ def publish_drafts(
 # ── Fetch ref ─────────────────────────────────────────────────────────────────
 
 
-def _latest_patchset(api_base: str, change_id: str, project: str = "") -> str:
+def _latest_patchset(api_base: str, cid: str) -> str:
     """Return the latest patchset number for a change."""
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
     data = _get(api_base, f"/changes/{cid}?o=CURRENT_REVISION")
     current = data.get("current_revision", "")
     revisions = data.get("revisions", {})
@@ -1173,12 +1219,14 @@ def resolve_patchset(change_url: str) -> Patchset:
     later, wherever the ref is first used. This always asks gerrit, so a change
     that does not exist says so here.
 
-    One query. `_latest_patchset` already makes it with o=CURRENT_REVISION and
-    discards the SHA; ALL_REVISIONS carries the same for every patchset, which is
-    what lets a URL naming an older one be pinned as exactly as the current one.
+    One query for a canonical URL; a short-form URL costs a second, the project
+    lookup in _canonical_change. `_latest_patchset` makes the same query with
+    o=CURRENT_REVISION and discards the SHA; ALL_REVISIONS carries the same for
+    every patchset, which is what lets a URL naming an older one be pinned as
+    exactly as the current one.
 
-    The patchset is the URL's, else the current one. The project comes from
-    the response, not the URL: the short form carries none, and a caller
+    The patchset is the URL's, else the current one. The project is the
+    canonical one even for a short-form URL, which names none: a caller
     restricting citations to its own repo needs the real one.
 
     With trusted author domains configured, raises for a patchset whose content
@@ -1187,8 +1235,8 @@ def resolve_patchset(change_url: str) -> Patchset:
     and was uploaded by an untrusted account. The landed patchset of a merged
     CL resolves whoever wrote it.
     """
-    api_base, project, change_id, url_patchset = _parse_change_url(change_url)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+    api_base, project, change_id, url_patchset = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
     # With trusted author domains configured, the same response decides whether
     # the pinned patchset may be read at all, so it must carry the accounts.
     options = "?o=ALL_REVISIONS"
@@ -1229,15 +1277,6 @@ def resolve_patchset(change_url: str) -> Patchset:
     )
 
 
-def _change_project(api_base: str, change_id: str) -> str:
-    """Return the project a change belongs to, as gerrit reports it."""
-    data = _get(api_base, f"/changes/{change_id}")
-    project = data.get("project", "") if isinstance(data, dict) else ""
-    if not project:
-        raise ValueError(f"gerrit names no project for change {change_id}")
-    return project
-
-
 def _git_remote_url(api_base: str, project: str) -> str:
     """Infer the git fetch URL from a Gerrit review host + project.
 
@@ -1275,15 +1314,10 @@ def fetch_ref(
     The remote is the git URL for the review host and project, e.g.
     https://chromium.googlesource.com/v8/v8.
     """
-    api_base, project, change_id, patchset = _parse_change_url(change_url)
-    if not project:
-        # The short forms (host/N, crrev.com/c/N) name no project, and the
-        # remote is the project's git URL.
-        project = _change_project(api_base, change_id)
-
+    api_base, project, change_id, patchset = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
     if not patchset:
-        patchset = _latest_patchset(api_base, change_id, project)
-    cid = f"{quote(project, safe='')}~{change_id}" if project else change_id
+        patchset = _latest_patchset(api_base, cid)
     require_trusted_patchset(api_base, cid, change_id, patchset)
 
     last_two = change_id[-2:].zfill(2)

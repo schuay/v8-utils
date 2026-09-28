@@ -171,21 +171,14 @@ def resolve_patch(patch: str) -> str:
     patch = patch.strip()
 
     def _resolve_change_id(change_id: str, patchset: str | None) -> str:
-        # Change numbers are allocated per host, not per project, so the bare
-        # /changes/{id} form resolves a CL in any project on the host.  Scoping
-        # the query to a project can only narrow it, and 404s for every CL
-        # outside that project.
-        # Through gerrit._get, not a bare httpx.get: it authenticates when a
-        # luci token is available.  Gerrit's ANONYMOUS quota is small and shared
-        # per IP, so an unauthenticated read here competes with every other tool
-        # on the box and 429s under no load of its own -- observed killing a
+        # gerrit's project lookup, the one its change-URL canonicalization
+        # uses. It reads through gerrit._get, which authenticates when a luci
+        # token is available: Gerrit's anonymous quota is small and shared per
+        # IP, and an unauthenticated read here has been seen to 429 and kill a
         # `pp create-job` mid-run.
-        from .gerrit import _get as _gerrit_get
+        from .gerrit import _change_project
 
-        data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}")
-        if not isinstance(data, dict) or "project" not in data:
-            raise ValueError(f"unexpected Gerrit response for {change_id}")
-        project = data["project"]
+        project = _change_project(_GERRIT_BASE, change_id)
         url = f"{_GERRIT_BASE}/c/{project}/+/{change_id}"
         return f"{url}/{patchset}" if patchset else url
 
