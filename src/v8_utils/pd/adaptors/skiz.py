@@ -26,8 +26,6 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-from ... import gauth
-
 _AGG_TABLE = "benchmarks"
 
 # Variant prefixes that name an engine. Two layouts are recognised:
@@ -43,6 +41,10 @@ def _connect(
 ):
     import os
     import warnings
+
+    # Absolute: pd.adaptor loads adaptor files by path, without a parent
+    # package, so a relative import fails there.
+    from v8_utils import gauth
 
     # Disable the built-in metrics exporter; it tries to push to Cloud
     # Monitoring and spews PERMISSION_DENIED tracebacks for ADC users that
