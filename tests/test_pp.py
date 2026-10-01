@@ -895,7 +895,7 @@ class TestConfigurationValidation:
 
 class TestCreateJobStory:
     @pytest.mark.parametrize("alias", ["js3", "js2", "sp3"])
-    def test_alias_omits_story_by_default(self, monkeypatch, alias):
+    def test_alias_sends_empty_story_by_default(self, monkeypatch, alias):
         import httpx
 
         from v8_utils import pinpoint
@@ -914,7 +914,7 @@ class TestCreateJobStory:
         pinpoint.create_job(alias, "m4")
 
         assert posted["benchmark"] == pinpoint.BENCHMARK_ALIASES[alias][0]
-        assert "story" not in posted
+        assert posted["story"] == ""
 
     def test_explicit_story_is_sent(self, monkeypatch):
         import httpx

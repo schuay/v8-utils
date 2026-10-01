@@ -1240,7 +1240,7 @@ def create_job(
         "comparison_mode": "try",
         "benchmark": benchmark,
         "configuration": configuration,
-        "story": story,
+        "story": story if story is not None else "",
         "story_tags": story_tags,
         "initial_attempt_count": str(repeat),
         "bug_id": bug_id,
