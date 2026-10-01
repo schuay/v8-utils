@@ -894,8 +894,21 @@ class TestConfigurationValidation:
 
 
 class TestCreateJobStory:
-    @pytest.mark.parametrize("alias", ["js3", "js2", "sp3"])
-    def test_alias_sends_empty_story_by_default(self, monkeypatch, alias):
+    @pytest.mark.parametrize(
+        "benchmark,expected_benchmark",
+        [
+            ("js3", "jetstream-main.crossbench"),
+            ("js2", "jetstream2.crossbench"),
+            ("sp3", "speedometer3.crossbench"),
+            ("jetstream-main.crossbench", "jetstream-main.crossbench"),
+            ("jetstream2.crossbench", "jetstream2.crossbench"),
+            ("speedometer3.crossbench", "speedometer3.crossbench"),
+        ],
+    )
+    @pytest.mark.parametrize("story", [None, ""])
+    def test_default_story_is_present(
+        self, monkeypatch, benchmark, expected_benchmark, story
+    ):
         import httpx
 
         from v8_utils import pinpoint
@@ -911,12 +924,13 @@ class TestCreateJobStory:
         )
         monkeypatch.setattr(pinpoint.httpx, "post", post)
 
-        pinpoint.create_job(alias, "m4")
+        pinpoint.create_job(benchmark, "m4", story=story)
 
-        assert posted["benchmark"] == pinpoint.BENCHMARK_ALIASES[alias][0]
+        assert posted["benchmark"] == expected_benchmark
         assert posted["story"] == ""
 
-    def test_explicit_story_is_sent(self, monkeypatch):
+    @pytest.mark.parametrize("benchmark", ["js3", "jetstream-main.crossbench"])
+    def test_explicit_story_is_sent(self, monkeypatch, benchmark):
         import httpx
 
         from v8_utils import pinpoint
@@ -932,11 +946,12 @@ class TestCreateJobStory:
         )
         monkeypatch.setattr(pinpoint.httpx, "post", post)
 
-        pinpoint.create_job("js3", "m4", story="regexp-octane")
+        pinpoint.create_job(benchmark, "m4", story="regexp-octane")
 
         assert posted["story"] == "regexp-octane"
 
-    def test_batch_alias_does_not_supply_story(self, monkeypatch):
+    @pytest.mark.parametrize("benchmark", ["js3", "jetstream-main.crossbench"])
+    def test_batch_default_story(self, monkeypatch, benchmark):
         from v8_utils import pinpoint
         from v8_utils import pinpoint_jobs
 
@@ -949,7 +964,7 @@ class TestCreateJobStory:
         )
 
         pinpoint_jobs.create_pinpoint_jobs(
-            benchmarks=["js3"],
+            benchmarks=[benchmark],
             configurations=["m4"],
             exp_patches=[None],
             base_git_hash="base",
