@@ -893,6 +893,73 @@ class TestConfigurationValidation:
         assert not unknown
 
 
+class TestCreateJobStory:
+    @pytest.mark.parametrize("alias", ["js3", "js2", "sp3"])
+    def test_alias_omits_story_by_default(self, monkeypatch, alias):
+        import httpx
+
+        from v8_utils import pinpoint
+
+        posted = {}
+
+        def post(url, **kwargs):
+            posted.update(kwargs["data"])
+            return httpx.Response(200, json={"job_id": "test_job"})
+
+        monkeypatch.setattr(
+            pinpoint, "get_auth_headers", lambda: {"Authorization": "test"}
+        )
+        monkeypatch.setattr(pinpoint.httpx, "post", post)
+
+        pinpoint.create_job(alias, "m4")
+
+        assert posted["benchmark"] == pinpoint.BENCHMARK_ALIASES[alias][0]
+        assert "story" not in posted
+
+    def test_explicit_story_is_sent(self, monkeypatch):
+        import httpx
+
+        from v8_utils import pinpoint
+
+        posted = {}
+
+        def post(url, **kwargs):
+            posted.update(kwargs["data"])
+            return httpx.Response(200, json={"job_id": "test_job"})
+
+        monkeypatch.setattr(
+            pinpoint, "get_auth_headers", lambda: {"Authorization": "test"}
+        )
+        monkeypatch.setattr(pinpoint.httpx, "post", post)
+
+        pinpoint.create_job("js3", "m4", story="regexp-octane")
+
+        assert posted["story"] == "regexp-octane"
+
+    def test_batch_alias_does_not_supply_story(self, monkeypatch):
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs
+
+        created = []
+        monkeypatch.setattr(
+            pinpoint, "known_configurations", lambda: frozenset({"mac-m4-mini-perf"})
+        )
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kwargs: created.append(kwargs) or {}
+        )
+
+        pinpoint_jobs.create_pinpoint_jobs(
+            benchmarks=["js3"],
+            configurations=["m4"],
+            exp_patches=[None],
+            base_git_hash="base",
+            exp_git_hash="experiment",
+            watch=False,
+        )
+
+        assert created[0]["story"] is None
+
+
 class TestFetchGerritSubject:
     def test_fetch_subject_success(self, monkeypatch):
         from v8_utils import pinpoint, gerrit

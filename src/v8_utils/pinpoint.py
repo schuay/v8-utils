@@ -1127,9 +1127,9 @@ def fetch_latest_build_commit(configuration: str) -> tuple[str, int]:
 
 BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
     # alias: (full benchmark name, default story)
-    "js3": ("jetstream-main.crossbench", "JetStream"),
-    "js2": ("jetstream2.crossbench", "JetStream2"),
-    "sp3": ("speedometer3.crossbench", "Speedometer3"),
+    "js3": ("jetstream-main.crossbench", None),
+    "js2": ("jetstream2.crossbench", None),
+    "sp3": ("speedometer3.crossbench", None),
 }
 
 # Despite the bot names, mac-m2-pro-perf and mac-m3-pro-perf run base M2/M3

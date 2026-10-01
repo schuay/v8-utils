@@ -309,9 +309,9 @@ def register(
             Field(
                 description=(
                     "space-separated benchmark names or aliases:"
-                    ' "js3" (jetstream-main.crossbench, story JetStream),'
-                    ' "js2" (jetstream2.crossbench, story JetStream2),'
-                    ' "sp3" (speedometer3.crossbench, story Speedometer3)'
+                    ' "js3" (jetstream-main.crossbench),'
+                    ' "js2" (jetstream2.crossbench),'
+                    ' "sp3" (speedometer3.crossbench)'
                 )
             ),
         ] = "js3 sp3",
@@ -344,7 +344,7 @@ def register(
         story: Annotated[
             str | None,
             Field(
-                description=("story within the benchmark (overrides the alias default)")
+                description="story within the benchmark (default: Crossbench selection)"
             ),
         ] = None,
         story_tags: Annotated[
