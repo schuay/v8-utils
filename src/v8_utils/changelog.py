@@ -50,6 +50,7 @@ ENTRIES: list[str] = [
     "`pp s` autodetects a Gerrit CL URL/ID (no `-p` needed); bare `pp s` lists recent jobs like `pp l`",
     "*create-job* `--base-patch parent` measures a stacked branch against its parent CL, autodetected from the upstream branch",
     "v8-utils mcp: `repo_git_*` tools can now read *worktrees*, including uncommitted changes — pick one with `repo_git_worktree_select`",
+    "`pp create-job` no longer sends invalid default stories for `js3`, `js2`, and `sp3` Crossbench jobs",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
