@@ -1149,8 +1149,7 @@ CONFIGURATION_ALIASES: dict[str, str] = {
     "macm4": "mac-m4-mini-perf",  # kept for backwards compatibility
 }
 
-# Two arm generations by default: the win on one is often not the win on the other.
-DEFAULT_CONFIGURATIONS = ["m1", "m4"]
+DEFAULT_CONFIGURATIONS = ["linux", "m1", "m4"]
 
 
 @functools.lru_cache(maxsize=1)

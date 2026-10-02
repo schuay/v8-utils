@@ -764,8 +764,8 @@ def main() -> None:
         "--template",
         nargs="+",
         metavar="TEMPLATE",
-        default=["js3", "sp3"],
-        help=f"Benchmark template(s) (default: js3 sp3): {_template_names}",
+        default=["js3"],
+        help=f"Benchmark template(s) (default: js3): {_template_names}",
     )
     p.add_argument(
         "-b",

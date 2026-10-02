@@ -314,13 +314,13 @@ def register(
                     ' "sp3" (speedometer3.crossbench)'
                 )
             ),
-        ] = "js3 sp3",
+        ] = "js3",
         configuration: Annotated[
             str,
             Field(
                 description=(
-                    "space-separated bot config(s) or alias(es), defaulting to"
-                    ' two arm generations: "linux" (linux-r350-perf),'
+                    "space-separated bot config(s) or alias(es):"
+                    ' "linux" (linux-r350-perf),'
                     ' "m1" (mac-m1_mini_2020-perf), "m2" (mac-m2-pro-perf),'
                     ' "m3" (mac-m3-pro-perf), "m4" (mac-m4-mini-perf),'
                     ' "m4pro" (mac-m4-pro-perf), "macintel" (mac-intel-perf),'
