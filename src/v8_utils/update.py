@@ -20,15 +20,7 @@ CHECK_INTERVAL = 24 * 60 * 60
 
 
 def install_command() -> list[str]:
-    return [
-        "uv",
-        "tool",
-        "install",
-        f"v8-utils @ git+{REPOSITORY}",
-        "--reinstall",
-        "--index-url",
-        "https://pypi.org/simple/",
-    ]
+    return ["uv", "tool", "install", f"git+{REPOSITORY}", "--reinstall"]
 
 
 def _stamp(text: str) -> int:

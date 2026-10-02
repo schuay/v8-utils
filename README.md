@@ -13,9 +13,9 @@ CLI and MCP tools for [V8](https://v8.dev/) JavaScript engine developers.
 
 ```bash
 # Everything -- all CLIs and all MCP tool groups:
-uv tool install v8-utils --index-url https://pypi.org/simple/
+uv tool install v8-utils
 # Or install directly from GitHub:
-uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git"
+uv tool install git+https://github.com/schuay/v8-utils.git
 # Upgrade:
 uv tool upgrade v8-utils
 ```
@@ -61,7 +61,7 @@ per day. A larger integer than the installed stamp prompts `Update from GitHub? 
 Accepting runs:
 
 ```sh
-uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git" --reinstall --index-url https://pypi.org/simple/
+uv tool install git+https://github.com/schuay/v8-utils.git --reinstall
 ```
 
 After installation, rerun your command. Declining continues the command and
@@ -87,7 +87,7 @@ including changes since the stamp was bumped. Existing installs need one
 manual upgrade to acquire the checker. To roll back to a known commit:
 
 ```sh
-V8_UTILS_NO_AUTO_UPDATE=1 uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git@<commit-sha>" --reinstall --index-url https://pypi.org/simple/
+V8_UTILS_NO_AUTO_UPDATE=1 uv tool install "git+https://github.com/schuay/v8-utils.git@<commit-sha>" --reinstall
 ```
 
 ## Configuration

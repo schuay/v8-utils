@@ -38,7 +38,7 @@ contain VERSION=1984. Test the wheel in an isolated tool directory:
 ```sh
 release_tmp=$(mktemp -d)
 UV_TOOL_DIR="$release_tmp/tools" UV_TOOL_BIN_DIR="$release_tmp/bin" \
-  uv tool install ./dist/v8_utils-1984-py3-none-any.whl --index-url https://pypi.org/simple/
+  uv tool install ./dist/v8_utils-1984-py3-none-any.whl
 for cli in pp vt jsb pd lv v8-mcp; do
   "$release_tmp/bin/$cli" --version
   "$release_tmp/bin/$cli" --help >/dev/null
@@ -64,7 +64,7 @@ uv publish dist/v8_utils-1984.tar.gz dist/v8_utils-1984-py3-none-any.whl
 Then verify a fresh install from PyPI and its `--version` output:
 
 ```sh
-uv tool install v8-utils==1984 --index-url https://pypi.org/simple/
+uv tool install v8-utils==1984
 pp --version
 vt --version
 ```

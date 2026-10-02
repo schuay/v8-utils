@@ -51,6 +51,7 @@ ENTRIES: list[str] = [
     "*create-job* `--base-patch parent` measures a stacked branch against its parent CL, autodetected from the upstream branch",
     "v8-utils mcp: `repo_git_*` tools can now read *worktrees*, including uncommitted changes — pick one with `repo_git_worktree_select`",
     "`pp create-job` no longer sends invalid default stories for `js3`, `js2`, and `sp3` Crossbench jobs",
+    "`pp` and `vt` now check for updates on interactive startup and prompt before installing from GitHub; disable with `auto_update = false` or `V8_UTILS_NO_AUTO_UPDATE=1`",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
