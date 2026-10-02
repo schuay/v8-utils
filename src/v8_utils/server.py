@@ -10,8 +10,7 @@ Note the server may be upgraded via: uv tool upgrade v8-utils
 """
 
 import argparse
-
-from .mcp_tools import GROUPS, build_server
+import sys
 
 
 def main() -> None:
@@ -22,6 +21,16 @@ def main() -> None:
             "Each tool group can be enabled or disabled independently."
         ),
     )
+    from .api.update import current_version
+
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
+    if sys.argv[1:] == ["--version"]:
+        parser.parse_args()
+
+    from .mcp_tools import GROUPS, build_server
+
     for name, group in GROUPS.items():
         flag = name.replace("_", "-")
         state = "on" if group.default else "off"

@@ -28,6 +28,29 @@ app = typer.Typer(
 )
 
 
+def _show_version(value: bool) -> None:
+    if value:
+        from ..api.update import current_version
+
+        typer.echo(f"pd {current_version()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: Annotated[
+        bool,
+        typer.Option(
+            "--version",
+            callback=_show_version,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
+    ] = False,
+):
+    pass
+
+
 @contextlib.contextmanager
 def _cli_errors():
     """A ValueError from the api is the message; exit 1 with it on stderr."""

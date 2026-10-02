@@ -61,6 +61,10 @@ class Config:
             _OPT: True,
         },
     )
+    auto_update: bool = field(
+        default=True,
+        metadata={_HELP: "Check for updates at interactive pp and vt startup"},
+    )
     poll_interval: int = field(
         default=60,
         metadata={
@@ -216,6 +220,8 @@ def template() -> str:
             val = '"..."'
         elif isinstance(f.default, str):
             val = f'"{f.default}"'
+        elif isinstance(f.default, bool):
+            val = str(f.default).lower()
         elif isinstance(f.default, int):
             val = str(f.default)
         elif isinstance(f.default, Path):
@@ -303,6 +309,7 @@ def load() -> Config:
 
     _cache = Config(
         user=data.get("user"),
+        auto_update=data.get("auto_update", True) is True,
         poll_interval=int(data.get("poll_interval", 60)),
         chat_webhook=data.get("chat_webhook"),
         chat_service_account_email=data.get("chat_service_account_email"),

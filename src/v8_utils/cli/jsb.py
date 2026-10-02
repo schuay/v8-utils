@@ -57,6 +57,11 @@ examples:
   jsb regexp-octane -b ~/v8-alt/out/release/d8        # full d8 path
 """,
     )
+    from ..api.update import current_version
+
+    p.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
     p.add_argument(
         "lineitems",
         nargs="*",

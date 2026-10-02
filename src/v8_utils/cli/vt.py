@@ -100,6 +100,11 @@ def _cmd_refresh(repo: Path, name: str) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(prog="vt", description="V8 worktree manager")
+    from ..api.update import current_version
+
+    p.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
     sub = p.add_subparsers(dest="action", required=True)
 
     # list
@@ -151,6 +156,10 @@ def main(argv: list[str] | None = None) -> None:
     fp.add_argument("name", help="Worktree directory name")
 
     args = p.parse_args(argv)
+    if not getattr(args, "json", False):
+        from ..api.update import check_for_update
+
+        check_for_update()
     repo = config.load().repos["v8"].path
 
     if args.action in ("list", "ls"):

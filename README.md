@@ -13,10 +13,15 @@ CLI and MCP tools for [V8](https://v8.dev/) JavaScript engine developers.
 
 ```bash
 # Everything -- all CLIs and all MCP tool groups:
+uv tool install v8-utils --index-url https://pypi.org/simple/
+# Or install directly from GitHub:
 uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git"
 # Upgrade:
 uv tool upgrade v8-utils
 ```
+
+All CLIs (`pp`, `vt`, `jsb`, `pd`, `lv`, `v8-mcp`) support `--version`.
+See [RELEASING.md](RELEASING.md) for release preparation and publishing.
 
 There are no extras to remember: a forgotten one breaks a console script
 outright (the CLIs import their dependencies at module scope) and silently drops
@@ -48,6 +53,42 @@ uv pip install "v8-utils-core[analysis] @ git+https://github.com/schuay/v8-utils
 
 Both distributions install the same `v8_utils` module, so they are alternatives
 rather than layers: an environment gets one or the other.
+
+### Update prompts
+
+Interactive `pp` and `vt` commands check GitHub's `main/VERSION` at most once
+per day. A larger integer than the installed stamp prompts `Update from GitHub? [y/N]`.
+Accepting runs:
+
+```sh
+uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git" --reinstall --index-url https://pypi.org/simple/
+```
+
+After installation, rerun your command. Declining continues the command and
+suppresses checks for a day. Check failures silently continue; installation
+failures exit with an error and are not retried for the same stamp. Retry
+explicitly with `pp upgrade`.
+
+Set `auto_update = false` at the top level of `~/.config/v8-utils/config.toml`
+(or the file selected by `V8_UTILS_CONFIG`) to disable checks. For a one-off
+skip, use `V8_UTILS_NO_AUTO_UPDATE=1 pp ...` (also works for `vt`). Manual
+`pp upgrade` remains available regardless of these settings.
+
+Checks apply to the full distribution installed by `uv tool` from PyPI or the
+upstream Git repository's default branch or `main`. Accepting a prompt on a PyPI
+install switches it to GitHub. Local/editable installs, pinned Git revisions,
+forks, and `v8-utils-core` are skipped. Noninteractive commands,
+`--help`, and `vt create --json` do not check. MCP integration is deferred.
+
+To promote an update, increase the repository's root `VERSION` integer in the
+same commit as the change. The wheel bundles this file; the package metadata
+version is also 1984 for the initial PyPI release. Installation fetches the latest default branch,
+including changes since the stamp was bumped. Existing installs need one
+manual upgrade to acquire the checker. To roll back to a known commit:
+
+```sh
+V8_UTILS_NO_AUTO_UPDATE=1 uv tool install "v8-utils @ git+https://github.com/schuay/v8-utils.git@<commit-sha>" --reinstall --index-url https://pypi.org/simple/
+```
 
 ## Configuration
 

@@ -1,8 +1,10 @@
 [project]
 name = "v8-utils"
-version = "0.1.0"
+version = "1984"
 description = "CLI and MCP tools for V8 JavaScript engine developers"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 # The full developer surface, with no extras to remember: every CLI and every MCP
 # tool group works after a plain `uv tool install git+...`. Nothing here is
@@ -50,6 +52,10 @@ dependencies = [
     "opentelemetry-resourcedetector-gcp>=1.8.0a0",
 ]
 
+[project.urls]
+Repository = "https://github.com/schuay/v8-utils"
+Issues = "https://github.com/schuay/v8-utils/issues"
+
 [project.optional-dependencies]
 # `v8-utils[all]` was the documented install command while the heavy stack was
 # optional, and it still sits in shell history and older notes. Keep it resolving
@@ -71,6 +77,9 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/v8_utils"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"VERSION" = "v8_utils/VERSION"
 
 [dependency-groups]
 dev = [

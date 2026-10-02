@@ -64,3 +64,7 @@ def test_metadata_that_must_match(full, core):
     assert full["version"] == core["version"]
     assert full["requires-python"] == core["requires-python"]
     assert full["scripts"] == core["scripts"]
+
+
+def test_release_version_matches_bundled_stamp(full, core):
+    assert full["version"] == core["version"] == (_ROOT / "VERSION").read_text().strip()

@@ -1600,7 +1600,7 @@ wheels = [
 
 [[package]]
 name = "v8-utils"
-version = "0.1.0"
+version = "1984"
 source = { editable = "." }
 dependencies = [
     { name = "dateparser" },

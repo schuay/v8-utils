@@ -114,6 +114,11 @@ def _cmd_vms(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="lv", description="V8 log viewer")
+    from ..api.update import current_version
+
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # deopts

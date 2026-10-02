@@ -22,7 +22,7 @@
 # hatchling cannot do that for an sdist.
 [project]
 name = "v8-utils-core"
-version = "0.1.0"
+version = "1984"
 description = "CLI and MCP tools for V8 JavaScript engine developers (subsettable build)"
 requires-python = ">=3.12"
 # Base install: only what the MCP server core and its light tool groups need --
@@ -89,3 +89,4 @@ build-backend = "hatchling.build"
 # maps them into the wheel as the v8_utils package.
 [tool.hatch.build.targets.wheel.force-include]
 "../../src/v8_utils" = "v8_utils"
+"../../VERSION" = "v8_utils/VERSION"

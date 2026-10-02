@@ -571,17 +571,9 @@ def _cmd_config(args: argparse.Namespace) -> None:
 
 
 def _cmd_upgrade(args: argparse.Namespace) -> None:
-    # No extra to name: the v8-utils distribution installs the full surface, so
-    # every CLI works after a plain install (see pyproject.toml).
-    cmd = [
-        "uv",
-        "tool",
-        "install",
-        "v8-utils @ git+https://github.com/schuay/v8-utils.git",
-        "--reinstall",
-        "--index-url",
-        "https://pypi.org/simple/",
-    ]
+    from ..api.update import install_command
+
+    cmd = install_command()
     cmd_str = " ".join(cmd)
     print(f"Running `{cmd_str}`.")
     print("If this fails due to permissions, run the command manually.")
@@ -604,6 +596,11 @@ def main() -> None:
     import logging
 
     parser = argparse.ArgumentParser(prog="pp", description="Pinpoint CLI")
+    from ..api.update import current_version
+
+    parser.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # show-job
@@ -904,6 +901,11 @@ def main() -> None:
     if not args.verbose:
         for _noisy in ("httpx", "httpcore", "google.auth", "google.auth.transport"):
             logging.getLogger(_noisy).setLevel(logging.WARNING)
+    if args.command != "upgrade":
+        from ..api.update import check_for_update
+
+        check_for_update()
+
     from ..api import changelog
 
     changelog.show_unseen()

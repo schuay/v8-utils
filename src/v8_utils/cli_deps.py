@@ -43,6 +43,12 @@ def run_cli(module: str, attr: str = "main") -> None:
     """Import `module` and call `attr`, reporting a missing extra actionably."""
     import importlib
 
+    if sys.argv[1:] == ["--version"]:
+        from .api.update import current_version
+
+        print(f"{module.rsplit('.', 1)[-1]} {current_version()}")
+        return
+
     try:
         entry = getattr(importlib.import_module(module), attr)
     except ImportError as exc:
