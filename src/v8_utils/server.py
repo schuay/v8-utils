@@ -10,10 +10,14 @@ Note the server may be upgraded via: uv tool upgrade v8-utils
 """
 
 import argparse
+import os
 import sys
 
 
 def main() -> None:
+    # MCP tool calls must not trigger depot_tools updates.
+    os.environ["DEPOT_TOOLS_UPDATE"] = "0"
+
     parser = argparse.ArgumentParser(
         prog="v8-mcp",
         description=(
