@@ -31,12 +31,25 @@ GERRIT_SCOPE = "https://www.googleapis.com/auth/gerritcodereview"
 EMAIL_SCOPE = "https://www.googleapis.com/auth/userinfo.email"
 CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 
-# use -> scopes a token for it must carry.
+# use -> scopes a token for it must carry. CQ votes are Gerrit writes by the
+# `gerrit` principal; there is no separate use for them.
 USES: dict[str, tuple[str, ...]] = {
     "gerrit": (GERRIT_SCOPE,),
     "pinpoint": (EMAIL_SCOPE,),
     "cas": (EMAIL_SCOPE,),
 }
+
+
+@dataclass(frozen=True)
+class GerritAccount:
+    """Who Gerrit says the `gerrit` principal is, from /accounts/self."""
+
+    email: str
+    name: str
+    account_id: int
+
+    def __str__(self) -> str:
+        return f"{self.email} (account {self.account_id})"
 
 
 class IdentityError(ValueError):
@@ -90,6 +103,10 @@ _lock = threading.Lock()
 # without ever pinning an expired token.
 _impersonated: dict[tuple[str, tuple[str, ...]], object] = {}
 _last_failure: dict[str, str] = {}
+# What /accounts/self answered for the `gerrit` principal, once verified. The
+# trust layer treats this address as the process's own, and an uploader stamps
+# it as the commit author.
+_gerrit_account: GerritAccount | None = None
 
 
 def configure(principals: Mapping[str, Principal], uses: Mapping[str, str]) -> None:
@@ -99,7 +116,7 @@ def configure(principals: Mapping[str, Principal], uses: Mapping[str, str]) -> N
     undeclared principal. A use absent from `uses` keeps the default
     (LuciAuth).
     """
-    global _state
+    global _state, _gerrit_account
     for use, name in uses.items():
         if use not in USES:
             raise ValueError(f"unknown identity use {use!r}; known: {', '.join(USES)}")
@@ -116,6 +133,7 @@ def configure(principals: Mapping[str, Principal], uses: Mapping[str, str]) -> N
         _state = _State(principals=dict(principals), uses=dict(uses))
         _impersonated.clear()
         _last_failure.clear()
+        _gerrit_account = None
 
 
 def reset() -> None:
@@ -133,6 +151,27 @@ def principal(use: str) -> Principal:
 def describe(use: str) -> str:
     """One line naming who `use` runs as, for a startup log."""
     return principal(use).describe()
+
+
+def remember_gerrit_account(account: GerritAccount) -> None:
+    """Record what Gerrit resolved the `gerrit` principal to (verify_gerrit)."""
+    global _gerrit_account
+    _gerrit_account = account
+
+
+def gerrit_account() -> GerritAccount | None:
+    """The verified Gerrit account, or None before verification."""
+    return _gerrit_account
+
+
+def gerrit_email() -> str | None:
+    """The address Gerrit calls run under, when it is known without a network
+    round trip: the verified account, else an impersonated principal's service
+    account. None for an unverified host login."""
+    if _gerrit_account is not None:
+        return _gerrit_account.email
+    p = principal("gerrit")
+    return p.service_account if isinstance(p, Impersonate) else None
 
 
 def token(use: str) -> str:

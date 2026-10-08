@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple
 from urllib.parse import quote, urlparse, urlsplit
@@ -587,14 +589,20 @@ def _compact_change(change: dict) -> Change:
 
 
 def _resolve_self(query: str) -> str:
-    """Replace 'self' in query operators with the configured user email."""
+    """Replace 'self' in query operators with the acting account's email.
+
+    The `gerrit` identity when it is known (a verified or impersonated
+    account), else the configured user. Spelled out rather than left to
+    Gerrit because the request may go out anonymously, where `self` means
+    nothing.
+    """
     from . import config
 
-    cfg = config.load()
-    if not cfg.user:
+    email = identity.gerrit_email() or config.load().user
+    if not email:
         return query
     # Replace owner:self, reviewer:self, etc. with the actual email
-    return re.sub(r"\bself\b", cfg.user, query)
+    return re.sub(r"\bself\b", email, query)
 
 
 def _change_for_trust(api_base: str, cid: str) -> dict:
@@ -1346,3 +1354,178 @@ def fetch_ref(
         fetch_head = head.stdout.strip()
 
     return FetchedRef(ref=ref, remote=remote, patchset=patchset, fetch_head=fetch_head)
+
+
+# ── Upload ────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class PushResult:
+    """What a refs/for/ push produced.
+
+    `created` is False when Gerrit answered "no new changes": the commit was
+    already the current patchset, which happens when a re-upload rebuilt an
+    identical commit. The change number is then resolved from the commit.
+    """
+
+    change_number: int
+    url: str
+    created: bool
+
+
+_PUSH_URL_LINE = re.compile(r"https?://\S+/c/\S+/\+/(\d+)")
+_NO_NEW_CHANGES = "no new changes"
+
+
+def push_for_review(
+    repo_path: str,
+    commit: str,
+    *,
+    project: str,
+    branch: str,
+    options: Sequence[str] = (),
+    api_base: str = _GERRIT_HOST,
+    timeout: float = 600.0,
+) -> PushResult:
+    """Push `commit` to refs/for/`branch` of `project` as the `gerrit` identity.
+
+    The token goes in a per-command `http.<url>.extraHeader`; cookies and the
+    credential helper are disabled for the command, so the push cannot fall
+    back to whatever login the checkout carries. The commit's author must be
+    an address of the pushing account unless it has Forge Author rights.
+
+    `options` are Gerrit push options (`hashtag=x`, `l=Commit-Queue+1`, `wip`),
+    joined with commas after `%`. Raises RuntimeError with git's stderr on any
+    failure other than "no new changes".
+    """
+    _check_host(urlsplit(api_base).hostname or "")
+    remote = _git_remote_url(api_base, _checked_project(project))
+    token = _require_auth()
+    refspec = f"{commit}:refs/for/{branch}"
+    if options:
+        refspec += "%" + ",".join(options)
+    r = subprocess.run(
+        [
+            "git",
+            "-c",
+            f"http.{remote}/.extraHeader=Authorization: Bearer {token}",
+            "-c",
+            "http.cookiefile=",
+            "-c",
+            "credential.helper=",
+            "push",
+            remote,
+            refspec,
+        ],
+        capture_output=True,
+        text=True,
+        cwd=repo_path,
+        timeout=timeout,
+    )
+    out = (r.stdout or "") + (r.stderr or "")
+    out = out.replace(token, "<token>")
+    m = _PUSH_URL_LINE.search(out)
+    if r.returncode == 0 and m:
+        return PushResult(change_number=int(m.group(1)), url=m.group(0), created=True)
+    if _NO_NEW_CHANGES in out:
+        change = change_for_commit(commit, project=project, api_base=api_base)
+        return PushResult(
+            change_number=change,
+            url=f"{api_base}/c/{project}/+/{change}",
+            created=False,
+        )
+    if r.returncode == 0:
+        raise RuntimeError(f"git push succeeded but printed no change URL:\n{out}")
+    raise RuntimeError(f"git push failed (exit {r.returncode}):\n{out.strip()}")
+
+
+def change_for_commit(
+    commit: str, *, project: str, api_base: str = _GERRIT_HOST
+) -> int:
+    """The change number whose patchset is `commit`. Raises when none or
+    several match: a commit is one patchset of one change."""
+    query = quote(f"project:{project} commit:{commit}", safe=":+")
+    found = _get(api_base, f"/changes/?q={query}&n=2", auth_required=True)
+    if not isinstance(found, list) or len(found) != 1:
+        raise RuntimeError(
+            f"commit {commit[:12]} matches {len(found) if isinstance(found, list) else 0}"
+            f" changes in {project}, expected one"
+        )
+    return int(found[0]["_number"])
+
+
+def change_id_for(change_url: str) -> str:
+    """The Change-Id footer value of the change at `change_url`.
+
+    What a re-upload must put in the commit message to produce a new patchset
+    of this change rather than a new change. For an uploader that recorded no
+    Change-Id of its own, say a job that started under a different tool.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    data = _get(api_base, f"/changes/{cid}", auth_required=True)
+    value = data.get("change_id") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value.startswith("I"):
+        raise RuntimeError(f"change {change_id} reported no Change-Id: {data}")
+    return value
+
+
+def patchset_for_commit(
+    change_url: str,
+    commit: str,
+    *,
+    attempts: int = 10,
+    delay_s: float = 1.0,
+) -> int:
+    """The patchset number of `commit` on the change.
+
+    Asked by commit rather than "the latest": right after a push, Gerrit's
+    change view can lag and answer with the previous patchset, and a stale
+    number grades an old CQ run as the new upload's. A lookup by commit either
+    returns the right number or 404s, so it is retried until it appears.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    last: Exception | None = None
+    for _ in range(attempts):
+        try:
+            rev = _get(
+                api_base, f"/changes/{cid}/revisions/{commit}", auth_required=True
+            )
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 404:
+                raise
+            last = e
+        else:
+            if isinstance(rev, dict) and isinstance(rev.get("_number"), int):
+                return rev["_number"]
+            last = RuntimeError(f"unexpected revision payload: {rev}")
+        time.sleep(delay_s)
+    raise RuntimeError(
+        f"patchset for commit {commit[:12]} on change {change_id} not visible"
+        f" after {attempts} attempts: {last}"
+    )
+
+
+def set_review(
+    change_url: str,
+    *,
+    labels: Mapping[str, int] | None = None,
+    message: str = "",
+    patchset: str = "current",
+) -> ReviewResult:
+    """POST /review on a patchset: votes and an optional message, no drafts.
+
+    The write that triggers or cancels a CQ run (`Commit-Queue`: 1 for a dry
+    run, 0 to cancel) and leaves a top-level message. Drafts are left alone,
+    which is what separates this from publish_drafts.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    body: dict = {"drafts": "KEEP"}
+    if labels:
+        body["labels"] = dict(labels)
+    if message:
+        body["message"] = message
+    out = _post_json(api_base, f"/changes/{cid}/revisions/{patchset}/review", body)
+    return _review_result(out)

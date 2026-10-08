@@ -7,11 +7,14 @@ stays on the host luci-auth login. See v8_utils.identity for the model.
 
 from ..identity import (
     USES,
+    GerritAccount,
     IdentityError,
     Impersonate,
     LuciAuth,
     configure,
     describe,
+    gerrit_account,
+    gerrit_email,
     principal,
     reset,
     token,
@@ -19,15 +22,18 @@ from ..identity import (
 )
 
 
-def verify_gerrit() -> str:
-    """Resolve the `gerrit` identity against Gerrit and return a line naming it.
+def verify_gerrit() -> GerritAccount:
+    """Resolve the `gerrit` identity against Gerrit and return the account.
 
     Raises IdentityError when no token can be minted, or when the principal
     declares a `gerrit_account` and /accounts/self resolves to another one. Run
     at startup by anything that posts, so a mis-pointed identity fails there
-    instead of posting as the wrong account.
+    instead of posting as the wrong account. The result is remembered: the
+    trust layer treats the address as the process's own, and `gerrit_email`
+    answers from it.
     """
     from .. import gerrit as _gerrit
+    from ..identity import remember_gerrit_account
 
     p = principal("gerrit")
     tok = token("gerrit")
@@ -45,16 +51,25 @@ def verify_gerrit() -> str:
             f" account {expected}, but /accounts/self is {account_id}"
             f" ({me.get('email')})"
         )
-    return f"gerrit as {me.get('email')} (account {account_id}; {p.describe()})"
+    if not isinstance(account_id, int) or not isinstance(me.get("email"), str):
+        raise IdentityError(f"gerrit: /accounts/self returned no usable account: {me}")
+    account = GerritAccount(
+        email=me["email"], name=str(me.get("name") or ""), account_id=account_id
+    )
+    remember_gerrit_account(account)
+    return account
 
 
 __all__ = [
     "USES",
+    "GerritAccount",
     "IdentityError",
     "Impersonate",
     "LuciAuth",
     "configure",
     "describe",
+    "gerrit_account",
+    "gerrit_email",
     "principal",
     "reset",
     "token",

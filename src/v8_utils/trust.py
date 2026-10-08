@@ -23,7 +23,11 @@ own behalf read Gerrit as it is. Daemons bind a policy to their reader instead
 of changing process state.
 
 Trust is decided by email domain, exact or a subdomain of a trusted one, and
-fails closed: a missing, malformed or non-ASCII address is untrusted.
+fails closed: a missing, malformed or non-ASCII address is untrusted. One
+address is trusted regardless of domain: the account the process itself acts
+as on Gerrit (v8_utils.identity). Its comments are the process's own output
+read back, and its uploads are what it is about to poll; a service account
+lives outside any human domain and would otherwise redact itself.
 """
 
 from __future__ import annotations
@@ -99,11 +103,25 @@ def email_in_domains(email: object, domains: Iterable[str]) -> bool:
     return any(domain == d or domain.endswith("." + d) for d in domains)
 
 
+def is_own_account(email: object) -> bool:
+    """Whether `email` is the address the process acts as on Gerrit."""
+    from . import identity
+
+    own = identity.gerrit_email()
+    return (
+        isinstance(email, str)
+        and own is not None
+        and email.strip().lower() == own.strip().lower()
+    )
+
+
 def is_trusted(email: object) -> bool:
     """Whether content by `email` may be shown as written. Always true while
-    redaction is off."""
+    redaction is off; always true for the process's own Gerrit account."""
     configured = domains()
-    return configured is None or email_in_domains(email, configured)
+    if configured is None:
+        return True
+    return email_in_domains(email, configured) or is_own_account(email)
 
 
 def shown_email(email: object) -> str:
@@ -165,7 +183,7 @@ def untrusted_change_reason(change: dict) -> str | None:
     for rev in revisions.values():
         accounts += [("patchset uploader", a) for a in _uploaders(rev)]
     for role, account in accounts:
-        if not email_in_domains(account_email(account), configured):
+        if not is_trusted(account_email(account)):
             return f"its {role} is outside the trusted author domains"
     return None
 
@@ -199,9 +217,7 @@ def untrusted_patchset_reason(change: dict, patchset: object) -> str | None:
     )
     if revision is None:
         return f"patchset {patchset} is not known"
-    if not all(
-        email_in_domains(account_email(a), configured) for a in _uploaders(revision)
-    ):
+    if not all(is_trusted(account_email(a)) for a in _uploaders(revision)):
         return (
             f"patchset {patchset} did not land and its uploader is outside the"
             " trusted author domains"
