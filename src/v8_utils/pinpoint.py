@@ -8,7 +8,6 @@ import json
 import logging
 import re
 import statistics
-import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -18,14 +17,14 @@ from urllib.parse import urlparse
 import httpx
 from scipy.stats import mannwhitneyu
 
-from . import luci_auth
+from . import identity
 
 _PINPOINT_BASE = "https://pinpoint-dot-chromeperf.appspot.com"
 _GERRIT_BASE = "https://chromium-review.googlesource.com"
 
 _LOGIN_INSTRUCTIONS = (
-    "Not logged in via luci-auth. "
-    "Run:  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
+    "No credential for Pinpoint. For the host login run:"
+    "  luci-auth login -scopes https://www.googleapis.com/auth/userinfo.email"
 )
 
 _TERMINAL_STATES = {"Completed", "Failed", "Cancelled"}
@@ -93,17 +92,15 @@ def _result_rows(rows: list[dict]) -> list[ResultRow]:
 
 
 def get_current_user_email() -> str:
-    """Return the email of the currently logged-in LUCI user.
+    """Return the email of the account Pinpoint calls run as.
 
-    Whichever account `luci-auth login` cached: luci-auth offers no way to ask
-    for a different one, so an account switch happens at login.
+    The configured `pinpoint` identity (v8_utils.identity): by default the
+    account `luci-auth login` cached, otherwise the configured service account.
     """
     try:
-        token = luci_auth.mint_token()
-    except subprocess.CalledProcessError as e:
-        raise ValueError(e.output.strip() or _LOGIN_INSTRUCTIONS)
-    except FileNotFoundError:
-        raise ValueError("luci-auth not found in PATH. " + _LOGIN_INSTRUCTIONS)
+        token = identity.token("pinpoint")
+    except identity.IdentityError as e:
+        raise ValueError(f"{e} {_LOGIN_INSTRUCTIONS}") from None
     r = httpx.get(
         "https://www.googleapis.com/oauth2/v3/userinfo",
         headers={"Authorization": f"Bearer {token}"},
@@ -117,16 +114,14 @@ def get_current_user_email() -> str:
 
 
 def get_auth_headers() -> dict[str, str]:
-    """Return Authorization headers for the current LUCI user, or {}.
+    """Return Authorization headers for the `pinpoint` identity, or {}.
 
-    Empty when luci-auth is missing or has nothing cached; callers raise
-    _LOGIN_INSTRUCTIONS on that rather than sending the request unauthenticated
-    and reporting whatever the server says about it.
+    Empty when no token can be minted; callers raise _LOGIN_INSTRUCTIONS on
+    that rather than sending the request unauthenticated and reporting whatever
+    the server says about it.
     """
-    try:
-        return {"Authorization": f"Bearer {luci_auth.mint_token()}"}
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return {}
+    token = identity.try_token("pinpoint")
+    return {"Authorization": f"Bearer {token}"} if token else {}
 
 
 def user_email_variants(email: str) -> list[str]:

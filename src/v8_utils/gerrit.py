@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 from dataclasses import dataclass, field, replace
 from typing import NamedTuple
@@ -12,7 +11,7 @@ from urllib.parse import quote, urlparse, urlsplit
 
 import httpx
 
-from . import trust
+from . import identity, trust
 
 
 _XSSI = ")]}'\n"
@@ -343,75 +342,42 @@ def _change_cid(project: str, change_id: str) -> str:
 
 
 def _gerrit_token() -> str | None:
-    """Get a Gerrit access token via git-credential-luci.
+    """A Gerrit access token for the configured `gerrit` identity, or None.
 
-    Deliberately NOT cached, even though _get now asks for a token on every
-    read.  git-credential-luci hands out short-lived OAuth access tokens
-    (ya29.*, ~1h) and does its own caching and refresh, so a process-lifetime
-    cache here would pin an expired token in any daemon that outlives it -- and
-    the 401 fallback in _get would then quietly send every request anonymously,
-    reintroducing the rate limiting this exists to avoid.  The helper costs
-    ~15ms against a 30s HTTP timeout, so there is nothing to win.
+    Deliberately NOT cached here, even though _get asks for a token on every
+    read: the provider owns refresh (git-credential-luci does its own; an
+    impersonated credential refreshes in place), so a process-lifetime cache
+    here would pin an expired token in any daemon that outlives it -- and the
+    401 fallback in _get would then quietly send every request anonymously,
+    reintroducing the rate limiting this exists to avoid.
     """
-    try:
-        out = subprocess.check_output(
-            ["git-credential-luci", "get"],
-            input="",
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-        for line in out.splitlines():
-            if line.startswith("password="):
-                return line[len("password=") :]
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-    return None
+    return identity.try_token("gerrit")
 
 
 def _no_token_reason() -> str:
     """Why _gerrit_token came back empty, as a line naming the actual fix.
 
-    The two causes need opposite responses and are indistinguishable in the
-    return value -- _gerrit_token catches FileNotFoundError (the helper is not on
-    PATH) and CalledProcessError (it ran and holds no credentials) in one except,
-    with stderr discarded, because its caller only asks "can I authenticate".
-
-    Worth telling apart because the old single message named authentication, so
-    a daemon whose PATH simply lacked depot_tools sent its operator to re-run
-    `login` -- which succeeds, changes nothing, and gives no hint why. systemd
-    user units are the common case: they do not source a shell profile, so a
-    depot_tools directory that is on an interactive PATH is absent from theirs.
+    Worth spelling out because the causes need different responses -- a helper
+    missing from a systemd unit's PATH, a login under another account, an ADC
+    identity without impersonation rights -- and the return value does not
+    distinguish them. The provider keeps the last failure per use.
     """
-    if shutil.which("git-credential-luci") is None:
-        return (
-            "git-credential-luci is not on PATH. It ships with depot_tools; add"
-            " that checkout to PATH. In a systemd user unit set it explicitly --"
-            " units do not source a shell profile, so a working interactive PATH"
-            " says nothing about the daemon's."
-        )
-    return (
-        "git-credential-luci is installed but holds no credentials for this"
-        " account. Run `git-credential-luci login` as the user the process runs"
-        " as -- a login under a different account does not carry over."
-    )
+    return identity.unavailable_reason("gerrit")
 
 
 def _auth_error(status: int, detail: str = "") -> ValueError:
     """Build an actionable error for a Gerrit 401/403.
 
-    These almost always mean the luci credentials are missing or expired, or
-    the configured account lacks access, so the message spells out the fix
-    rather than surfacing a bare HTTP status.
+    These almost always mean the credential is missing or expired, or the
+    account lacks access, so the message names who the request ran as and
+    spells out the fix rather than surfacing a bare HTTP status.
     """
-    from . import config
-
     body = f" Gerrit said: {detail}\n" if detail else "\n"
     return ValueError(
         f"Gerrit returned HTTP {status} (permission denied).{body}"
-        "Your luci credentials are likely missing or expired. To fix:\n"
-        "  1. Authenticate:  git-credential-luci login\n"
-        f"  2. Set your @chromium.org email in {config.CONFIG_PATH}:\n"
-        '       user = "you@chromium.org"'
+        f"The request ran as {identity.describe('gerrit')}. Check that this"
+        " account is logged in (`git-credential-luci login` for the host login)"
+        " and has access to the change."
     )
 
 
@@ -515,6 +481,24 @@ def _post_json(api_base: str, path: str, body: dict) -> dict | list:
 # ── Query CLs ─────────────────────────────────────────────────────────────────
 
 _GERRIT_HOST = "https://chromium-review.googlesource.com"
+
+
+def account_self(token: str, api_base: str = _GERRIT_HOST) -> dict:
+    """GET /accounts/self with an explicit token: who Gerrit says `token` is.
+
+    Takes the token rather than minting one so the caller (the identity
+    self-check) resolves the same credential it is about to report on.
+    """
+    r = httpx.get(
+        f"{api_base}/a/accounts/self",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    data = _parse_json(r)
+    if not isinstance(data, dict):
+        raise ValueError(f"unexpected /accounts/self response: {type(data).__name__}")
+    return data
+
 
 # Labels we care about for compact display.
 _INTERESTING_LABELS = ("Code-Review", "Commit-Queue")

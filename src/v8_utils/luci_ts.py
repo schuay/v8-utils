@@ -22,14 +22,13 @@ Tokens are cached in-process until ~5 minutes before expiry.
 from __future__ import annotations
 
 import logging
-import subprocess
 import threading
 import time
 from dataclasses import dataclass
 
 import httpx
 
-from . import luci_auth
+from . import identity
 
 log = logging.getLogger(__name__)
 
@@ -50,19 +49,11 @@ _cache_lock = threading.Lock()
 
 
 def _luci_user_token() -> str:
-    """Get the caller's user OAuth token via luci-auth (any default scope)."""
+    """The caller token for the token server: the `cas` identity."""
     try:
-        return luci_auth.mint_token()
-    except FileNotFoundError:
-        raise RuntimeError(
-            "luci-auth not found in PATH. Install depot_tools or log in via "
-            "`luci-auth login`."
-        )
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            "luci-auth failed to mint a user token. Run `luci-auth login`.\n"
-            f"luci-auth output:\n{e.output.strip()}"
-        )
+        return identity.token("cas")
+    except identity.IdentityError as e:
+        raise RuntimeError(str(e)) from None
 
 
 def _parse_expiry(s: str) -> float:

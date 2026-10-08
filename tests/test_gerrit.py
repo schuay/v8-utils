@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import types
 
 import httpx
@@ -226,19 +227,27 @@ def test_a_missing_helper_and_a_missing_login_read_differently(monkeypatch):
 
     Naming only the login sent an operator whose systemd unit simply lacked
     depot_tools on PATH to re-run `login` -- which succeeds and changes nothing.
+    The wording lives in v8_utils.identity; this checks _require_auth forwards
+    it rather than substituting a generic line.
     """
-    monkeypatch.setattr(g, "_gerrit_token", lambda: None)
+    from v8_utils import identity
 
-    monkeypatch.setattr(g.shutil, "which", lambda _: None)
-    with pytest.raises(ValueError, match="not on PATH") as missing:
+    def missing(*a, **kw):
+        raise FileNotFoundError("git-credential-luci")
+
+    monkeypatch.setattr(identity.subprocess, "check_output", missing)
+    with pytest.raises(ValueError, match="not on PATH") as missing_err:
         g._require_auth()
     # Points at the cause, not at authenticating again.
-    assert "login" not in str(missing.value)
+    assert "login" not in str(missing_err.value)
 
-    monkeypatch.setattr(g.shutil, "which", lambda _: "/usr/bin/git-credential-luci")
-    with pytest.raises(ValueError, match="git-credential-luci login") as unauthed:
+    def unauthed(*a, **kw):
+        raise subprocess.CalledProcessError(1, a[0])
+
+    monkeypatch.setattr(identity.subprocess, "check_output", unauthed)
+    with pytest.raises(ValueError, match="git-credential-luci login") as unauthed_err:
         g._require_auth()
-    assert "not on PATH" not in str(unauthed.value)
+    assert "not on PATH" not in str(unauthed_err.value)
 
 
 def test_an_auth_required_401_does_not_silently_fall_back(monkeypatch):

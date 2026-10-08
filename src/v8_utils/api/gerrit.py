@@ -104,7 +104,8 @@ class GerritReader:
 
 
 def credentials_available() -> bool:
-    """Whether a Gerrit access token can be obtained right now."""
+    """Whether a Gerrit access token can be obtained right now, for the
+    configured `gerrit` identity (v8_utils.api.identity)."""
     return _gerrit._gerrit_token() is not None
 
 
