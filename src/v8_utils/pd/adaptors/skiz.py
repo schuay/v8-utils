@@ -26,7 +26,14 @@ from urllib.parse import urlparse
 
 import pandas as pd
 
-_AGG_TABLE = "benchmarks"
+# benchmarks_v2 is a superset of benchmarks: the same engine rows plus the
+# browser variants (chrome_*, safari_*), which carry the embedder build in
+# embedder_number/embedder_hash. At each embedder roll the bot re-measures the
+# last engine commit under the new build, so a browser series has two rows for
+# that commit. Browser variants get engine "" (see _engine_from_variant), so a
+# consumer that filters by engine does not see them; the duplicate row is not
+# handled yet.
+_AGG_TABLE = "benchmarks_v2"
 
 # Variant prefixes that name an engine. Two layouts are recognised:
 #   skiz/ingest._make_variant:  "v8", "v8 (turbolev)", "jsc", "jsc (foo)"
