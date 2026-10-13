@@ -124,6 +124,10 @@ class ResolvedChangePoint:
     seg_before_mean: float
     seg_after_mean: float
     candidates: list[Candidate] = field(default_factory=list)
+    # Embedder build on each side of the breakpoint (0: no embedder axis). They
+    # differ when the step is an embedder roll rather than engine movement.
+    embedder_id: int = 0
+    prev_embedder_id: int = 0
 
 
 def resolve_changepoint(
@@ -170,6 +174,8 @@ def resolve_changepoint(
         seg_before_mean=cp.seg_before_mean,
         seg_after_mean=cp.seg_after_mean,
         candidates=[Candidate(commit_id=cid, prob=prob) for cid, prob in cp.candidates],
+        embedder_id=cp.embedder_id,
+        prev_embedder_id=cp.prev_embedder_id,
     )
 
 

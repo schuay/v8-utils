@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .adaptor import ensure_aggregated
+from .adaptor import ensure_aggregated, series_order
 from .models import AtConfig, CommitDelta
 from .stats import apply_fdr, lag1_mad_sigma, normal_two_sided_p
 
@@ -159,7 +159,7 @@ def at_from_df(
         else:
             bot, benchmark, test, variant, submetric = group_key
             engine = None
-        group_df = group_df.sort_values("commit_id")
+        group_df = group_df.sort_values(series_order(group_df))
 
         delta = at_series(
             commit_ids=group_df["commit_id"].tolist(),

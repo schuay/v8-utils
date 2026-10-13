@@ -30,9 +30,8 @@ import pandas as pd
 # browser variants (chrome_*, safari_*), which carry the embedder build in
 # embedder_number/embedder_hash. At each embedder roll the bot re-measures the
 # last engine commit under the new build, so a browser series has two rows for
-# that commit. Browser variants get engine "" (see _engine_from_variant), so a
-# consumer that filters by engine does not see them; the duplicate row is not
-# handled yet.
+# that commit. Both are kept and ordered old build first: a step between them
+# is the roll, a step before them is engine movement (see pd.detect).
 _AGG_TABLE = "benchmarks_v2"
 
 # Variant prefixes that name an engine. Two layouts are recognised:
@@ -40,6 +39,10 @@ _AGG_TABLE = "benchmarks_v2"
 #   underscore-separated:       "v8_default", "jsc_default", ...
 # Anything else (raw flag-only variants like "default") leaves engine unset.
 _KNOWN_ENGINES = {"v8", "jsc", "chromium"}
+# Browser variants are keyed by the commit of the engine they embed: chrome
+# rows carry the V8 position, safari rows the WebKit revision. The engine names
+# the commit namespace a point resolves against, so they map to that engine.
+_ENGINE_ALIASES = {"chrome": "v8", "safari": "jsc"}
 _ENGINE_SEP_RE = re.compile(r"[ _]")
 
 
@@ -122,6 +125,7 @@ def _engine_from_variant(variant: str) -> str:
     if not variant:
         return ""
     head = _ENGINE_SEP_RE.split(variant, maxsplit=1)[0]
+    head = _ENGINE_ALIASES.get(head, head)
     return head if head in _KNOWN_ENGINES else ""
 
 
@@ -192,17 +196,21 @@ class SkizAdaptor:
                 params.append(until)
 
         where = " AND ".join(conditions)
+        # embedder_number is NULL on engine-only rows; 0 keeps the column
+        # integer and reads as "no embedder" downstream.
         df = _query(
             self._con,
             f"SELECT bot, benchmark, test, variant,"
             f"       commit_number AS commit_id, git_hash, commit_time,"
+            f"       COALESCE(embedder_number, 0) AS embedder_id,"
             f"       mean AS value, stdev, count"
             f" FROM {_AGG_TABLE}"
             f" WHERE {where}"
-            f" ORDER BY bot, benchmark, test, variant, commit_number",
+            f" ORDER BY bot, benchmark, test, variant, commit_number, embedder_number",
             params,
         )
         if not df.empty:
+            df["embedder_id"] = df["embedder_id"].astype(int)
             df["engine"] = df["variant"].map(_engine_from_variant)
         return df
 

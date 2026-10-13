@@ -8,7 +8,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .adaptor import ensure_aggregated
+from .adaptor import ensure_aggregated, series_order
 from .models import AnalysisConfig, ChangePoint
 from .refine import candidate_probabilities, refine_breakpoints
 from .stats import cohens_d
@@ -26,8 +26,15 @@ def detect_series(
     variant: str = "",
     submetric: str = "",
     engine: str | None = None,
+    embedder_ids: list[int] | None = None,
 ) -> list[ChangePoint]:
-    """Run PELT on a single aggregated time series and return change points."""
+    """Run PELT on a single aggregated time series and return change points.
+
+    `embedder_ids`, when given, is aligned with `commit_ids` and names the
+    embedder build each point ran under. Detection ignores it; each change
+    point records the embedder on both sides of its breakpoint, which is what
+    tells an embedder roll from engine movement (see ChangePoint).
+    """
     import ruptures
 
     if config is None:
@@ -35,6 +42,8 @@ def detect_series(
 
     if len(commit_ids) < 4:
         return []
+    if embedder_ids is None:
+        embedder_ids = [0] * len(commit_ids)
 
     means_arr = np.array(means)
     stdevs_arr = np.array(stdevs)
@@ -126,6 +135,8 @@ def detect_series(
                 seg_after_mean=m_after,
                 candidates=candidates,
                 engine=engine,
+                embedder_id=embedder_ids[bk],
+                prev_embedder_id=embedder_ids[bk - 1],
             )
         )
         prev_bk = bk
@@ -151,6 +162,7 @@ def detect_from_df(
 
     results = []
     has_engine = "engine" in df.columns
+    has_embedder = "embedder_id" in df.columns
     group_cols = ["bot", "benchmark", "test", "variant", "submetric"]
     if has_engine:
         group_cols.append("engine")
@@ -161,7 +173,7 @@ def detect_from_df(
         else:
             bot, benchmark, test, variant, submetric = group_key
             engine = None
-        group_df = group_df.sort_values("commit_id")
+        group_df = group_df.sort_values(series_order(group_df))
 
         cps = detect_series(
             commit_ids=group_df["commit_id"].tolist(),
@@ -175,6 +187,7 @@ def detect_from_df(
             variant=variant,
             submetric=submetric,
             engine=engine,
+            embedder_ids=group_df["embedder_id"].tolist() if has_embedder else None,
         )
         results.extend(cps)
 

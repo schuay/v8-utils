@@ -62,6 +62,12 @@ def candidate_probabilities(
     """Compute candidate location probabilities from profile likelihood.
 
     P(bk=k) ∝ SSR(k)^(-n/2) under a Gaussian piecewise-constant model.
+
+    Mass is summed per commit id: a series can hold one commit at two
+    positions (the same engine commit measured under two embedder builds), and
+    the probability that the change is at that commit is the sum over both.
+    Returning one entry per position would make a consumer that looks up
+    commit_id see only the first position's share.
     """
     if not ssrs:
         return []
@@ -72,8 +78,8 @@ def candidate_probabilities(
     probs = [math.exp(ll - max_ll) for ll in log_liks]
     total_p = sum(probs)
 
-    return [
-        (commit_ids[c], probs[j] / total_p)
-        for j, c in enumerate(positions)
-        if probs[j] / total_p >= min_prob
-    ]
+    by_commit: dict[int, float] = {}
+    for j, c in enumerate(positions):
+        cid = commit_ids[c]
+        by_commit[cid] = by_commit.get(cid, 0.0) + probs[j] / total_p
+    return [(cid, p) for cid, p in by_commit.items() if p >= min_prob]

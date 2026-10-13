@@ -187,6 +187,13 @@ def _format_candidates(
     return " | ".join(parts) if parts else None
 
 
+def _fmt_roll(cp: ChangePoint) -> str:
+    """The embedder-roll tag for a change point, or "" for engine movement."""
+    if not cp.embedder_roll:
+        return ""
+    return f"[dim]embedder roll {cp.prev_embedder_id} -> {cp.embedder_id}[/dim]"
+
+
 def _get_commit_info(
     commit_id: int,
     commit_store: CommitStore | None,
@@ -252,9 +259,13 @@ def _print_grouped(
 ):
     # Group by (engine, commit_id): commit_id is per-engine, so different engines
     # land in different number spaces but we want the safety in case they ever overlap.
-    groups: dict[tuple[str | None, int], list[ChangePoint]] = defaultdict(list)
+    # An embedder roll measured at a commit is kept apart from engine movement at
+    # the same commit; they are different events with the same commit id.
+    groups: dict[tuple[str | None, int, bool], list[ChangePoint]] = defaultdict(list)
     for cp in results:
-        groups[(_resolve_engine(cp, default_engine), cp.commit_id)].append(cp)
+        groups[
+            (_resolve_engine(cp, default_engine), cp.commit_id, cp.embedder_roll)
+        ].append(cp)
 
     # Only show these columns if they have more than one distinct value.
     show_variant = len({cp.variant for cp in results}) > 1
@@ -262,8 +273,9 @@ def _print_grouped(
     show_engine = len({_resolve_engine(cp, default_engine) for cp in results}) > 1
 
     has_commit_info = False
-    for engine, cid in sorted(groups, key=lambda k: (k[0] or "", k[1])):
-        cp0 = groups[(engine, cid)][0]
+    for key in sorted(groups, key=lambda k: (k[0] or "", k[1], k[2])):
+        engine, cid, _ = key
+        cp0 = groups[key][0]
         range_commits = _get_commit_range(cp0, commit_store, default_engine)
         n = len(range_commits)
 
@@ -282,7 +294,10 @@ def _print_grouped(
                 header = _fmt_commit(info)
 
         prefix = f"{engine}: " if show_engine and engine else ""
-        console.print(f"\n[bold]{prefix}{header}[/bold]")
+        roll = _fmt_roll(cp0)
+        console.print(
+            f"\n[bold]{prefix}{header}[/bold]" + (f"  {roll}" if roll else "")
+        )
 
         # Show candidates or commit range listing
         alt = _format_candidates(cp0, commit_store, default_engine)
@@ -324,9 +339,7 @@ def _print_grouped(
         table.add_column("P-VALUE", justify="right")
         table.add_column("CONF")
 
-        for cp in sorted(
-            groups[(engine, cid)], key=lambda x: abs(x.pct_change), reverse=True
-        ):
+        for cp in sorted(groups[key], key=lambda x: abs(x.pct_change), reverse=True):
             pct = cp.pct_change * 100
             color = "green" if cp.direction == "improvement" else "red"
             p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
@@ -407,6 +420,9 @@ def _print_flat(
         alt = _format_candidates(cp, commit_store, default_engine)
         if alt:
             desc += f"\n  also: {alt}"
+        roll = _fmt_roll(cp)
+        if roll:
+            desc += f"\n  {roll}"
 
         p_str = f"{cp.p_value:.1e}" if cp.p_value < 0.01 else f"{cp.p_value:.3f}"
         row_cells = []

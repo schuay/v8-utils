@@ -25,6 +25,18 @@ class ChangePoint:
     seg_after_mean: float
     candidates: list[tuple[int, float]] = field(default_factory=list)
     engine: str | None = None
+    # Embedder build at the breakpoint and at the point before it; 0 when the
+    # series has no embedder axis. A series measured across an embedder roll
+    # holds the last engine commit of the old build twice, once per build, so a
+    # breakpoint between those two rows has equal commit ids and differing
+    # embedder ids: the step is the roll, not the engine commit.
+    embedder_id: int = 0
+    prev_embedder_id: int = 0
+
+    @property
+    def embedder_roll(self) -> bool:
+        """True when the embedder changed across the breakpoint."""
+        return self.embedder_id != self.prev_embedder_id
 
 
 @dataclass

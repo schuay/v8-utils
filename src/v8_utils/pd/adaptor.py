@@ -27,8 +27,12 @@ REQUIRED_COLUMNS = {
 }
 # Optional columns (present when data is pre-aggregated)
 AGGREGATE_COLUMNS = {"stdev", "count"}
-# Optional dimension columns
-OPTIONAL_COLUMNS = {"submetric", "engine"}
+# Optional dimension columns. embedder_id is a second commit axis for series
+# that run an engine inside an embedder (a browser): the build of the embedder
+# the row was measured under, 0 when there is none. It is not part of the
+# series identity; detection uses it to tell an embedder roll from engine
+# movement.
+OPTIONAL_COLUMNS = {"submetric", "engine", "embedder_id"}
 
 
 class Adaptor(Protocol):
@@ -52,6 +56,11 @@ class Adaptor(Protocol):
         Optional columns (if data is pre-aggregated):
             stdev: float — standard deviation
             count: int — number of runs aggregated
+
+        Optional dimension columns:
+            submetric: str — sub-measurement within a test
+            engine: str — commit namespace commit_id belongs to
+            embedder_id: int — embedder build the row ran under, 0 if none
 
         If stdev/count are absent, the caller assumes value is a raw
         sample and will aggregate per commit.
@@ -118,6 +127,20 @@ def check_dimension_values(
         )
 
 
+def series_order(df: pd.DataFrame) -> list[str]:
+    """Sort columns that put one series' rows in measurement order.
+
+    commit_id first; embedder_id second when present, so the two rows a
+    browser series holds for the commit measured across an embedder roll come
+    old build first. Without the second key equal commit ids sort in an
+    unspecified order and the roll step lands on the wrong pair.
+    """
+    cols = ["commit_id"]
+    if "embedder_id" in df.columns:
+        cols.append("embedder_id")
+    return cols
+
+
 def ensure_aggregated(df: pd.DataFrame) -> pd.DataFrame:
     """Ensure the DataFrame has stdev/count columns.
 
@@ -143,6 +166,8 @@ def ensure_aggregated(df: pd.DataFrame) -> pd.DataFrame:
         group_cols.insert(4, "submetric")
     if "engine" in df.columns:
         group_cols.append("engine")
+    if "embedder_id" in df.columns:
+        group_cols.append("embedder_id")
     grouped = df.groupby(group_cols, sort=False)["value"]
 
     agg = grouped.agg(["mean", "std", "count"]).reset_index()
