@@ -127,5 +127,5 @@ def _load_raw_config() -> dict:
     with config.CONFIG_PATH.open("rb") as f:
         try:
             return tomllib.load(f)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return {}

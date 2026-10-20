@@ -6,8 +6,7 @@ import subprocess
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-from v8_utils import config
-from v8_utils import repos
+from v8_utils import config, repos
 from v8_utils.mcp_tools import repo_git
 
 

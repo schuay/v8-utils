@@ -86,9 +86,11 @@ class TestRestart:
         daemon.SOCK_PATH.write_text("")
         daemon.PID_PATH.write_text("1234")
 
-        with patch("os.execv", side_effect=SystemExit) as mock_exec:
-            with pytest.raises(SystemExit):
-                _restart({"abc": "abc"}, threading.Lock())
+        with (
+            patch("os.execv", side_effect=SystemExit) as mock_exec,
+            pytest.raises(SystemExit),
+        ):
+            _restart({"abc": "abc"}, threading.Lock())
         assert json.loads(daemon.WATCHED_PATH.read_text()) == ["abc"]
         assert not daemon.SOCK_PATH.exists()
         assert not daemon.PID_PATH.exists()
@@ -104,9 +106,8 @@ class TestRestart:
             lock_was_held.append(lock.locked())
             raise SystemExit
 
-        with patch("os.execv", side_effect=check_lock):
-            with pytest.raises(SystemExit):
-                _restart({"abc": "abc"}, lock)
+        with patch("os.execv", side_effect=check_lock), pytest.raises(SystemExit):
+            _restart({"abc": "abc"}, lock)
         assert lock_was_held == [True]
 
 
@@ -130,9 +131,11 @@ class TestPollLoopInner:
             if call_count > iterations:
                 raise sleep_raises
 
-        with patch("v8_utils.daemon.time.sleep", side_effect=fake_sleep):
-            with pytest.raises(sleep_raises):
-                _poll_loop_inner(watched, lock)
+        with (
+            patch("v8_utils.daemon.time.sleep", side_effect=fake_sleep),
+            pytest.raises(sleep_raises),
+        ):
+            _poll_loop_inner(watched, lock)
 
     def test_mtime_change_triggers_restart(self, _daemon_paths):
         watched = {"j1": "j1"}
@@ -142,9 +145,9 @@ class TestPollLoopInner:
             patch("v8_utils.daemon.os.path.getmtime", return_value=-1),
             patch("v8_utils.daemon.time.sleep", side_effect=lambda _: None),
             patch("os.execv", side_effect=SystemExit),
+            pytest.raises(SystemExit),
         ):
-            with pytest.raises(SystemExit):
-                _poll_loop_inner(watched, lock)
+            _poll_loop_inner(watched, lock)
         assert json.loads(daemon.WATCHED_PATH.read_text()) == ["j1"]
 
     def test_empty_watched_skips_fetch(self, _daemon_paths):

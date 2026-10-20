@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from typing import ClassVar
 
 import pytest
 
@@ -107,7 +108,7 @@ class _FakeCreds:
     """Stands in for google.auth impersonated credentials: a token that goes
     invalid once and is refreshed in place."""
 
-    instances: list[_FakeCreds] = []
+    instances: ClassVar[list[_FakeCreds]] = []
 
     def __init__(
         self, *, source_credentials, target_principal, target_scopes, lifetime

@@ -1,10 +1,10 @@
 """Every shipped CLI exposes the bundled release stamp without loading config."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 import pytest
 
@@ -20,13 +20,16 @@ def test_version(name, entry, tmp_path):
         [
             sys.executable,
             "-c",
-            "import importlib, sys; "
-            "module, attr = sys.argv.pop(1).split(':'); "
-            "sys.argv.pop(0); getattr(importlib.import_module(module), attr)()",
+            (
+                "import importlib, sys; "
+                "module, attr = sys.argv.pop(1).split(':'); "
+                "sys.argv.pop(0); getattr(importlib.import_module(module), attr)()"
+            ),
             entry,
             name,
             "--version",
         ],
+        check=False,
         env={**os.environ, "V8_UTILS_CONFIG": str(cfg)},
         text=True,
         capture_output=True,
@@ -39,6 +42,7 @@ def test_version(name, entry, tmp_path):
 
 def test_pd_typer_version():
     from typer.testing import CliRunner
+
     from v8_utils.cli.pd import app
 
     result = CliRunner().invoke(app, ["--version"])

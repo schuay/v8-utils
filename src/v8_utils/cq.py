@@ -21,7 +21,9 @@ def _bb_run(args: list[str], timeout: int = 60) -> subprocess.CompletedProcess:
             "bb (Buildbucket CLI) not found. "
             "Install depot_tools and ensure it is on PATH."
         )
-    r = subprocess.run([bb, *args], capture_output=True, text=True, timeout=timeout)
+    r = subprocess.run(
+        [bb, *args], check=False, capture_output=True, text=True, timeout=timeout
+    )
     if r.returncode != 0:
         stderr = r.stderr.strip()
         if "Login required" in stderr or "not logged in" in stderr:
@@ -74,9 +76,9 @@ def _bb_categorize(builds: list[dict]) -> dict[str, list[dict]]:
         elif status in cats:
             cats[status].append(b)
     # Deduplicate: keep latest build per builder name in each category
-    for key in cats:
+    for key, builds_for_status in cats.items():
         seen: dict[str, dict] = {}
-        for b in cats[key]:
+        for b in builds_for_status:
             name = _bb_builder_name(b)
             if name not in seen or str(b.get("id", "")) > str(seen[name].get("id", "")):
                 seen[name] = b

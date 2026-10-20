@@ -12,7 +12,7 @@ from v8_utils.api.worktree import Created
 def test_vt_json_line_is_unchanged_by_the_typed_result():
     # The line callers parse, as vt printed it when create returned a dict.
     before = json.dumps(
-        {"name": "wt", **{"path": Path("/src/v8/wt"), "builds": ["x64.release"]}},
+        {"name": "wt", "path": Path("/src/v8/wt"), "builds": ["x64.release"]},
         default=str,
     )
     result = Created(path=Path("/src/v8/wt"), builds=["x64.release"])

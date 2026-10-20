@@ -11,17 +11,16 @@ from __future__ import annotations
 
 import argparse
 import json
-from dataclasses import asdict
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
-from ..api import config
-from ..api import worktree
+from ..api import config, worktree
 
 console = Console(highlight=False)
 
@@ -72,7 +71,7 @@ def _cmd_create(
 def _cmd_remove(repo: Path, name: str, force: bool, remove_branch: bool) -> bool:
     try:
         result = worktree.remove(repo, name, force=force, remove_branch=remove_branch)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         msg = str(e)
         if isinstance(e, subprocess.CalledProcessError):
             msg = e.stderr.strip() or e.stdout.strip() or msg

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -86,37 +86,37 @@ def _parse_date(value: str) -> str:
 @app.command()
 def detect(
     source: Annotated[str, typer.Argument(help="Data source name")],
-    bot: Annotated[Optional[str], typer.Option("--bot", help="Bot name filter")] = None,
+    bot: Annotated[str | None, typer.Option("--bot", help="Bot name filter")] = None,
     benchmark: Annotated[
-        Optional[str], typer.Option("--benchmark", "-b", help="Benchmark name filter")
+        str | None, typer.Option("--benchmark", "-b", help="Benchmark name filter")
     ] = None,
     metric: Annotated[
-        Optional[str], typer.Option("--metric", "-m", help="Metric/test glob filter")
+        str | None, typer.Option("--metric", "-m", help="Metric/test glob filter")
     ] = None,
     engine_filter: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             "--engine", help="Engine filter (e.g. v8, jsc) for sources that expose it"
         ),
     ] = None,
     since: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(
             help="Only include commits after this date (YYYY-MM-DD or '2 weeks ago')"
         ),
     ] = None,
     until: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(help="Only include commits before this date"),
     ] = None,
     penalty: Annotated[
-        Optional[float], typer.Option("--penalty", help="PELT penalty")
+        float | None, typer.Option("--penalty", help="PELT penalty")
     ] = None,
     min_effect: Annotated[
-        Optional[float], typer.Option("--min-effect", help="Min Cohen's d")
+        float | None, typer.Option("--min-effect", help="Min Cohen's d")
     ] = None,
     min_change: Annotated[
-        Optional[float],
+        float | None,
         typer.Option("--min-change", help="Min percent change (e.g. 5 = 5%)"),
     ] = None,
     group_by_commit: Annotated[
@@ -174,14 +174,14 @@ def compare(
         ),
     ],
     bot: Annotated[
-        Optional[str], typer.Option("--bot", help="Bot filter (both sides)")
+        str | None, typer.Option("--bot", help="Bot filter (both sides)")
     ] = None,
     benchmark: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--benchmark", "-b", help="Benchmark filter (both sides)"),
     ] = None,
-    since: Annotated[Optional[str], typer.Option(help="Since date")] = None,
-    until: Annotated[Optional[str], typer.Option(help="Until date")] = None,
+    since: Annotated[str | None, typer.Option(help="Since date")] = None,
+    until: Annotated[str | None, typer.Option(help="Until date")] = None,
     show_all: Annotated[
         bool, typer.Option("--show-all", help="Include non-significant results")
     ] = False,
@@ -217,31 +217,31 @@ def commit_impact(
     commit: Annotated[
         str, typer.Argument(help="Target commit position (id) or git hash prefix")
     ],
-    bot: Annotated[Optional[str], typer.Option("--bot", help="Bot name filter")] = None,
+    bot: Annotated[str | None, typer.Option("--bot", help="Bot name filter")] = None,
     benchmark: Annotated[
-        Optional[str], typer.Option("--benchmark", "-b", help="Benchmark name filter")
+        str | None, typer.Option("--benchmark", "-b", help="Benchmark name filter")
     ] = None,
     variant: Annotated[
-        Optional[str], typer.Option("--variant", help="Variant filter")
+        str | None, typer.Option("--variant", help="Variant filter")
     ] = None,
     engine_filter: Annotated[
-        Optional[str], typer.Option("--engine", help="Engine filter (e.g. v8, jsc)")
+        str | None, typer.Option("--engine", help="Engine filter (e.g. v8, jsc)")
     ] = None,
     metric: Annotated[
-        Optional[str], typer.Option("--metric", "-m", help="Metric/test glob filter")
+        str | None, typer.Option("--metric", "-m", help="Metric/test glob filter")
     ] = None,
     history: Annotated[
         int, typer.Option("--history", help="Commits of history for the noise estimate")
     ] = 20,
     min_change: Annotated[
-        Optional[float],
+        float | None,
         typer.Option("--min-change", help="Min percent change (e.g. 3 = 3%)"),
     ] = None,
     min_z: Annotated[
-        Optional[float], typer.Option("--min-z", help="Min |z| to flag")
+        float | None, typer.Option("--min-z", help="Min |z| to flag")
     ] = None,
     since: Annotated[
-        Optional[str], typer.Option(help="Fetch window start (default: derived from C)")
+        str | None, typer.Option(help="Fetch window start (default: derived from C)")
     ] = None,
     show_all: Annotated[
         bool, typer.Option("--show-all", help="Include below-threshold series")
@@ -290,7 +290,7 @@ def commit_impact(
 def sync(
     engine: Annotated[str, typer.Argument(help="Engine to sync (v8, chromium, jsc)")],
     since: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(help="Sync commits since this date (default: 6 months ago)"),
     ] = None,
     fetch: Annotated[

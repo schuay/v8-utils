@@ -103,6 +103,7 @@ def _symlink_paths(main: Path, gclient_root: Path) -> list[str]:
     for p in dep_paths:
         r = subprocess.run(
             ["git", "ls-tree", "--name-only", "HEAD", p],
+            check=False,
             cwd=main,
             capture_output=True,
             text=True,
@@ -205,6 +206,7 @@ def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
         _remove_external_symlinks(wt_path)
         subprocess.run(
             ["git", "worktree", "remove", "--force", str(wt_path)],
+            check=False,
             cwd=main,
             capture_output=True,
             text=True,
@@ -215,7 +217,11 @@ def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
         shutil.rmtree(wt_path, ignore_errors=True)
     # Drop any registration whose directory is already gone.
     subprocess.run(
-        ["git", "worktree", "prune"], cwd=main, capture_output=True, text=True
+        ["git", "worktree", "prune"],
+        check=False,
+        cwd=main,
+        capture_output=True,
+        text=True,
     )
     # Delete a dangling same-named branch, unless protected or in use elsewhere.
     if branch not in ("main", "master") and _branch_exists(main, branch):
@@ -226,6 +232,7 @@ def _force_cleanup(main: Path, wt_path: Path, branch: str) -> None:
         if not in_use:
             subprocess.run(
                 ["git", "branch", "-D", branch],
+                check=False,
                 cwd=main,
                 capture_output=True,
                 text=True,
@@ -328,6 +335,7 @@ def _remove_external_symlinks(wt_path: Path) -> None:
     # without stat'ing millions of build artifacts in out/.
     result = subprocess.run(
         ["find", str(wt_path), "-type", "l"],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -420,6 +428,7 @@ def list_worktrees(repo: Path) -> list[WorktreeInfo]:
 def _branch_exists(repo: Path, branch: str) -> bool:
     r = subprocess.run(
         ["git", "rev-parse", "--verify", f"refs/heads/{branch}"],
+        check=False,
         cwd=repo,
         capture_output=True,
         text=True,

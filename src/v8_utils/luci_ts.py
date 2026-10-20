@@ -111,8 +111,7 @@ def mint_sa_token(
         )
     # pRPC JSON response is prefixed with ")]}'\n" XSSI guard.
     text = r.text
-    if text.startswith(")]}'\n"):
-        text = text[5:]
+    text = text.removeprefix(")]}'\n")
     import json
 
     data = json.loads(text)

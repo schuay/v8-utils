@@ -44,7 +44,7 @@ class SymbolCache:
 
 
 def _run(args: list[str]) -> str:
-    r = subprocess.run(args, capture_output=True, text=True)
+    r = subprocess.run(args, check=False, capture_output=True, text=True)
     # perf exits non-zero for harmless warnings; only fail when stdout is empty
     if r.returncode != 0 and not r.stdout.strip():
         raise RuntimeError(
@@ -245,7 +245,7 @@ def _parse_annotate(text: str) -> tuple[list[dict], list[str]]:
 
     for lineno, raw in enumerate(text.splitlines(), start=1):
         # Skip the "Percent |" header and "---" separator lines.
-        if raw.startswith("Percent |") or raw.startswith("---"):
+        if raw.startswith(("Percent |", "---")):
             continue
 
         m = _ANNOT_INSTR_RE.match(raw)

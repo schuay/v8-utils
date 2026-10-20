@@ -145,6 +145,7 @@ class CommitStore:
         if path:
             top = subprocess.run(
                 ["git", "-C", str(src_dir), "rev-parse", "--show-toplevel"],
+                check=False,
                 capture_output=True,
                 text=True,
             )
@@ -158,7 +159,9 @@ class CommitStore:
         if path:
             cmd += f" -- {path}"
 
-        res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True)
+        res = subprocess.run(
+            cmd, check=False, shell=True, cwd=cwd, capture_output=True, text=True
+        )
         if res.returncode != 0:
             return 0
 

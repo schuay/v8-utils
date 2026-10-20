@@ -16,7 +16,6 @@ from scipy.stats import ttest_ind
 
 from . import config
 
-
 # ---------- Variant ----------
 
 
@@ -118,7 +117,7 @@ def parse_js3(output: str, full_names: bool = False) -> dict[str, float]:
 def _run_captured(
     cmd: list[str], cwd: Path, js3: bool, full_names: bool = False
 ) -> dict[str, float]:
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(cmd, check=False, cwd=cwd, capture_output=True, text=True)
     if result.returncode != 0:
         output = (result.stdout + result.stderr).strip()
         raise RuntimeError(f"d8 exited with code {result.returncode}\n{output}")
@@ -175,7 +174,7 @@ def run_v8log(
     cmd = [str(d8)] + flags + [str(suite_dir / "cli.js")]
     if lineitems:
         cmd += ["--", ",".join(lineitems)]
-    r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
+    r = subprocess.run(cmd, check=False, cwd=suite_dir, capture_output=True, text=True)
     if r.returncode != 0:
         output_text = (r.stdout + r.stderr).strip()
         raise RuntimeError(f"d8 exited with code {r.returncode}\n{output_text[:1000]}")
@@ -207,7 +206,7 @@ def run_perf(
     )
     if lineitems:
         cmd += ["--", ",".join(lineitems)]
-    r = subprocess.run(cmd, cwd=suite_dir, capture_output=True, text=True)
+    r = subprocess.run(cmd, check=False, cwd=suite_dir, capture_output=True, text=True)
     output = (r.stdout + r.stderr).strip()
     if r.returncode != 0:
         raise RuntimeError(

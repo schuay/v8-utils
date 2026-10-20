@@ -8,9 +8,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
 from pydantic import Field
 
-from ..api import cq
+from ..api import cq, repo_git
 from ..api import gerrit as gerrit_tools
-from ..api import repo_git
 from ..render.gerrit import format_cl_list, format_comments, format_draft_results
 from ._shared import _text_result
 

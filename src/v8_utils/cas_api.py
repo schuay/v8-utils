@@ -160,7 +160,7 @@ def fetch_probe_files(
                 if raw is not None:
                     try:
                         dir_cache[(h, s)] = rbe_pb2.Directory.FromString(raw)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         log.debug("  failed to parse directory %s: %s", h[:12], e)
                         parse_errors += 1
                 else:

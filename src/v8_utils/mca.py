@@ -4,7 +4,6 @@ import re as _re
 import shutil
 import subprocess
 
-
 _RE_V8_PRINT_CODE = _re.compile(r"^0x[0-9a-f]+\s+[0-9a-f]+\s+[0-9a-f]+\s+(.*)")
 
 # perf annotate format:
@@ -66,9 +65,7 @@ def _clean_asm_for_mca(raw: str) -> str:
             cleaned.append(m.group(1))
             continue
         # GDB wrapper lines
-        if line.startswith("Dump of assembler code") or line.startswith(
-            "End of assembler dump"
-        ):
+        if line.startswith(("Dump of assembler code", "End of assembler dump")):
             continue
         # GDB disassemble: "   0xADDR <sym+off>:  instruction"
         m = _RE_GDB_DISASM.match(line)
@@ -236,7 +233,9 @@ def llvm_mca(
     if timeline:
         cmd.append("--timeline")
 
-    r = subprocess.run(cmd, input=src, capture_output=True, text=True, timeout=30)
+    r = subprocess.run(
+        cmd, check=False, input=src, capture_output=True, text=True, timeout=30
+    )
 
     lines: list[str] = []
     header = f"# llvm-mca{f' -mcpu={cpu}' if cpu else ''}"

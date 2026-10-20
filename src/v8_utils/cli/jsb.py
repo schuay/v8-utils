@@ -168,13 +168,15 @@ examples:
         v = variants[0]
         cmd = v.cmd(v.d8(v8_out), suite_dir, lineitems)
         cmd = (["gdb", "--args"] if args.gdb else ["rr", "record"]) + cmd
-        subprocess.run(cmd, cwd=suite_dir)
+        subprocess.run(cmd, check=False, cwd=suite_dir)
         return
 
     # --- Single variant, single run: pure passthrough ---
     if args.runs == 1 and len(variants) == 1:
         v = variants[0]
-        subprocess.run(v.cmd(v.d8(v8_out), suite_dir, lineitems), cwd=suite_dir)
+        subprocess.run(
+            v.cmd(v.d8(v8_out), suite_dir, lineitems), check=False, cwd=suite_dir
+        )
         return
 
     # --- Multi-run / multi-variant: capture, parse, print table ---

@@ -18,8 +18,10 @@ def test_environment_override_is_read_at_import(tmp_path):
         [
             sys.executable,
             "-c",
-            "from v8_utils.api import config; "
-            "print(config.config_path()); print(config.load().user)",
+            (
+                "from v8_utils.api import config; "
+                "print(config.config_path()); print(config.load().user)"
+            ),
         ],
         env={**os.environ, config.CONFIG_ENV: str(cfg)},
         capture_output=True,

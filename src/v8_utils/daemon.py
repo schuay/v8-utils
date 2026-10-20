@@ -32,8 +32,7 @@ from pathlib import Path
 import httpx
 from platformdirs import user_data_dir
 
-from . import config
-from . import pinpoint
+from . import config, pinpoint
 
 _STATE_DIR = Path(user_data_dir("v8-utils"))
 SOCK_PATH = _STATE_DIR / "daemon.sock"
@@ -155,7 +154,7 @@ def _notify_webhook(
     try:
         httpx.post(webhook, json={"text": _message_text(job, results)}, timeout=10)
         log.info("webhook sent for %s", job.get("job_id"))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         log.error("webhook error for %s: %s", job.get("job_id"), e)
 
 
@@ -181,7 +180,7 @@ def _notify(
                 cfg.chat_app_space, cfg.chat_service_account_email, job, results
             )
             return
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.error("Chat app notification failed: %s", e)
     if cfg.chat_webhook:
         _notify_webhook(cfg.chat_webhook, job, results)
@@ -204,7 +203,7 @@ def _fetch_results_when_ready(
         time.sleep(poll_interval)
         try:
             return pinpoint.pivot_results(job_id)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             log.info("results not ready for %s: %s", job_id, e)
     log.warning("timed out waiting for results page for %s", job_id)
     return None
@@ -218,7 +217,7 @@ def _notify_with_results(cfg: config.Config, job: dict) -> None:
         results = _fetch_results_when_ready(job_id, cfg.poll_interval)
         _notify(cfg, job, results)
     except Exception:
-        log.error("error notifying for %s", job_id, exc_info=True)
+        log.exception("error notifying for %s", job_id)
 
 
 # ── Poll loop ─────────────────────────────────────────────────────────────────
@@ -230,7 +229,7 @@ def _poll_loop(watched: dict[str, str], lock: threading.Lock) -> None:
         try:
             _poll_loop_inner(watched, lock)
         except Exception:
-            log.error("poll loop crashed, restarting in 60s", exc_info=True)
+            log.exception("poll loop crashed, restarting in 60s")
             time.sleep(60)
 
 
@@ -253,7 +252,7 @@ def _poll_loop_inner(watched: dict[str, str], lock: threading.Lock) -> None:
         for job_id in job_ids:
             try:
                 job = pinpoint.fetch_job(job_id)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 log.error("error fetching %s: %s", job_id, e)
                 continue
             status = job.get("status", "Unknown")
@@ -302,7 +301,7 @@ def _socket_loop(
                             log.info("watching %s", job_id)
                     _save_watched(watched, lock)
             except Exception:
-                log.error("socket loop error", exc_info=True)
+                log.exception("socket loop error")
 
 
 # ── Daemon entry point ────────────────────────────────────────────────────────

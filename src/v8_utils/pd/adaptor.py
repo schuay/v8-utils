@@ -102,7 +102,7 @@ def check_dimension_values(
             continue
         try:
             valid = lookup(col)
-        except Exception:
+        except Exception:  # noqa: BLE001, S112
             continue
         if not valid:
             continue

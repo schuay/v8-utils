@@ -9,8 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import config
-from . import pinpoint
+from . import config, pinpoint
 from .concurrency import _run_concurrent
 from .pinpoint import Job, ResultRow
 
@@ -101,7 +100,7 @@ def get_gerrit_issue_url(
 
     def _git(*args: str) -> str:
         r = subprocess.run(
-            ["git"] + list(args), capture_output=True, text=True, cwd=cwd
+            ["git"] + list(args), check=False, capture_output=True, text=True, cwd=cwd
         )
         return r.stdout.strip() if r.returncode == 0 else ""
 
@@ -129,6 +128,7 @@ def get_gerrit_parent_url(cwd: str | None = None) -> str | None:
     """
     r = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+        check=False,
         capture_output=True,
         text=True,
         cwd=cwd,
@@ -153,6 +153,7 @@ def _resolve_patch_sentinel(value: str, cwd: str | None = None) -> str | None:
             branch = (
                 subprocess.run(
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    check=False,
                     capture_output=True,
                     text=True,
                     cwd=cwd,
@@ -228,9 +229,9 @@ def create_pinpoint_jobs(
     exp_js_flags_list: list[str | None] | None = None,
     repeat: int = 150,
     bug_id: int | None = None,
-    on_auto_hash: callable = None,
-    on_job_created: callable = None,
-    on_watching: callable = None,
+    on_auto_hash: Callable[..., None] | None = None,
+    on_job_created: Callable[..., None] | None = None,
+    on_watching: Callable[..., None] | None = None,
     watch: bool | None = None,
 ) -> list[Job]:
     """Shared core for creating Pinpoint A/B jobs.
@@ -290,7 +291,7 @@ def create_pinpoint_jobs(
                 auto_hashes[cfg] = commit
                 if on_auto_hash:
                     on_auto_hash(cfg, commit, build_num)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 if on_auto_hash:
                     on_auto_hash(cfg, None, e)
 
@@ -303,7 +304,7 @@ def create_pinpoint_jobs(
     def _subject_for_name(p: str) -> str | None:
         try:
             return pinpoint.fetch_gerrit_subject(p)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             print(
                 f"warning: could not fetch Gerrit subject for {p}: {e}",
                 file=sys.stderr,
@@ -404,7 +405,7 @@ def cancel_jobs(
             result = pinpoint.cancel_job(url, reason=reason)
             job_id = result.get("job_id", pinpoint.job_id_from_url(url))
             return Cancelled(job_id=job_id, state=result.get("state", "unknown"))
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             return Cancelled(
                 job_id=pinpoint.job_id_from_url(url), state=None, error=str(e)
             )

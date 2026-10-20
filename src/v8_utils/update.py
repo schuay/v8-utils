@@ -5,11 +5,11 @@ from __future__ import annotations
 import fcntl
 import json
 import os
-from importlib import metadata
-from pathlib import Path
 import subprocess
 import sys
 import time
+from importlib import metadata
+from pathlib import Path
 
 import httpx
 from platformdirs import user_cache_dir
@@ -140,7 +140,7 @@ def check_for_update() -> None:
             print("Updating v8-utils...", file=sys.stderr, flush=True)
             try:
                 result = subprocess.run(
-                    install_command(), stdout=sys.stderr, stderr=sys.stderr
+                    install_command(), check=False, stdout=sys.stderr, stderr=sys.stderr
                 )
             except OSError as exc:
                 print(

@@ -12,7 +12,6 @@ from ..api import perf as perf_tools
 from ..render.jsb import format_comparison
 from ._shared import _text_result
 
-
 # perf_hotspots remembers its most recent result per perf_data path so that
 # downstream tools can accept "#3" instead of the raw symbol name.
 _symbols = perf_tools.SymbolCache()
@@ -96,7 +95,7 @@ def register(mcp: FastMCP) -> None:
             ),
         ] = None,
         binaries: Annotated[
-            list[str],
+            list[str] | None,
             Field(
                 description=(
                     "absolute paths to JS shell binaries (d8, jsc, etc.), each"
@@ -107,7 +106,7 @@ def register(mcp: FastMCP) -> None:
                     ' "/home/user/WebKit/WebKitBuild/Release/bin/jsc"]'
                 )
             ),
-        ] = [],
+        ] = None,
         runs: Annotated[int, Field(description="number of runs per variant")] = 5,
         suite: Annotated[str, Field(description='"js2" or "js3"')] = "js3",
         record: Annotated[
@@ -130,6 +129,8 @@ def register(mcp: FastMCP) -> None:
         Returns a comparison table with mean, stdev, delta, p-value
         (Welch's t-test), and confidence (high/medium/low) per metric.
         """
+        if binaries is None:
+            binaries = []
         if record is not None:
             return _text_result(jsb.jsb_record(lineitems, binaries, suite, record))
         return _text_result(

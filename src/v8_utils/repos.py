@@ -7,7 +7,6 @@ from pathlib import Path
 from . import config
 from . import worktree as worktree_mod
 
-
 # Worktree selected for a repo via repo_git_worktree_select, keyed by repo name.
 # Process-global, but each Claude Code session spawns its own server, so this is
 # effectively session state. A session's subagents do share it -- that is what
@@ -112,6 +111,7 @@ def current_branch(root: Path) -> str:
     """Branch checked out at `root`, or "detached at <short hash>"."""
     r = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        check=False,
         cwd=root,
         capture_output=True,
         text=True,
@@ -125,6 +125,7 @@ def current_branch(root: Path) -> str:
     # nothing about where the worktree actually is.
     r = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"],
+        check=False,
         cwd=root,
         capture_output=True,
         text=True,

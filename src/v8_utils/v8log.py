@@ -13,10 +13,10 @@ import os
 import re
 import subprocess
 from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import Callable
 
 from rich import box
 from rich.console import Console
@@ -280,6 +280,7 @@ class CppSymbolizer:
         try:
             result = subprocess.run(
                 ["nm", "-C", "-n", "-S", str(path)],
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=30,

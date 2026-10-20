@@ -666,7 +666,7 @@ def test_pinpoint_resolves_patches_through_the_authenticated_reader(monkeypatch)
     shared per IP, hence 429s under no load of their own. Observed killing a
     `pp create-job` mid-run, after it had already queued jobs.
     """
-    import v8_utils.pinpoint as pinpoint
+    from v8_utils import pinpoint
 
     seen = []
 

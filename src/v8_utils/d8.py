@@ -1,10 +1,10 @@
 """Running the d8 shell on a script, with its output bounded."""
 
 import subprocess
+from contextlib import nullcontext
 from pathlib import Path
 
 from . import config
-
 
 _MAX_D8_OUTPUT = 5_000
 
@@ -35,24 +35,24 @@ def run_d8(
         raise ValueError(f"d8 not found: {d8}")
 
     cmd = [str(d8), *args]
-    stdout = open(output_file, "w") if output_file else subprocess.PIPE
-    try:
-        result = subprocess.run(
-            cmd,
-            stdout=stdout,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=timeout,
-            errors="replace",
-            cwd=cwd,
-        )
-    except subprocess.TimeoutExpired:
-        return f"Error: d8 timed out after {timeout}s"
-    except Exception as e:
-        return f"Error: {e}"
-    finally:
-        if output_file:
-            stdout.close()
+    with (
+        open(output_file, "w") if output_file else nullcontext(subprocess.PIPE)
+    ) as stdout:
+        try:
+            result = subprocess.run(
+                cmd,
+                check=False,
+                stdout=stdout,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=timeout,
+                errors="replace",
+                cwd=cwd,
+            )
+        except subprocess.TimeoutExpired:
+            return f"Error: d8 timed out after {timeout}s"
+        except Exception as e:  # noqa: BLE001
+            return f"Error: {e}"
 
     parts: list[str] = []
     if output_file:

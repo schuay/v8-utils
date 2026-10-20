@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("google.auth")
 
-from v8_utils import gauth  # noqa: E402
+from v8_utils import gauth
 
 
 def _user_info(client_id: str, **extra) -> dict:

@@ -132,7 +132,7 @@ class TestConcurrency:
                         f"w{i}", "bob@test.com", created=f"2026-04-{i + 1:02d}T00:00:00"
                     )
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 errors.append(e)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:

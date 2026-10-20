@@ -35,7 +35,7 @@ def get_src_dir(engine: str) -> Path | None:
         from ..config import load as load_v8_config
 
         cfg = load_v8_config()
-    except Exception:
+    except Exception:  # noqa: BLE001
         return None
 
     entry = cfg.repos.get(engine)
@@ -84,6 +84,7 @@ def sync_engine(
         try:
             res = subprocess.run(
                 ["git", "-C", str(src_dir), "fetch", "origin", "main"],
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=_FETCH_TIMEOUT_S,

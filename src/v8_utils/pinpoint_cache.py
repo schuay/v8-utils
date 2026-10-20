@@ -18,7 +18,7 @@ import json
 import sqlite3
 import sys
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -106,7 +106,7 @@ def _handle_corruption() -> None:
     if conn is not None:
         try:
             conn.close()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass
         _local.conn = None
     with _init_lock:
@@ -141,7 +141,7 @@ def _ensure_schema_version() -> None:
         conn.close()
         if version != _SCHEMA_VERSION:
             _DB_PATH.unlink()
-    except Exception:
+    except Exception:  # noqa: BLE001
         _DB_PATH.unlink(missing_ok=True)
 
 
@@ -178,8 +178,7 @@ def parse_patch_fields(
             if plus_idx != -1:
                 # Canonical: /c/PROJECT/+/CHANGE[/PATCHSET]
                 project_seg = path[:plus_idx].lstrip("/")
-                if project_seg.startswith("c/"):
-                    project_seg = project_seg[2:]
+                project_seg = project_seg.removeprefix("c/")
                 project = project_seg.strip("/") or None
                 change, patchset = _parse_change_patchset(path[plus_idx + 3 :])
                 return project, change, patchset
@@ -369,7 +368,7 @@ def set_range(user: str, ceiling: str, floor: str) -> None:
 @_with_retry
 def prune(days: int = 90) -> None:
     """Remove jobs and results older than `days`, updating floor accordingly."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
     db = get_db()
     db.execute(
         "DELETE FROM results WHERE job_id IN "

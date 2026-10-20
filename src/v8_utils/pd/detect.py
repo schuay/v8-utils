@@ -53,7 +53,7 @@ def detect_series(
     algo = ruptures.Pelt(model="rbf", min_size=config.min_size)
     try:
         bkps = algo.fit_predict(signal, pen=config.penalty)
-    except Exception:
+    except Exception:  # noqa: BLE001
         return []
 
     # Refine breakpoints with local MLE

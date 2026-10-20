@@ -12,24 +12,24 @@ from v8_utils.pd.serialize import (
 
 
 def _cp(**kw) -> ChangePoint:
-    base = dict(
-        benchmark="jetstream3.slipstream",
-        metric="Total",
-        bot="mac-m3-pro-perf",
-        variant="v8_default",
-        submetric="",
-        commit_id=200,
-        prev_commit_id=197,
-        direction="regression",
-        cohens_d=1.2,
-        pct_change=-0.05,
-        p_value=0.001,
-        confidence="high",
-        seg_before_mean=100.0,
-        seg_after_mean=95.0,
-        candidates=[(198, 0.1), (200, 0.8), (201, 0.1)],
-        engine="v8",
-    )
+    base = {
+        "benchmark": "jetstream3.slipstream",
+        "metric": "Total",
+        "bot": "mac-m3-pro-perf",
+        "variant": "v8_default",
+        "submetric": "",
+        "commit_id": 200,
+        "prev_commit_id": 197,
+        "direction": "regression",
+        "cohens_d": 1.2,
+        "pct_change": -0.05,
+        "p_value": 0.001,
+        "confidence": "high",
+        "seg_before_mean": 100.0,
+        "seg_after_mean": 95.0,
+        "candidates": [(198, 0.1), (200, 0.8), (201, 0.1)],
+        "engine": "v8",
+    }
     base.update(kw)
     return ChangePoint(**base)
 

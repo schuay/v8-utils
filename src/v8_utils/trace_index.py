@@ -4,7 +4,6 @@ optimization and deoptimization events, and code objects, with line numbers."""
 import re as _re
 from pathlib import Path
 
-
 # d8 trace index patterns
 
 # Each pattern: (compiled regex, category, group index for label extraction)

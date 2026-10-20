@@ -15,4 +15,4 @@ def current_version() -> int:
     return _update.current_version()
 
 
-__all__ = ["check_for_update", "install_command", "current_version"]
+__all__ = ["check_for_update", "current_version", "install_command"]

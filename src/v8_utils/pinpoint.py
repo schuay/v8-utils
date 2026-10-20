@@ -10,7 +10,7 @@ import re
 import statistics
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlparse
 
@@ -280,7 +280,7 @@ def fetch_gerrit_subject(patch_url: str) -> str | None:
     options = "?o=DETAILED_ACCOUNTS&o=ALL_REVISIONS" if trust.domains() else ""
     data = _gerrit_get(_GERRIT_BASE, f"/changes/{change_id}{options}")
     if not isinstance(data, dict):
-        raise ValueError(f"unexpected Gerrit response for {change_id}")
+        raise ValueError(f"unexpected Gerrit response for {change_id}")  # noqa: TRY004
     if reason := trust.untrusted_change_reason(data):
         raise ValueError(f"subject of CL {change_id} is not shown: {reason}")
     return data.get("subject")
@@ -352,8 +352,7 @@ def classify_show_arg(arg: str) -> str:
 
     # Bare token: strip an optional "c/" Gerrit prefix and any "/patchset" tail.
     token = arg.lstrip("/")
-    if token.startswith("c/"):
-        token = token[2:]
+    token = token.removeprefix("c/")
     token = token.split("/", 1)[0]
     if _JOB_ID_RE.fullmatch(token):
         return "pinpoint"
@@ -414,9 +413,7 @@ def _job_matches_filter(job: dict, filter_str: str) -> bool:
             if needle[0] != stored_parsed[0]:
                 return False
             # If the filter specifies a patchset, require it to match
-            if needle[1] is not None and needle[1] != stored_parsed[1]:
-                return False
-            return True
+            return not (needle[1] is not None and needle[1] != stored_parsed[1])
         # Fallback: substring match
         needle_str = needle[0] if needle else value.lower()
         return needle_str in stored.lower()
@@ -445,7 +442,7 @@ def _parse_created(created: str) -> datetime:
     """Parse a Pinpoint job's 'created' timestamp to a UTC datetime."""
     # Strip trailing 'Z' or timezone info and parse as UTC.
     s = created.rstrip("Z").split("+")[0]
-    return datetime.fromisoformat(s).replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(s).replace(tzinfo=UTC)
 
 
 _DEFAULT_SINCE = timedelta(days=30)
@@ -458,7 +455,7 @@ def _local_timezone_name() -> str:
 
         if name := get_localzone_name():
             return name
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
     offset = datetime.now().astimezone().utcoffset() or timedelta(0)
     total_minutes = int(offset.total_seconds() // 60)
@@ -546,7 +543,7 @@ def _fetch_jobs_for_email(email: str, since: datetime | None) -> None:
             r.raise_for_status()
             try:
                 data = r.json()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 return True  # non-JSON response, treat as end of pages
             raw_page = data.get("jobs", [])
             if not raw_page:
@@ -612,7 +609,7 @@ def fetch_jobs(
     from . import pinpoint_cache
 
     if since is None:
-        since = datetime.now(timezone.utc) - _DEFAULT_SINCE
+        since = datetime.now(UTC) - _DEFAULT_SINCE
     if since == datetime.min:
         since = None
     variants = user_email_variants(user)
@@ -636,7 +633,7 @@ def fetch_jobs(
         def _refresh(job: dict) -> None:
             try:
                 fetch_job(job["job_id"])  # fetches from API + caches
-            except Exception:
+            except Exception:  # noqa: BLE001, S110
                 pass
 
         with concurrent.futures.ThreadPoolExecutor() as ex:
@@ -1158,7 +1155,7 @@ def known_configurations() -> frozenset[str]:
         r = httpx.post(f"{_PINPOINT_BASE}/api/config", timeout=30)
         r.raise_for_status()
         return frozenset(r.json().get("configurations", []))
-    except Exception:
+    except Exception:  # noqa: BLE001
         return frozenset()
 
 
@@ -1193,11 +1190,11 @@ def cancel_job(job_url: str, reason: str = "Cancelled") -> dict:
     return r.json()
 
 
-def _error_message(response: "httpx.Response") -> str:
+def _error_message(response: httpx.Response) -> str:
     """Extract Pinpoint's error text from a failed response."""
     try:
         body = response.json()
-    except Exception:
+    except Exception:  # noqa: BLE001
         body = None
     if isinstance(body, dict):
         for key in ("error", "message"):

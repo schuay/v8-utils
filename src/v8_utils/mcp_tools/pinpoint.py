@@ -8,8 +8,8 @@ from mcp.types import CallToolResult
 from pydantic import Field
 
 from ..api import pinpoint as pinpoint_mod
-from ..api.gerrit import GerritReader
 from ..api import repo_git
+from ..api.gerrit import GerritReader
 from ..api.pinpoint import (
     create_pinpoint_jobs,
     fetch_job_details_sorted,

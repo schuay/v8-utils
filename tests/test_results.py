@@ -138,7 +138,7 @@ class TestFormatResultsTable:
             "j1", show_all=True, use_cas=False, compact=True, job=_job()
         )
         lines = t.splitlines()
-        header = [ln for ln in lines if "chg%" in ln][0]
+        header = next(ln for ln in lines if "chg%" in ln)
         assert "sig" not in header
         assert "direction" not in header
 

@@ -4,7 +4,6 @@ import os
 
 from mcp.types import CallToolResult, TextContent
 
-
 _STARTUP_MTIME = os.path.getmtime(__file__)
 
 # Overall byte cap for a single tool result, enforced by _text_result as a last
@@ -29,10 +28,10 @@ def _truncate_to_bytes(text: str, limit: int) -> str:
     if len(encoded) <= limit:
         return text
     notice = (
-        "\n\n[truncated: result exceeded the {mb} MiB tool-output cap "
-        "({actual} bytes). Narrow the query (tighter path globs, lower limit, "
+        f"\n\n[truncated: result exceeded the {limit // (1024 * 1024)} MiB tool-output cap "
+        f"({len(encoded)} bytes). Narrow the query (tighter path globs, lower limit, "
         "more specific pattern) to see the rest.]"
-    ).format(mb=limit // (1024 * 1024), actual=len(encoded))
+    )
     budget = max(limit - len(notice.encode("utf-8")), 0)
     head = encoded[:budget].decode("utf-8", errors="ignore")
     return head + notice

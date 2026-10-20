@@ -15,7 +15,6 @@ import httpx
 
 from . import identity, trust
 
-
 _XSSI = ")]}'\n"
 
 # Gerrit hosts we are willing to talk to. The host is taken from the
@@ -388,8 +387,7 @@ def _parse_json(r: httpx.Response) -> dict | list:
         raise _auth_error(r.status_code, r.text.strip()[:200])
     r.raise_for_status()
     text = r.text
-    if text.startswith(_XSSI):
-        text = text[len(_XSSI) :]
+    text = text.removeprefix(_XSSI)
     return json.loads(text)
 
 
@@ -498,7 +496,9 @@ def account_self(token: str, api_base: str = _GERRIT_HOST) -> dict:
     )
     data = _parse_json(r)
     if not isinstance(data, dict):
-        raise ValueError(f"unexpected /accounts/self response: {type(data).__name__}")
+        raise ValueError(  # noqa: TRY004
+            f"unexpected /accounts/self response: {type(data).__name__}"
+        )
     return data
 
 
@@ -551,7 +551,7 @@ def _compact_change(change: dict) -> Change:
 
     # Attention set: extract account emails and reasons
     attention = []
-    for _acct_id, info in change.get("attention_set", {}).items():
+    for info in change.get("attention_set", {}).values():
         acct = info.get("account", {})
         attention.append(
             Attention(
@@ -1339,6 +1339,7 @@ def fetch_ref(
     if fetch:
         r = subprocess.run(
             ["git", "fetch", remote, ref],
+            check=False,
             capture_output=True,
             text=True,
             cwd=repo_path,
@@ -1347,6 +1348,7 @@ def fetch_ref(
             raise RuntimeError(f"git fetch failed: {r.stderr.strip()}")
         head = subprocess.run(
             ["git", "rev-parse", "FETCH_HEAD"],
+            check=False,
             capture_output=True,
             text=True,
             cwd=repo_path,
@@ -1417,6 +1419,7 @@ def push_for_review(
             remote,
             refspec,
         ],
+        check=False,
         capture_output=True,
         text=True,
         cwd=repo_path,

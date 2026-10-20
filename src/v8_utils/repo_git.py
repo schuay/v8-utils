@@ -19,7 +19,6 @@ from .repos import (
     selected_worktree,
 )
 
-
 MAX_READ_LINES = 2000
 MAX_GREP_MATCHES = 100
 # Bare file:line hits by default; a caller that wants a match's surroundings
@@ -129,6 +128,7 @@ def show(
             raise ValueError("ref is required when path is omitted (commit mode)")
         proc = subprocess.run(
             ["git", "show", "--stat", "--patch", "--end-of-options", ref],
+            check=False,
             capture_output=True,
             text=True,
             cwd=root,
@@ -139,6 +139,7 @@ def show(
     elif ref:
         proc = subprocess.run(
             ["git", "show", "--end-of-options", f"{ref}:{path}"],
+            check=False,
             capture_output=True,
             text=True,
             cwd=root,
@@ -333,6 +334,7 @@ def log(
 
     proc = subprocess.run(
         cmd,
+        check=False,
         capture_output=True,
         text=True,
         cwd=root,
@@ -377,7 +379,7 @@ def blame(
     else:
         cmd.extend(["--", path])
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, cwd=root)
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, cwd=root)
     if proc.returncode != 0:
         raise ValueError(f"git blame failed: {proc.stderr.strip()[:500]}")
 
@@ -427,6 +429,7 @@ def worktree_select(
 
     dirty = subprocess.run(
         ["git", "status", "--porcelain"],
+        check=False,
         cwd=path,
         capture_output=True,
         text=True,

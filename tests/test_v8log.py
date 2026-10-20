@@ -26,7 +26,6 @@ from v8_utils.v8log import (
     format_vms,
 )
 
-
 # ══════════════════════════════════════════════════════════════════════════════
 # CSV parsing
 # ══════════════════════════════════════════════════════════════════════════════
@@ -910,6 +909,7 @@ class TestCppSymbolizer:
 
         result = subprocess.run(
             ["cc", "-o", str(binary), str(src)],
+            check=False,
             capture_output=True,
         )
         if result.returncode != 0:
@@ -918,6 +918,7 @@ class TestCppSymbolizer:
         # Find the address of myfunc via nm
         nm_result = subprocess.run(
             ["nm", "-n", str(binary)],
+            check=False,
             capture_output=True,
             text=True,
         )

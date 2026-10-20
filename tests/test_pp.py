@@ -4,12 +4,12 @@ Tests focus on pure functions — no network calls, no auth, no Pinpoint API.
 """
 
 import logging
+from datetime import UTC
 from unittest.mock import patch
 
 import pytest
 
-from v8_utils import changelog
-from v8_utils import daemon
+from v8_utils import changelog, daemon
 from v8_utils.pinpoint import (
     ResultRow,
     _apply_significance,
@@ -25,7 +25,6 @@ from v8_utils.pinpoint import (
     resolve_patch,
     user_email_variants,
 )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # _parse_change_patchset
@@ -827,19 +826,19 @@ class TestParseSince:
 
     @pytest.mark.parametrize("expr,hours", [("1 hour ago", 1), ("2 hours ago", 2)])
     def test_relative_is_that_far_back(self, expr, hours):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from v8_utils.pinpoint import parse_since
 
-        delta = datetime.now(timezone.utc) - parse_since(expr)
+        delta = datetime.now(UTC) - parse_since(expr)
         assert abs(delta.total_seconds() / 3600 - hours) < 0.1
 
     def test_relative_is_never_in_the_future(self):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from v8_utils.pinpoint import parse_since
 
-        assert parse_since("1 hour ago") < datetime.now(timezone.utc)
+        assert parse_since("1 hour ago") < datetime.now(UTC)
 
     def test_all_disables_cutoff(self):
         from datetime import datetime
@@ -952,8 +951,7 @@ class TestCreateJobStory:
 
     @pytest.mark.parametrize("benchmark", ["js3", "jetstream-main.crossbench"])
     def test_batch_default_story(self, monkeypatch, benchmark):
-        from v8_utils import pinpoint
-        from v8_utils import pinpoint_jobs
+        from v8_utils import pinpoint, pinpoint_jobs
 
         created = []
         monkeypatch.setattr(
@@ -977,7 +975,7 @@ class TestCreateJobStory:
 
 class TestFetchGerritSubject:
     def test_fetch_subject_success(self, monkeypatch):
-        from v8_utils import pinpoint, gerrit
+        from v8_utils import gerrit, pinpoint
 
         monkeypatch.setattr(
             gerrit,
@@ -1001,7 +999,7 @@ class TestFetchGerritSubject:
             pinpoint.fetch_gerrit_subject("https://example.com/not-gerrit")
 
     def test_fetch_subject_gerrit_error_raises(self, monkeypatch):
-        from v8_utils import pinpoint, gerrit
+        from v8_utils import gerrit, pinpoint
 
         def _fail(base, path, **kw):
             raise RuntimeError("Gerrit rate-limit (HTTP 429)")
@@ -1013,7 +1011,7 @@ class TestFetchGerritSubject:
 
 class TestSubjectOrNone:
     def test_returns_subject(self, monkeypatch):
-        from v8_utils import pinpoint, gerrit
+        from v8_utils import gerrit, pinpoint
 
         monkeypatch.setattr(gerrit, "_get", lambda base, path, **kw: {"subject": "Hi"})
         assert pinpoint.subject_or_none("c/8194905/6") == "Hi"
@@ -1026,7 +1024,7 @@ class TestSubjectOrNone:
         assert not caplog.records
 
     def test_failure_returns_none_but_logs(self, monkeypatch, caplog):
-        from v8_utils import pinpoint, gerrit
+        from v8_utils import gerrit, pinpoint
 
         def _fail(base, path, **kw):
             raise RuntimeError("Gerrit rate-limit (HTTP 429)")

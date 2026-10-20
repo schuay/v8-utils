@@ -126,7 +126,7 @@ def configure(principals: Mapping[str, Principal], uses: Mapping[str, str]) -> N
             )
     for name, p in principals.items():
         if not isinstance(p, (LuciAuth, Impersonate)):
-            raise ValueError(
+            raise TypeError(
                 f"principal {name!r} has unsupported type {type(p).__name__}"
             )
     with _lock:

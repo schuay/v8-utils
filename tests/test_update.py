@@ -52,6 +52,7 @@ def test_accept_updates_and_exits_before_dispatch(startup):
             "git+https://github.com/schuay/v8-utils.git",
             "--reinstall",
         ],
+        check=False,
         stdout=update.sys.stderr,
         stderr=update.sys.stderr,
     )
@@ -256,8 +257,8 @@ def test_vt_json_skips_check(monkeypatch):
 
 
 def test_manual_upgrade_bypasses_check(monkeypatch):
-    from v8_utils.cli import pp
     from v8_utils.api import changelog
+    from v8_utils.cli import pp
 
     monkeypatch.setattr(pp.sys, "argv", ["pp", "upgrade"])
     monkeypatch.setattr(changelog, "show_unseen", lambda: None)

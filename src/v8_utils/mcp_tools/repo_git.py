@@ -9,7 +9,6 @@ from pydantic import Field
 from ..api import repo_git
 from ._shared import _text_result
 
-
 REPOS_LINE = repo_git.repo_summary()
 REPO_NAMES = repo_git.repo_names()
 

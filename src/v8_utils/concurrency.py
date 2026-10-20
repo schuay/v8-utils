@@ -24,11 +24,11 @@ def _run_concurrent(
         future_to_idx = {ex.submit(fn): i for i, fn in enumerate(fns)}
         results = [None] * len(fns)
         try:
-            done = 0
-            for future in concurrent.futures.as_completed(future_to_idx):
+            for done, future in enumerate(
+                concurrent.futures.as_completed(future_to_idx), start=1
+            ):
                 idx = future_to_idx[future]
                 results[idx] = future.result()
-                done += 1
                 if on_progress:
                     on_progress(done, len(fns))
         except KeyboardInterrupt:

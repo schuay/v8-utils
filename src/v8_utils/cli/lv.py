@@ -163,6 +163,6 @@ def main() -> None:
     args = parser.parse_args()
     try:
         args.func(args)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"{_RED}error:{_RESET} {e}", file=sys.stderr)
         sys.exit(1)
