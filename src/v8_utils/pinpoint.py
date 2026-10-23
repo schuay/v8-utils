@@ -7,8 +7,10 @@ import functools
 import json
 import logging
 import re
+import shlex
 import statistics
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -56,6 +58,8 @@ class Job:
     experiment_patch: str | None = None
     base_extra_args: str | None = None
     experiment_extra_args: str | None = None
+    #: Test arguments applied to both arms, as a shell-style command line.
+    extra_test_args: str | None = None
     difference_count: int | None = None
     exception: str | None = None
     bug_id: int | None = None
@@ -689,9 +693,27 @@ def summarise_job(j: dict) -> Job:
         experiment_patch=args.get("experiment_patch"),
         base_extra_args=args.get("base_extra_args"),
         experiment_extra_args=args.get("experiment_extra_args"),
+        extra_test_args=format_extra_test_args(args.get("extra_test_args")),
         difference_count=j.get("difference_count"),
         exception=j.get("exception"),
     )
+
+
+def format_extra_test_args(raw: str | None) -> str | None:
+    """A job's extra_test_args argument as a shell-style command line.
+
+    Pinpoint keeps the value the job was created with: a JSON list of
+    arguments, or a plain string it splits like a shell would.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return raw
+    if isinstance(parsed, list):
+        return shlex.join(str(arg) for arg in parsed) or None
+    return str(parsed)
 
 
 # ── Histogram parsing ─────────────────────────────────────────────────────────
@@ -1215,11 +1237,16 @@ def create_job(
     exp_patch: str | None = None,
     base_js_flags: str | None = None,
     exp_js_flags: str | None = None,
+    extra_test_args: Sequence[str] | None = None,
     repeat: int = 100,
     bug_id: int | None = None,
     name: str | None = None,
 ) -> dict:
-    """Create a new Pinpoint A/B try job. Requires luci-auth login."""
+    """Create a new Pinpoint A/B try job. Requires luci-auth login.
+
+    extra_test_args are passed to the benchmark runner of both arms, e.g.
+    ["--iterations=20"] for Crossbench benchmarks.
+    """
     if benchmark in BENCHMARK_ALIASES:
         benchmark, default_story = BENCHMARK_ALIASES[benchmark]
         if story is None:
@@ -1242,6 +1269,10 @@ def create_job(
         "base_extra_args": f'--js-flags="{base_js_flags}"' if base_js_flags else None,
         "experiment_extra_args": f'--js-flags="{exp_js_flags}"'
         if exp_js_flags
+        else None,
+        # Pinpoint accepts a JSON list here and applies it to both arms.
+        "extra_test_args": json.dumps(list(extra_test_args))
+        if extra_test_args
         else None,
         "tags": '{"origin": "v8-utils"}',
         "name": name,

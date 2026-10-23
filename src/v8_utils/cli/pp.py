@@ -16,6 +16,7 @@ import contextlib
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime
 
@@ -184,6 +185,7 @@ def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
         ("patch", patch_url),
         ("base-flags", j.base_extra_args),
         ("exp-flags", j.experiment_extra_args),
+        ("test-args", j.extra_test_args),
         ("diffs", j.difference_count),
         ("bug", j.bug_id),
         ("results", j.results_url),
@@ -294,6 +296,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         patch = j.experiment_patch or ""
         base_flags = j.base_extra_args or ""
         exp_flags = j.experiment_extra_args or ""
+        test_args = j.extra_test_args or ""
 
         label = f"{benchmark} / {story}".strip(" /")
         diff_str = f"  {_YELLOW}diffs={diff}{_RESET}" if diff is not None else ""
@@ -308,6 +311,8 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
         if exp_flags:
             print(f"  {_DIM}exp-flags:{_RESET}  {exp_flags}")
+        if test_args:
+            print(f"  {_DIM}test-args:{_RESET}  {test_args}")
         print()
 
     job_ids = [j.job_id or "" for j in jobs]
@@ -497,6 +502,12 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
         exp_patches=exp_patches,
         base_js_flags=args.base_js_flags,
         exp_js_flags_list=args.exp_js_flags or [None],
+        # Each value is split like a shell command line, so one occurrence
+        # can carry several arguments.
+        extra_test_args=[
+            arg for value in args.extra_test_args or [] for arg in shlex.split(value)
+        ]
+        or None,
         repeat=args.repeat,
         bug_id=args.bug_id,
         on_auto_hash=on_auto_hash,
@@ -830,6 +841,17 @@ def main() -> None:
         dest="exp_js_flags",
         metavar="FLAGS",
         help="V8 flag set(s) for experiment",
+    )
+    p.add_argument(
+        "--extra-test-args",
+        action="append",
+        default=None,
+        dest="extra_test_args",
+        metavar="ARGS",
+        help="Arguments for the benchmark runner of both arms, e.g. "
+        "--extra-test-args=--iterations=20 for Crossbench. Repeatable; each "
+        "value is split like a shell command line. Write it with '=' when "
+        "the value starts with '-'",
     )
     p.add_argument(
         "-r",

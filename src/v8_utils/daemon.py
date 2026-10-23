@@ -95,6 +95,7 @@ def _format_job_details_for_chat(job: dict) -> str:
         ("patch", patch_str),
         ("base-flags", args.get("base_extra_args")),
         ("exp-flags", args.get("experiment_extra_args")),
+        ("test-args", pinpoint.format_extra_test_args(args.get("extra_test_args"))),
     ]
     return "\n".join(f"  {k}: {v}" for k, v in fields if v)
 
