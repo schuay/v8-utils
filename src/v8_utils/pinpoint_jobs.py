@@ -3,9 +3,10 @@ fetching job details and listings, resolving patch arguments, and creating
 and cancelling jobs."""
 
 import logging
+import shlex
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -64,6 +65,7 @@ def fetch_job_detail(job_url: str) -> Job:
         experiment_patch=args.get("experiment_patch"),
         base_extra_args=args.get("base_extra_args"),
         experiment_extra_args=args.get("experiment_extra_args"),
+        extra_test_args=pinpoint.format_extra_test_args(args.get("extra_test_args")),
         difference_count=data.get("difference_count"),
         exception=data.get("exception"),
         bug_id=data.get("bug_id"),
@@ -227,6 +229,7 @@ def create_pinpoint_jobs(
     exp_patches: list[str | None],
     base_js_flags: str | None = None,
     exp_js_flags_list: list[str | None] | None = None,
+    extra_test_args: Sequence[str] | None = None,
     repeat: int = 150,
     bug_id: int | None = None,
     on_auto_hash: Callable[..., None] | None = None,
@@ -240,6 +243,9 @@ def create_pinpoint_jobs(
 
     exp_patches: list of resolved patch URLs or None entries.  Callers should
     use resolve_exp_patches() first to handle "auto"/"none" sentinels.
+
+    extra_test_args: arguments for the benchmark runner of both arms of
+    every job, e.g. ["--iterations=20"] for Crossbench benchmarks.
 
     Callbacks (optional, used by CLI for terminal output):
       on_auto_hash(cfg, commit, build_num):  called when a git hash is auto-detected
@@ -332,6 +338,10 @@ def create_pinpoint_jobs(
         elif exp_js_flags:
             parts.append(f"flags: {exp_js_flags}")
         parts.append(f"({cfg}, {pinpoint.short_benchmark(bench)})")
+        if extra_test_args:
+            # Results with different test arguments are not comparable, so
+            # keep them apart in job listings.
+            parts.append(f"[{shlex.join(extra_test_args)}]")
         job_name = " ".join(parts)
 
         result = pinpoint.create_job(
@@ -345,6 +355,7 @@ def create_pinpoint_jobs(
             exp_patch=exp_patch,
             base_js_flags=base_js_flags,
             exp_js_flags=exp_js_flags,
+            extra_test_args=extra_test_args,
             repeat=repeat,
             bug_id=bug_id,
             name=job_name,

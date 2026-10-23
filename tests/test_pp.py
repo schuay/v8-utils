@@ -1086,3 +1086,145 @@ class TestCreatePinpointJobsNaming:
         assert created["name"] == "CL 8194905 (m4, sp3)"
         captured = capsys.readouterr()
         assert "warning: could not fetch Gerrit subject for c/8194905/6" in captured.err
+
+
+class TestExtraTestArgs:
+    """extra_test_args reach the benchmark runner of both arms, e.g.
+    --iterations=20 for Crossbench."""
+
+    @staticmethod
+    def _capture_post(monkeypatch):
+        import httpx
+
+        from v8_utils import pinpoint
+
+        posted = {}
+
+        def post(url, **kwargs):
+            posted.update(kwargs["data"])
+            return httpx.Response(200, json={"job_id": "test_job"})
+
+        monkeypatch.setattr(
+            pinpoint, "get_auth_headers", lambda: {"Authorization": "test"}
+        )
+        monkeypatch.setattr(pinpoint.httpx, "post", post)
+        return posted
+
+    def test_sent_as_json_list(self, monkeypatch):
+        import json
+
+        from v8_utils import pinpoint
+
+        posted = self._capture_post(monkeypatch)
+        pinpoint.create_job(
+            "sp3", "m1", extra_test_args=["--iterations=20", "--stories=TodoMVC.*"]
+        )
+
+        assert json.loads(posted["extra_test_args"]) == [
+            "--iterations=20",
+            "--stories=TodoMVC.*",
+        ]
+        # Not per arm: both arms must run the same benchmark configuration.
+        assert "base_extra_args" not in posted
+        assert "experiment_extra_args" not in posted
+
+    @pytest.mark.parametrize("extra_test_args", [None, []])
+    def test_omitted_when_empty(self, monkeypatch, extra_test_args):
+        from v8_utils import pinpoint
+
+        posted = self._capture_post(monkeypatch)
+        pinpoint.create_job("sp3", "m1", extra_test_args=extra_test_args)
+
+        assert "extra_test_args" not in posted
+
+    def test_batch_forwards_and_names_jobs(self, monkeypatch):
+        from v8_utils import pinpoint, pinpoint_jobs
+
+        created = []
+        monkeypatch.setattr(
+            pinpoint,
+            "known_configurations",
+            lambda: frozenset({"mac-m1_mini_2020-perf"}),
+        )
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kwargs: created.append(kwargs) or {}
+        )
+
+        pinpoint_jobs.create_pinpoint_jobs(
+            benchmarks=["sp3"],
+            configurations=["m1"],
+            exp_patches=[None],
+            base_git_hash="base",
+            exp_git_hash="experiment",
+            extra_test_args=["--iterations=20"],
+            watch=False,
+        )
+
+        assert created[0]["extra_test_args"] == ["--iterations=20"]
+        # Results with different test arguments are not comparable.
+        assert created[0]["name"] == "(m1, sp3) [--iterations=20]"
+
+    def test_cli_splits_and_accumulates_values(self, monkeypatch):
+        import sys
+
+        from v8_utils.api import changelog, update
+        from v8_utils.cli import pp as pp_cli
+
+        captured = {}
+        monkeypatch.setattr(
+            pp_cli, "create_pinpoint_jobs", lambda **kwargs: captured.update(kwargs)
+        )
+        monkeypatch.setattr(pp_cli, "resolve_exp_patches", lambda raw, **kw: [None])
+        monkeypatch.setattr(pp_cli, "resolve_base_patch", lambda value, **kw: None)
+        monkeypatch.setattr(update, "check_for_update", lambda: None)
+        monkeypatch.setattr(changelog, "show_unseen", lambda: None)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "pp",
+                "create-job",
+                "-t",
+                "sp3",
+                "-c",
+                "m1",
+                "--exp-patch",
+                "none",
+                "--extra-test-args=--iterations=20",
+                "--extra-test-args=--stories='TodoMVC.*' --foo",
+            ],
+        )
+
+        pp_cli.main()
+
+        assert captured["extra_test_args"] == [
+            "--iterations=20",
+            "--stories=TodoMVC.*",
+            "--foo",
+        ]
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            (None, None),
+            ("", None),
+            ("[]", None),
+            ('["--iterations=20"]', "--iterations=20"),
+            ('["--stories=TodoMVC.*", "a b"]', "'--stories=TodoMVC.*' 'a b'"),
+            # Pinpoint also takes a plain string, which it splits itself.
+            ("--iterations=20", "--iterations=20"),
+        ],
+    )
+    def test_format(self, raw, expected):
+        from v8_utils.pinpoint import format_extra_test_args
+
+        assert format_extra_test_args(raw) == expected
+
+    def test_job_listing_shows_test_args(self):
+        from v8_utils.pinpoint import summarise_job
+
+        job = summarise_job(
+            {"job_id": "1", "arguments": {"extra_test_args": '["--iterations=20"]'}}
+        )
+
+        assert job.extra_test_args == "--iterations=20"

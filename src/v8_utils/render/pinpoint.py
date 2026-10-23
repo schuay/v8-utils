@@ -28,6 +28,7 @@ def results_header(
     base_hash = job.base_git_hash
     base_flags = job.base_extra_args
     exp_flags = job.experiment_extra_args
+    test_args = job.extra_test_args
 
     b, d, c, r = (_BOLD, _DIM, _CYAN, _RESET) if ansi else ("", "", "", "")
 
@@ -67,6 +68,8 @@ def results_header(
         lines.append(f"{d}base-flags:{r} {c}{base_flags}{r}")
     if exp_flags:
         lines.append(f"{d}exp-flags:{r}  {c}{exp_flags}{r}")
+    if test_args:
+        lines.append(f"{d}test-args:{r}  {c}{test_args}{r}")
     return "\n".join(lines)
 
 
@@ -217,6 +220,7 @@ def format_job_detail(j: pinpoint.Job, patch_subject: str | None = None) -> str:
         ("patch", patch_url),
         ("base-flags", j.base_extra_args),
         ("exp-flags", j.experiment_extra_args),
+        ("test-args", j.extra_test_args),
         ("diffs", j.difference_count),
         ("bug", j.bug_id),
         ("results", j.results_url),

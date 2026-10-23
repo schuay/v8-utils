@@ -1,5 +1,6 @@
 """MCP tools for Chromium Pinpoint A/B jobs."""
 
+import shlex
 from functools import wraps
 from typing import Annotated
 
@@ -68,6 +69,7 @@ def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
         patch = j.experiment_patch or ""
         base_flags = j.base_extra_args or ""
         exp_flags = j.experiment_extra_args or ""
+        test_args = j.extra_test_args or ""
 
         label = f"{benchmark} / {story}".strip(" /")
         diff_str = f"  diffs={diff}" if diff is not None else ""
@@ -80,6 +82,8 @@ def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
             lines.append(f"  base-flags: {base_flags}")
         if exp_flags:
             lines.append(f"  exp-flags:  {exp_flags}")
+        if test_args:
+            lines.append(f"  test-args:  {test_args}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -392,6 +396,16 @@ def register(
             str | None,
             Field(description="V8 flags for the experiment, same format"),
         ] = None,
+        extra_test_args: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "arguments for the benchmark runner of both arms, split"
+                    ' like a shell command line, e.g. "--iterations=20" for'
+                    " Crossbench benchmarks"
+                )
+            ),
+        ] = None,
         repeat: Annotated[
             int, Field(description="number of bot runs per variant")
         ] = 150,
@@ -428,6 +442,7 @@ def register(
             exp_patches=resolve_exp_patches([exp_patch], cwd=repo_path),
             base_js_flags=base_js_flags,
             exp_js_flags_list=[exp_js_flags],
+            extra_test_args=shlex.split(extra_test_args) if extra_test_args else None,
             repeat=repeat,
             bug_id=bug_id,
         )

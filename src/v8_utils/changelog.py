@@ -52,6 +52,7 @@ ENTRIES: list[str] = [
     "v8-utils mcp: `repo_git_*` tools can now read *worktrees*, including uncommitted changes — pick one with `repo_git_worktree_select`",
     "`pp create-job` no longer sends invalid default stories for `js3`, `js2`, and `sp3` Crossbench jobs",
     "`pp` and `vt` now check for updates on interactive startup and prompt before installing from GitHub; disable with `auto_update = false` or `V8_UTILS_NO_AUTO_UPDATE=1`",
+    "*create-job* `--extra-test-args` passes arguments to the benchmark runner of both arms, e.g. `pp c -t sp3 --extra-test-args=--iterations=20`",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
