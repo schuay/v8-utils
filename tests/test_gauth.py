@@ -71,3 +71,30 @@ def test_non_user_credentials_rejected(adc, tmp_path):
     )
     with pytest.raises(ValueError, match="authorized_user"):
         gauth.credentials()
+
+
+def test_source_provider_replaces_file(adc):
+    """An installed provider is the source; the file is not read, the quota
+    project is applied to what the provider returns, and removing the provider
+    restores the file."""
+    from google.oauth2.credentials import Credentials
+
+    seen: list[list[str] | None] = []
+
+    def provider(scopes):
+        seen.append(scopes)
+        return Credentials(token="platform-token", scopes=scopes)
+
+    gauth.set_source_provider(provider)
+    try:
+        creds = gauth.credentials(scopes=["s1"], quota_project="billing")
+        assert creds.token == "platform-token"
+        assert creds.quota_project_id == "billing"
+        assert seen == [["s1"]]
+        # No ADC file exists in this fixture; the provider path never looks.
+        assert gauth.credentials().quota_project_id is None
+    finally:
+        gauth.set_source_provider(None)
+    assert gauth.source_provider() is None
+    with pytest.raises(FileNotFoundError):
+        gauth.credentials()

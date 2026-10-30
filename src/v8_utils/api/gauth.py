@@ -6,6 +6,20 @@ same source policy as v8-utils' own identity module: the gcloud login file,
 never GOOGLE_APPLICATION_CREDENTIALS, and never a service-account key.
 """
 
-from ..gauth import LOGIN_HINT, adc_path, credentials
+from ..gauth import (
+    LOGIN_HINT,
+    SourceProvider,
+    adc_path,
+    credentials,
+    set_source_provider,
+    source_provider,
+)
 
-__all__ = ["LOGIN_HINT", "adc_path", "credentials"]
+__all__ = [
+    "LOGIN_HINT",
+    "SourceProvider",
+    "adc_path",
+    "credentials",
+    "set_source_provider",
+    "source_provider",
+]
