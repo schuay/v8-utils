@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -36,8 +38,12 @@ def _job_response(job_id, status, **kw):
 def _daemon_paths(tmp_path, monkeypatch):
     """Redirect all daemon state files to tmp_path."""
     monkeypatch.setattr(daemon, "WATCHED_PATH", tmp_path / "daemon.watched")
-    monkeypatch.setattr(daemon, "SOCK_PATH", tmp_path / "daemon.sock")
     monkeypatch.setattr(daemon, "PID_PATH", tmp_path / "daemon.pid")
+    # AF_UNIX paths are limited to 104 bytes on macOS, which pytest's
+    # tmp_path under $TMPDIR exceeds.
+    with tempfile.TemporaryDirectory(dir="/tmp") as sock_dir:
+        monkeypatch.setattr(daemon, "SOCK_PATH", Path(sock_dir) / "daemon.sock")
+        yield
 
 
 # ── Save / Load persistence ──────────────────────────────────────────────────
