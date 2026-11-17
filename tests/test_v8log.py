@@ -1,5 +1,7 @@
 """Unit tests for v8log — parser, analysis, and formatting."""
 
+import subprocess
+import sys
 from textwrap import dedent
 
 import pytest
@@ -930,17 +932,68 @@ class TestCppSymbolizer:
         if myfunc_offset is None:
             pytest.skip("Could not find myfunc in nm output")
 
-        # Simulate the binary loaded at address 0x400000
-        lib_start = 0x400000
-        lib = SharedLibrary(str(binary), lib_start, lib_start + 0x100000, 0)
+        if sys.platform == "darwin":
+            # Mach-O nm reports link-time addresses; V8 logs the runtime
+            # __text range plus the dyld slide.
+            slide = 0x400000
+            lib_start = myfunc_offset + slide - 0x100
+            lib = SharedLibrary(str(binary), lib_start, lib_start + 0x1000, slide)
+            runtime_addr = myfunc_offset + slide
+        else:
+            lib_start = 0x400000
+            lib = SharedLibrary(str(binary), lib_start, lib_start + 0x100000, 0)
+            runtime_addr = lib_start + myfunc_offset
         cm = CodeMap()
         CppSymbolizer([lib]).symbolize_into(cm)
 
-        # myfunc should now be in the code map
-        entry = cm.lookup(lib_start + myfunc_offset)
+        entry = cm.lookup(runtime_addr)
         assert entry is not None
         assert entry.type == "CPP"
         assert "myfunc" in entry.name
+
+    @staticmethod
+    def _fake_nm(monkeypatch, stdout, seen=None):
+        def run(cmd, **kwargs):
+            if seen is not None:
+                seen.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr("v8_utils.v8log.subprocess.run", run)
+
+    def test_symbolize_library_relative(self, tmp_path, monkeypatch):
+        """Addresses below the library size are relative to its start (ELF)."""
+        binary = tmp_path / "lib.so"
+        binary.write_bytes(b"")
+        self._fake_nm(monkeypatch, "0000000000000100 0000000000000010 T f\n")
+        lib = SharedLibrary(str(binary), 0x7F0000000000, 0x7F0000100000, 0)
+        cm = CodeMap()
+        CppSymbolizer([lib]).symbolize_into(cm)
+        assert cm.lookup(0x7F0000000108).name == "f"
+
+    def test_symbolize_link_time_plus_slide(self, tmp_path, monkeypatch):
+        """Link-time addresses get the ASLR slide added (Mach-O)."""
+        binary = tmp_path / "d8"
+        binary.write_bytes(b"")
+        self._fake_nm(monkeypatch, "0000000100004000 0000000000000010 T f\n")
+        slide = 0x42BC000
+        start = 0x100004000 + slide
+        lib = SharedLibrary(str(binary), start, start + 0x100000, slide)
+        cm = CodeMap()
+        CppSymbolizer([lib]).symbolize_into(cm)
+        assert cm.lookup(start + 8).name == "f"
+
+    def test_symbolize_prefers_dsym(self, tmp_path, monkeypatch):
+        """Stripped Mach-O binaries are symbolized from their dSYM."""
+        binary = tmp_path / "d8"
+        binary.write_bytes(b"")
+        dwarf = tmp_path / "d8.dSYM/Contents/Resources/DWARF/d8"
+        dwarf.parent.mkdir(parents=True)
+        dwarf.write_bytes(b"")
+        seen = []
+        self._fake_nm(monkeypatch, "", seen)
+        lib = SharedLibrary(str(binary), 0x1000, 0x2000, 0)
+        CppSymbolizer([lib]).symbolize_into(CodeMap())
+        assert seen == [str(dwarf)]
 
     def test_symbolize_idempotent(self, tmp_path):
         """V8Log.symbolize() should only run once."""

@@ -272,11 +272,19 @@ class CppSymbolizer:
             self._loaded.add(lib.name)
             self._load_lib(lib, code_map)
 
+    @staticmethod
+    def _symbol_file(path: Path) -> Path:
+        # Stripped Mach-O binaries keep their symbols in a dSYM bundle.
+        dsym = path.with_name(path.name + ".dSYM") / "Contents/Resources/DWARF"
+        dsym /= path.name
+        return dsym if dsym.exists() else path
+
     def _load_lib(self, lib: SharedLibrary, code_map: CodeMap) -> None:
         path = Path(lib.name)
         if not path.exists():
             _log.debug("Skipping %s: file not found", lib.name)
             return
+        path = self._symbol_file(path)
         try:
             result = subprocess.run(
                 ["nm", "-C", "-n", "-S", str(path)],
@@ -313,7 +321,13 @@ class CppSymbolizer:
         lib_base = lib.start
         lib_end = lib.end
         for nm_addr, size, name in symbols:
-            runtime_addr = lib_base + nm_addr
+            # Same rule as tools/tickprocessor.mjs: small addresses are
+            # library-relative (ELF), otherwise they are link-time addresses
+            # that only need the ASLR slide (Mach-O).
+            if nm_addr < lib_base and nm_addr < lib_end - lib_base:
+                runtime_addr = lib_base + nm_addr
+            else:
+                runtime_addr = nm_addr + lib.aslr_slide
             if runtime_addr < lib_base or runtime_addr >= lib_end:
                 continue
             code_map.add(
