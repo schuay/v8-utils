@@ -151,3 +151,24 @@ def test_rendering(tmp_path, build):
     assert callers.splitlines()[-1].endswith(f"<- f ({where}:5)")
     flame = render.format_flamegraph(samply.flamegraph(p, min_pct=0, native_root=True))
     assert flame.splitlines()[-1].endswith("f;sq [inl] 2.0")
+
+
+def test_native_annotate_interleaves_lines_and_inlines(tmp_path, build):
+    from v8_utils.render import samply as render
+
+    binary, _, rva = build
+    p = _profile(tmp_path, build, ([("t", 0, rva)], 1, 2000))
+    a = samply.annotate(p, "f", objdump=disasm.find_objdump())
+    chains = [[f.function for f in line.chain] for line in a.lines if line.chain]
+    assert ["sq", "f"] in chains and ["f"] in chains
+    # Each source line precedes the instructions it describes.
+    i = next(
+        i
+        for i, line in enumerate(a.lines)
+        if [f.function for f in line.chain] == ["sq", "f"]
+    )
+    assert a.lines[i + 1].address is not None
+    # The source file is on disk, so the line's text is shown.
+    assert a.lines[i].text == "return x * x;"
+    listing = render.format_annotation(a, min_pct=0, context=50)
+    assert f"; {binary.parent.name}/t.c:2  sq <- f  return x * x;" in listing

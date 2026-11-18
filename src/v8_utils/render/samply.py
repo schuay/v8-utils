@@ -193,10 +193,21 @@ def _annotation_header(a: samply.Annotation) -> list[str]:
     return lines
 
 
+def _source_line(line: samply.AnnotatedLine) -> str:
+    if not line.chain:
+        return line.text
+    inner = line.chain[0]
+    where = location((inner.file, inner.line) if inner.line else None)
+    names = " <- ".join(
+        short_name(samply.Function(f.function, "native", None)) for f in line.chain
+    )
+    return "  ".join(part for part in (where, names, line.text) if part)
+
+
 def _listing_line(a: samply.Annotation, i: int) -> str:
     line = a.lines[i]
     if line.address is None:
-        return f"{i + 1:6}  {'':6}  {'':12}  ; {line.text}"
+        return f"{i + 1:6}  {'':6}  {'':12}  ; {_source_line(line)}"
     total = a.objects[a.selected].ms
     pct = f"{_pct(line.ms, total):5.1f}%" if line.ms else ""
     return f"{i + 1:6}  {pct:>6}  {line.address:12x}  {line.text}"

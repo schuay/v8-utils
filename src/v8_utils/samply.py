@@ -746,8 +746,10 @@ class CodeObject:
 @dataclass(frozen=True)
 class AnnotatedLine:
     address: int | None  # None for a source position line
-    text: str
+    text: str  # for a native source line: the source text, if found
     ms: float
+    # Native source lines: the inline chain from here on, innermost first.
+    chain: tuple[dwarf.InlineFrame, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -827,7 +829,7 @@ def annotate(
     lines = (
         _annotate_jit(profile, chosen, pcs, objdump)
         if chosen.jit is not None
-        else _annotate_native(chosen, pcs, objdump)
+        else _annotate_native(profile, chosen, pcs, objdump)
     )
     placed = sum(line.ms for line in lines)
     return Annotation(
@@ -930,7 +932,7 @@ def _annotate_jit(
 
 
 def _annotate_native(
-    obj: CodeObject, pcs: dict[int, float], objdump: str
+    profile: Profile, obj: CodeObject, pcs: dict[int, float], objdump: str
 ) -> list[AnnotatedLine]:
     lib, table, sym = obj.native
     path = Path(lib["path"])
@@ -949,10 +951,24 @@ def _annotate_native(
             return f"+{offset:#x}"
         return f"{target.name}+{offset:#x}" if offset else target.name
 
-    return [
-        AnnotatedLine(i.address, _relabel(i.text, name_at), pcs.get(i.address, 0.0))
-        for i in insns
-    ]
+    chains: dict[int, tuple[dwarf.InlineFrame, ...]] = {}
+    symbolizer = find_symbolizer()
+    if table.dwarf_file is not None and symbolizer is not None:
+        rvas = {i.address - table.text_vmaddr for i in insns}
+        chains = inline_chains(table, lib["codeId"], rvas, symbolizer)
+    source = _SourceReader(profile.path.parent)
+    lines: list[AnnotatedLine] = []
+    last = None
+    for i in insns:
+        chain = chains.get(i.address, ())
+        if chain and chain != last:
+            last = chain
+            inner = chain[0]
+            text = source.line(inner.file, inner.line) if inner.line else None
+            lines.append(AnnotatedLine(None, text or "", 0.0, chain))
+        text = _relabel(i.text, name_at)
+        lines.append(AnnotatedLine(i.address, text, pcs.get(i.address, 0.0)))
+    return lines
 
 
 class _SourceReader:
