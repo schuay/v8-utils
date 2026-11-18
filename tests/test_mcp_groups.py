@@ -18,13 +18,21 @@ def _only(*groups: str) -> dict[str, bool]:
     return {n: n in groups for n in GROUPS}
 
 
-@pytest.mark.parametrize(("platform", "expected"), [("linux", True), ("darwin", False)])
-def test_perf_group_defaults_by_platform(monkeypatch, platform, expected):
+@pytest.mark.parametrize(
+    ("platform", "group", "expected"),
+    [
+        ("linux", "perf", True),
+        ("darwin", "perf", False),
+        ("linux", "samply", False),
+        ("darwin", "samply", True),
+    ],
+)
+def test_profiler_groups_default_by_platform(monkeypatch, platform, group, expected):
     from v8_utils import mcp_tools
 
     monkeypatch.setattr(sys, "platform", platform)
     try:
-        assert importlib.reload(mcp_tools).GROUPS["perf"].default is expected
+        assert importlib.reload(mcp_tools).GROUPS[group].default is expected
     finally:
         monkeypatch.undo()
         importlib.reload(mcp_tools)

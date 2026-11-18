@@ -1,5 +1,50 @@
-"""Reading samply profiles: threads, samples and classified frames."""
+"""Reading samply profiles: threads, samples, classified and symbolized
+frames, and the analyses behind the samply_* tools."""
 
-from ..samply import Frame, Profile, Sample, Thread, parse_jit_name
+from ..samply import (
+    Callers,
+    CallPath,
+    DiffRow,
+    Flamegraph,
+    Frame,
+    Function,
+    Hotspot,
+    Hotspots,
+    Profile,
+    Sample,
+    StackPath,
+    Thread,
+    ThreadSummary,
+    callers,
+    diff,
+    flamegraph,
+    hotspots,
+    load,
+    match_functions,
+    parse_jit_name,
+    threads,
+)
 
-__all__ = ["Frame", "Profile", "Sample", "Thread", "parse_jit_name"]
+__all__ = [
+    "CallPath",
+    "Callers",
+    "DiffRow",
+    "Flamegraph",
+    "Frame",
+    "Function",
+    "Hotspot",
+    "Hotspots",
+    "Profile",
+    "Sample",
+    "StackPath",
+    "Thread",
+    "ThreadSummary",
+    "callers",
+    "diff",
+    "flamegraph",
+    "hotspots",
+    "load",
+    "match_functions",
+    "parse_jit_name",
+    "threads",
+]

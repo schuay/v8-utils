@@ -111,7 +111,8 @@ def register(mcp: FastMCP) -> None:
                     ' Options: "perf" records with the configured profiler:'
                     " linux-perf returns the perf.data path for"
                     " perf_hotspots/perf_annotate, samply (the macOS default)"
-                    " returns a recording directory;"
+                    " returns a recording directory for samply_hotspots and the"
+                    " other samply_* tools;"
                     ' "perf_upload" records with linux-perf and uploads via pprof;'
                     ' "v8log" records a v8.log and returns its path for'
                     " v8log_analyze. Every record mode requires exactly one"

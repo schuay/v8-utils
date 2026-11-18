@@ -486,14 +486,20 @@ def flamegraph(
     thread: str | int | None = None,
     *,
     focus: str | None = None,
-    depth: int = 12,
+    depth: int = 30,
     min_pct: float = 0.5,
     wall: bool = False,
+    native_root: bool = False,
 ) -> Flamegraph:
     """Collapsed stacks: root-to-leaf paths with their time, cut to `depth`
     frames below the root (or below the focused function, whose subtree is
     then the whole graph). Paths under min_pct of the thread's time are
-    dropped."""
+    dropped.
+
+    Unless native_root, the native frames above a stack's outermost JIT
+    frame (process start, the shell's message loop) are left out, so the
+    depth goes to the JS side.
+    """
     t = _select_thread(profile, thread)
     matched = match_functions(profile, t, focus) if focus else None
     paths: dict[tuple[Function, ...], float] = {}
@@ -509,6 +515,9 @@ def flamegraph(
             if start is None:
                 continue
             frames = frames[start:]
+        elif not native_root:
+            first_jit = next((i for i, f in enumerate(frames) if f.kind != "native"), 0)
+            frames = frames[first_jit:]
         key = tuple(Function.of(f) for f in frames[:depth])
         paths[key] = paths.get(key, 0.0) + w
     cutoff = total * min_pct / 100

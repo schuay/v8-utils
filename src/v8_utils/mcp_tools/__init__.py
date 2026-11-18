@@ -54,6 +54,7 @@ class Group(NamedTuple):
 
 
 _LINUX = sys.platform.startswith("linux")
+_DARWIN = sys.platform == "darwin"
 
 GROUPS: dict[str, Group] = {
     "gerrit": Group("gerrit", True, None),
@@ -62,6 +63,7 @@ GROUPS: dict[str, Group] = {
     "performance": Group("performance", True, "analysis"),
     "pinpoint": Group("pinpoint", True, "pinpoint"),
     "repo_git": Group("repo_git", True, None),
+    "samply": Group("samply", _DARWIN, None),
     "worktree": Group("worktree", False, None),
 }
 
