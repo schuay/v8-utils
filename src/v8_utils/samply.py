@@ -16,6 +16,7 @@ from __future__ import annotations
 import bisect
 import gzip
 import json
+import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -303,3 +304,272 @@ class Profile:
             f"{problem} thread {name_or_tid!r}; threads: "
             + ", ".join(f"{t.name} ({t.tid})" for t in self.threads)
         )
+
+
+# ---------- Analyses ----------
+#
+# Every analysis weighs samples by CPU time by default. With wall=True it
+# weighs them by elapsed time instead: samply folds a blocked stretch into
+# one sample with a weight of that many intervals and no CPU time.
+
+_profile_cache: dict[tuple[str, float], Profile] = {}
+
+
+def load(path: Path | str) -> Profile:
+    """Profile.load, cached per file and mtime for repeated tool calls."""
+    file = Path(path).expanduser()
+    if file.is_dir():
+        file = file / PROFILE_NAME
+    key = (str(file), file.stat().st_mtime)
+    if key not in _profile_cache:
+        _profile_cache[key] = Profile.load(file)
+    return _profile_cache[key]
+
+
+def _weight_ms(sample: Sample, interval_ms: float, wall: bool) -> float:
+    return sample.weight * interval_ms if wall else sample.cpu_us / 1000
+
+
+def _select_thread(profile: Profile, thread: str | int | None) -> Thread:
+    return profile.main_thread() if thread is None else profile.thread(thread)
+
+
+@dataclass(frozen=True)
+class Function:
+    """What analyses aggregate by: a frame without its address. With merged
+    tiers, the code flavour fields are cleared too."""
+
+    name: str
+    kind: str
+    lib: str | None
+    tier: str | None = None
+    osr: bool = False
+    specialized: bool = False
+
+    @classmethod
+    def of(cls, frame: Frame, merge_tiers: bool = False) -> Function:
+        if merge_tiers:
+            return cls(frame.name, frame.kind, frame.lib)
+        return cls(
+            frame.name, frame.kind, frame.lib, frame.tier, frame.osr, frame.specialized
+        )
+
+
+@dataclass(frozen=True)
+class Hotspot:
+    function: Function
+    self_ms: float
+    total_ms: float
+
+
+@dataclass(frozen=True)
+class Hotspots:
+    thread: Thread
+    wall: bool
+    total_ms: float
+    rows: list[Hotspot]  # by self time, descending
+
+
+def hotspots(
+    profile: Profile,
+    thread: str | int | None = None,
+    *,
+    n: int = 30,
+    wall: bool = False,
+    merge_tiers: bool = False,
+    by_lib: bool = False,
+    filter: str | None = None,
+) -> Hotspots:
+    """Self and total time per function (or per library with by_lib)."""
+    t = _select_thread(profile, thread)
+    self_ms: dict[Function, float] = {}
+    total_ms: dict[Function, float] = {}
+    total = 0.0
+    for s in t.samples():
+        w = _weight_ms(s, profile.interval_ms, wall)
+        total += w
+        if not s.frames or not w:
+            continue
+        if by_lib:
+            keys = [Function(f.lib or "(unknown)", "lib", f.lib) for f in s.frames]
+        else:
+            keys = [Function.of(f, merge_tiers) for f in s.frames]
+        self_ms[keys[0]] = self_ms.get(keys[0], 0.0) + w
+        for k in set(keys):
+            total_ms[k] = total_ms.get(k, 0.0) + w
+    rows = [
+        Hotspot(k, self_ms.get(k, 0.0), v)
+        for k, v in total_ms.items()
+        if filter is None or filter in k.name
+    ]
+    rows.sort(key=lambda r: (-r.self_ms, -r.total_ms, r.function.name))
+    return Hotspots(t, wall, total, rows[:n])
+
+
+def match_functions(profile: Profile, thread: Thread, symbol: str) -> set[str]:
+    """Function names in `thread` that `symbol` selects: the exact name when
+    one matches, otherwise every name containing it."""
+    names = {f.name for s in thread.samples() for f in s.frames}
+    if symbol in names:
+        return {symbol}
+    found = {n for n in names if symbol in n}
+    if not found:
+        raise ValueError(f"no function matching {symbol!r} in thread {thread.name}")
+    return found
+
+
+@dataclass(frozen=True)
+class CallPath:
+    callers: tuple[Function, ...]  # nearest caller first
+    ms: float
+
+
+@dataclass(frozen=True)
+class Callers:
+    thread: Thread
+    wall: bool
+    total_ms: float  # all samples in the thread
+    matched: set[str]
+    inclusive_ms: float  # samples with a matched function on the stack
+    paths: list[CallPath]  # heaviest first
+
+
+def callers(
+    profile: Profile,
+    symbol: str,
+    thread: str | int | None = None,
+    *,
+    depth: int = 5,
+    n: int = 20,
+    wall: bool = False,
+) -> Callers:
+    """The call paths leading into functions matching `symbol`, `depth`
+    callers deep, weighted by the time spent in (and under) the function.
+    The outermost matched frame counts, so recursion is not double-counted."""
+    t = _select_thread(profile, thread)
+    matched = match_functions(profile, t, symbol)
+    paths: dict[tuple[Function, ...], float] = {}
+    total = inclusive = 0.0
+    for s in t.samples():
+        w = _weight_ms(s, profile.interval_ms, wall)
+        total += w
+        hits = [i for i, f in enumerate(s.frames) if f.name in matched]
+        if not hits or not w:
+            continue
+        inclusive += w
+        outer = hits[-1]
+        key = tuple(Function.of(f) for f in s.frames[outer + 1 : outer + 1 + depth])
+        paths[key] = paths.get(key, 0.0) + w
+    ordered = sorted(paths.items(), key=lambda kv: -kv[1])[:n]
+    return Callers(
+        t, wall, total, matched, inclusive, [CallPath(k, v) for k, v in ordered]
+    )
+
+
+@dataclass(frozen=True)
+class StackPath:
+    frames: tuple[Function, ...]  # root first
+    ms: float
+
+
+@dataclass(frozen=True)
+class Flamegraph:
+    thread: Thread
+    wall: bool
+    total_ms: float
+    focus: set[str] | None
+    paths: list[StackPath]  # heaviest first
+
+
+def flamegraph(
+    profile: Profile,
+    thread: str | int | None = None,
+    *,
+    focus: str | None = None,
+    depth: int = 12,
+    min_pct: float = 0.5,
+    wall: bool = False,
+) -> Flamegraph:
+    """Collapsed stacks: root-to-leaf paths with their time, cut to `depth`
+    frames below the root (or below the focused function, whose subtree is
+    then the whole graph). Paths under min_pct of the thread's time are
+    dropped."""
+    t = _select_thread(profile, thread)
+    matched = match_functions(profile, t, focus) if focus else None
+    paths: dict[tuple[Function, ...], float] = {}
+    total = 0.0
+    for s in t.samples():
+        w = _weight_ms(s, profile.interval_ms, wall)
+        total += w
+        if not w:
+            continue
+        frames = s.frames[::-1]
+        if matched is not None:
+            start = next((i for i, f in enumerate(frames) if f.name in matched), None)
+            if start is None:
+                continue
+            frames = frames[start:]
+        key = tuple(Function.of(f) for f in frames[:depth])
+        paths[key] = paths.get(key, 0.0) + w
+    cutoff = total * min_pct / 100
+    kept = sorted(
+        (StackPath(k, v) for k, v in paths.items() if v >= cutoff),
+        key=lambda p: -p.ms,
+    )
+    return Flamegraph(t, wall, total, matched, kept)
+
+
+@dataclass(frozen=True)
+class DiffRow:
+    function: Function
+    base_pct: float | None  # None: absent from the baseline
+    after_pct: float | None  # None: absent from the experiment
+
+
+def diff(
+    baseline: Profile,
+    experiment: Profile,
+    thread: str | int | None = None,
+    *,
+    n: int = 30,
+    wall: bool = False,
+    merge_tiers: bool = True,
+) -> list[DiffRow]:
+    """Per-function self time as a share of each profile's thread time,
+    sorted by the size of the change. Tiers are merged by default, so a
+    function that tiered up differently still lines up."""
+
+    def shares(profile: Profile) -> dict[Function, float]:
+        h = hotspots(profile, thread, n=sys.maxsize, wall=wall, merge_tiers=merge_tiers)
+        return {
+            r.function: 100 * r.self_ms / h.total_ms
+            for r in h.rows
+            if r.self_ms and h.total_ms
+        }
+
+    a, b = shares(baseline), shares(experiment)
+    rows = [DiffRow(k, a.get(k), b.get(k)) for k in a.keys() | b.keys()]
+    rows.sort(
+        key=lambda r: (-abs((r.after_pct or 0) - (r.base_pct or 0)), r.function.name)
+    )
+    return rows[:n]
+
+
+@dataclass(frozen=True)
+class ThreadSummary:
+    thread: Thread
+    wall_ms: float
+    cpu_ms: float
+    top: list[Hotspot]  # by self CPU time
+
+
+def threads(profile: Profile, *, top: int = 3) -> list[ThreadSummary]:
+    """Every thread's wall and CPU time and its hottest functions, busiest
+    first."""
+    out = []
+    for t in profile.threads:
+        wall_ms = sum(s.weight for s in t.samples()) * profile.interval_ms
+        h = hotspots(profile, t.tid, n=top)
+        out.append(ThreadSummary(t, wall_ms, t.cpu_us() / 1000, h.rows))
+    out.sort(key=lambda s: -s.cpu_ms)
+    return out
