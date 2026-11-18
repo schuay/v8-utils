@@ -12,7 +12,9 @@ from ..api import samply
 from ..render import samply as render
 from ._shared import _text_result
 
-SUMMARY = "samply_* (macOS samply recordings: hotspots, callers, flamegraph, diff)"
+SUMMARY = (
+    "samply_* (macOS samply recordings: hotspots, callers, flamegraph, diff, annotate)"
+)
 
 # samply_hotspots remembers its most recent rows per recording so that later
 # calls can name a function as "#3".
@@ -190,6 +192,78 @@ def register(mcp: FastMCP) -> None:
             merge_tiers=merge_tiers,
         )
         return _text_result(render.format_diff(rows))
+
+    @mcp.tool()
+    def samply_annotate(
+        recording: Annotated[str, Field(description=RECORDING_ARG)],
+        symbol: Annotated[str, Field(description=SYMBOL_ARG)],
+        code: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "which code object to annotate, by its number in the listed"
+                    " code objects (default: the hottest)"
+                )
+            ),
+        ] = None,
+        thread: Annotated[str | None, Field(description=THREAD_ARG)] = None,
+        min_pct: Annotated[
+            float, Field(description="minimum % of the code object to count as hot")
+        ] = 0.5,
+        context: Annotated[
+            int, Field(description="lines of context around each hot cluster")
+        ] = 8,
+        wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+    ) -> CallToolResult:
+        """Annotated disassembly: self time per instruction of one code object
+        of a function, with the hottest instructions and hot blocks (+/-context
+        lines, sorted by peak heat).
+
+        A JS function has one code object per tier and recompilation, all
+        listed; JIT code is interleaved with its JS source positions
+        ("; script:line:col", plus the source line when the script is on
+        disk). Native code comes from the binary the recording used. Samples
+        are exact PCs, so heat can sit one instruction after a slow load.
+
+        Line numbers index the full listing: use samply_annotate_read_around
+        to read more of it.
+        """
+        a = samply.annotate(
+            samply.load(recording),
+            _resolve(recording, symbol),
+            _thread(thread),
+            code=code,
+            wall=wall,
+        )
+        return _text_result(
+            render.format_annotation(a, min_pct=min_pct, context=context)
+        )
+
+    @mcp.tool()
+    def samply_annotate_read_around(
+        recording: Annotated[str, Field(description=RECORDING_ARG)],
+        symbol: Annotated[str, Field(description=SYMBOL_ARG)],
+        line: Annotated[int, Field(description="1-based listing line to centre on")],
+        code: Annotated[
+            int | None,
+            Field(description="code object number, as passed to samply_annotate"),
+        ] = None,
+        context: Annotated[
+            int, Field(description="lines before and after to include")
+        ] = 30,
+        thread: Annotated[str | None, Field(description=THREAD_ARG)] = None,
+        wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+    ) -> CallToolResult:
+        """A window of the samply_annotate listing around a line, for reading
+        beyond the hot blocks."""
+        a = samply.annotate(
+            samply.load(recording),
+            _resolve(recording, symbol),
+            _thread(thread),
+            code=code,
+            wall=wall,
+        )
+        return _text_result(render.format_read_around(a, line, context=context))
 
     @mcp.tool()
     def samply_threads(

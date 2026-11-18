@@ -57,6 +57,11 @@ class JitDump:
         self.machine = machine
         self.loads = loads
         self._starts = [load.start for load in loads]
+        # By runtime address; for reused addresses the later load wins.
+        self._by_address = sorted(
+            range(len(loads)), key=lambda i: (loads[i].code_addr, i)
+        )
+        self._addresses = [loads[i].code_addr for i in self._by_address]
 
     @classmethod
     def read(cls, path: Path) -> JitDump:
@@ -102,6 +107,14 @@ class JitDump:
             return None
         load = self.loads[i]
         return load if offset < load.start + len(load.code) else None
+
+    def load_containing(self, address: int) -> CodeLoad | None:
+        """The code load whose code holds runtime `address`."""
+        i = bisect.bisect_right(self._addresses, address) - 1
+        if i < 0:
+            return None
+        load = self.loads[self._by_address[i]]
+        return load if address < load.code_addr + len(load.code) else None
 
 
 def _read_positions(

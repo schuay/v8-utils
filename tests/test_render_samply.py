@@ -1,9 +1,23 @@
 """Name and tier formatting for the samply_* tables."""
 
-import pytest
+from pathlib import Path
 
-from v8_utils.api.samply import Function
-from v8_utils.render.samply import short_name, tier_label
+import pytest
+from samply_profiles import raw_profile
+
+from v8_utils.api.samply import (
+    AnnotatedLine,
+    Annotation,
+    CodeObject,
+    Function,
+    Profile,
+)
+from v8_utils.render.samply import (
+    format_annotation,
+    format_read_around,
+    short_name,
+    tier_label,
+)
 
 
 @pytest.mark.parametrize(
@@ -38,3 +52,36 @@ def test_tier_label():
         "turbofan ctx"
     )
     assert tier_label(Function("Add", "builtin", None)) == ""
+
+
+def _annotation(heat: list[float]):
+    f = Function("f a.js:1:1", "js", "jit-1.dump", "turbofan")
+    lines = [AnnotatedLine(0x1000 + 4 * i, f"insn{i}", ms) for i, ms in enumerate(heat)]
+    profile = Profile(raw_profile(("d8", 1, [])), Path("/rec/p.json"), symbolize=False)
+    (thread,) = profile.threads
+    obj = CodeObject(f, "JS:*f a.js:1:1", sum(heat))
+    return Annotation(thread, False, {f.name}, [obj], 0, lines, 0.0)
+
+
+def test_hot_blocks_merge_and_order_by_peak():
+    heat = [0.0] * 30
+    heat[3], heat[5], heat[20] = 10.0, 1.0, 50.0
+    text = format_annotation(_annotation(heat), min_pct=1, context=2, top=3)
+    blocks = [line for line in text.splitlines() if line.startswith("Hot block")]
+    # Lines 4 and 6 are within context of each other and form one block.
+    assert blocks == [
+        "Hot block #1 (lines 19-23, peak 82.0%):",
+        "Hot block #2 (lines 2-8, peak 16.4%):",
+    ]
+    assert "    21   82.0%          1050  insn20" in text
+
+
+def test_read_around_bounds():
+    a = _annotation([1.0] * 5)
+    text = format_read_around(a, 1, context=1)
+    assert text.splitlines()[-2:] == [
+        "     1   20.0%          1000  insn0",
+        "     2   20.0%          1004  insn1",
+    ]
+    with pytest.raises(ValueError, match="line must be 1..5"):
+        format_read_around(a, 6)

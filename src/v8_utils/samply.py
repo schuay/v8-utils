@@ -16,12 +16,14 @@ from __future__ import annotations
 import bisect
 import gzip
 import json
+import re
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import macho
+from . import config, disasm, macho
+from .jitdump import CodeLoad, JitDump
 from .symbols import Symbol, read_symbols, symbol_file
 from .v8log import TIER_BY_MARKER
 
@@ -93,10 +95,10 @@ class LibSymbols:
     def __init__(self, symbols: list[Symbol], text_vmaddr: int) -> None:
         self._symbols = symbols
         self._addresses = [s.address for s in symbols]
-        self._text_vmaddr = text_vmaddr
+        self.text_vmaddr = text_vmaddr
 
     def lookup(self, rva: int) -> Symbol | None:
-        address = rva + self._text_vmaddr
+        address = rva + self.text_vmaddr
         i = bisect.bisect_right(self._addresses, address) - 1
         if i < 0 or address >= self._symbols[i].address + self._symbols[i].size:
             return None
@@ -264,6 +266,7 @@ class Profile:
         self.interval_ms: float = meta["interval"]
         self.product: str = meta.get("product", "")
         self.libs: list[dict] = raw["libs"]
+        self._jitdumps: dict[str, JitDump] = {}
         natives = NativeNames(self.libs) if symbolize else None
         self.threads = [Thread(t, self.libs, natives) for t in raw["threads"]]
         #: Library name -> why its frames stay "<lib>+<rva>".
@@ -574,3 +577,245 @@ def threads(profile: Profile, *, top: int = 3) -> list[ThreadSummary]:
         out.append(ThreadSummary(t, wall_ms, t.cpu_us() / 1000, h.rows))
     out.sort(key=lambda s: -s.cpu_ms)
     return out
+
+
+# ---------- Annotate ----------
+
+
+@dataclass(frozen=True)
+class CodeObject:
+    """One body of code a function ran in: a JIT code load (a function has
+    one per tier and per recompilation) or a native symbol."""
+
+    function: Function
+    label: str
+    ms: float
+    jit: CodeLoad | None = None
+    native: tuple[dict, LibSymbols, Symbol] | None = None  # lib, its table, symbol
+
+
+@dataclass(frozen=True)
+class AnnotatedLine:
+    address: int | None  # None for a source position line
+    text: str
+    ms: float
+
+
+@dataclass(frozen=True)
+class Annotation:
+    thread: Thread
+    wall: bool
+    matched: set[str]
+    objects: list[CodeObject]  # hottest first
+    selected: int  # index into objects
+    lines: list[AnnotatedLine]
+    unplaced_ms: float  # samples at no instruction boundary of the listing
+
+
+def _jitdump(profile: Profile, lib_name: str) -> JitDump:
+    path = profile.path.parent / lib_name
+    key = str(path)
+    if key not in profile._jitdumps:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"{path} not found: annotating JIT code needs the jitdump that"
+                " --perf-prof wrote next to the profile"
+            )
+        profile._jitdumps[key] = JitDump.read(path)
+    return profile._jitdumps[key]
+
+
+def annotate(
+    profile: Profile,
+    symbol: str,
+    thread: str | int | None = None,
+    *,
+    code: int | None = None,
+    wall: bool = False,
+    objdump: str | None = None,
+) -> Annotation:
+    """Per-instruction self time in one code object of the functions
+    matching `symbol`: the hottest, or objects[code - 1]."""
+    t = _select_thread(profile, thread)
+    matched = match_functions(profile, t, symbol)
+    by_object: dict[tuple, dict[int, float]] = {}
+    objects: dict[tuple, CodeObject] = {}
+    for s in t.samples():
+        w = _weight_ms(s, profile.interval_ms, wall)
+        if not s.frames or not w or s.frames[0].name not in matched:
+            continue
+        leaf = s.frames[0]
+        located = _locate(profile, leaf)
+        if located is None:
+            continue
+        key, pc, obj = located
+        objects.setdefault(key, obj)
+        pcs = by_object.setdefault(key, {})
+        pcs[pc] = pcs.get(pc, 0.0) + w
+    if not objects:
+        raise ValueError(
+            f"no samples with {', '.join(sorted(matched))} as the leaf in a code"
+            " object that can be disassembled"
+        )
+    ranked = sorted(
+        (
+            CodeObject(o.function, o.label, sum(by_object[k].values()), o.jit, o.native)
+            for k, o in objects.items()
+        ),
+        key=lambda o: -o.ms,
+    )
+    index = 0 if code is None else code - 1
+    if not 0 <= index < len(ranked):
+        raise ValueError(f"code must be 1..{len(ranked)}")
+    chosen = ranked[index]
+    pcs = by_object[_object_key(chosen)]
+    objdump = objdump or disasm.find_objdump(config.load().repos["v8"].path)
+    lines = (
+        _annotate_jit(profile, chosen, pcs, objdump)
+        if chosen.jit is not None
+        else _annotate_native(chosen, pcs, objdump)
+    )
+    placed = sum(line.ms for line in lines)
+    return Annotation(
+        t, wall, matched, ranked, index, lines, sum(pcs.values()) - placed
+    )
+
+
+def _object_key(obj: CodeObject) -> tuple:
+    if obj.jit is not None:
+        return ("jit", obj.jit.start)
+    lib, _, sym = obj.native
+    return ("native", lib["name"], sym.address)
+
+
+def _locate(profile: Profile, leaf: Frame) -> tuple[tuple, int, CodeObject] | None:
+    """The code object a leaf frame ran in, and its PC there: a runtime
+    address for JIT code, a link-time address for native code."""
+    if leaf.lib is None or leaf.address is None:
+        return None
+    if _is_jitdump(leaf.lib):
+        load = _jitdump(profile, leaf.lib).load_at(leaf.address)
+        if load is None:
+            return None
+        obj = CodeObject(Function.of(leaf), load.name, 0.0, jit=load)
+        return _object_key(obj), load.code_addr + leaf.address - load.start, obj
+    lib = next((lib for lib in profile.libs if lib["name"] == leaf.lib), None)
+    if lib is None:
+        return None
+    table = lib_symbols(Path(lib["path"]), lib["codeId"])
+    if isinstance(table, str):
+        return None
+    sym = table.lookup(leaf.address)
+    if sym is None:
+        return None
+    obj = CodeObject(
+        Function.of(leaf), f"{leaf.lib} {sym.name}", 0.0, native=(lib, table, sym)
+    )
+    return _object_key(obj), leaf.address + table.text_vmaddr, obj
+
+
+# An address operand in llvm-objdump's listing, with its label if it has one.
+# Immediates are written "#0x...", so they don't match.
+_ADDRESS_OPERAND = re.compile(r"(?<![#\w])0x([0-9a-f]+)(?: <[^>]*>)?")
+
+
+def _relabel(text: str, name_at: Callable[[int], str | None]) -> str:
+    """Label address operands with name_at(address), or drop the label
+    llvm-objdump guessed; the files it sees have no useful symbols."""
+
+    def label(m: re.Match) -> str:
+        name = name_at(int(m.group(1), 16))
+        return f"0x{m.group(1)} <{name}>" if name else f"0x{m.group(1)}"
+
+    return _ADDRESS_OPERAND.sub(label, text)
+
+
+def _annotate_jit(
+    profile: Profile, obj: CodeObject, pcs: dict[int, float], objdump: str
+) -> list[AnnotatedLine]:
+    load = obj.jit
+    dump = _jitdump(profile, obj.function.lib)
+    machine = dump.machine
+
+    def name_at(address: int) -> str | None:
+        if load.code_addr <= address < load.code_addr + len(load.code):
+            return f"+{address - load.code_addr:#x}"
+        target = dump.load_containing(address)
+        if target is None:
+            return None
+        offset = address - target.code_addr
+        return f"{target.name}+{offset:#x}" if offset else target.name
+
+    source = _SourceReader(profile.path.parent)
+    lines: list[AnnotatedLine] = []
+    last = None
+    for insn in disasm.disassemble_code(load.code, load.code_addr, machine, objdump):
+        position = load.position_at(insn.address - load.code_addr)
+        if position is not None and (position.script, position.line) != last:
+            last = (position.script, position.line)
+            text = source.line(position.script, position.line)
+            where = f"{position.script}:{position.line}:{position.column}"
+            lines.append(
+                AnnotatedLine(None, f"{where}  {text}" if text else where, 0.0)
+            )
+        text = _relabel(insn.text, name_at)
+        lines.append(AnnotatedLine(insn.address, text, pcs.get(insn.address, 0.0)))
+    return lines
+
+
+def _annotate_native(
+    obj: CodeObject, pcs: dict[int, float], objdump: str
+) -> list[AnnotatedLine]:
+    lib, table, sym = obj.native
+    path = Path(lib["path"])
+    image = next(i for i in macho.images(path) if i.uuid == lib["codeId"])
+    with macho.thin_file(path, image) as thin:
+        insns = disasm.disassemble_range(
+            thin, sym.address, sym.address + sym.size, objdump
+        )
+
+    def name_at(address: int) -> str | None:
+        target = table.lookup(address - table.text_vmaddr)
+        if target is None:
+            return None
+        offset = address - target.address
+        if target == sym:
+            return f"+{offset:#x}"
+        return f"{target.name}+{offset:#x}" if offset else target.name
+
+    return [
+        AnnotatedLine(i.address, _relabel(i.text, name_at), pcs.get(i.address, 0.0))
+        for i in insns
+    ]
+
+
+class _SourceReader:
+    """Script lines for source positions. Scripts are named as V8 saw them:
+    absolute, or relative to the directory d8 ran in, which a jsb
+    recording's meta.json names."""
+
+    def __init__(self, rec_dir: Path) -> None:
+        self._base: Path | None = None
+        meta = rec_dir / "meta.json"
+        if meta.is_file():
+            self._base = Path(json.loads(meta.read_text())["suite_dir"])
+        self._files: dict[str, list[str] | None] = {}
+
+    def line(self, script: str, line: int) -> str | None:
+        if script not in self._files:
+            self._files[script] = self._read(script)
+        lines = self._files[script]
+        if lines is None or not 0 < line <= len(lines):
+            return None
+        return lines[line - 1].strip()
+
+    def _read(self, script: str) -> list[str] | None:
+        path = Path(script)
+        if not path.is_absolute():
+            if self._base is None:
+                return None
+            path = self._base / path
+        try:
+            return path.read_text(errors="replace").splitlines()
+        except OSError:
+            return None

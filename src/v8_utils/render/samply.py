@@ -142,3 +142,79 @@ def format_threads(summary: list[samply.ThreadSummary]) -> str:
             f"  {s.thread.name:<16}  {top}"
         )
     return "\n".join(lines)
+
+
+def _annotation_header(a: samply.Annotation) -> list[str]:
+    chosen = a.objects[a.selected]
+    lines = [
+        _basis(a.thread, a.wall, sum(o.ms for o in a.objects))
+        + f" in {', '.join(sorted(a.matched))}",
+        "",
+        "Code objects (pass code=N to annotate another):",
+    ]
+    for i, o in enumerate(a.objects, 1):
+        mark = "*" if i == a.selected + 1 else " "
+        tier = tier_label(o.function)
+        lines.append(
+            f" {mark}{i:>3}  {o.ms:8.1f} ms  {tier + '  ' if tier else ''}{o.label}"
+        )
+    lines.append("")
+    lines.append(f"code={a.selected + 1}: {chosen.ms:.1f} ms, {len(a.lines)} lines")
+    if a.unplaced_ms:
+        lines.append(
+            f"warning: {a.unplaced_ms:.1f} ms of samples fell on no instruction"
+            " boundary of this listing"
+        )
+    return lines
+
+
+def _listing_line(a: samply.Annotation, i: int) -> str:
+    line = a.lines[i]
+    if line.address is None:
+        return f"{i + 1:6}  {'':6}  {'':12}  ; {line.text}"
+    total = a.objects[a.selected].ms
+    pct = f"{_pct(line.ms, total):5.1f}%" if line.ms else ""
+    return f"{i + 1:6}  {pct:>6}  {line.address:12x}  {line.text}"
+
+
+def format_annotation(
+    a: samply.Annotation, min_pct: float = 0.5, context: int = 8, top: int = 20
+) -> str:
+    """The hottest instructions, then each block of instructions at or above
+    min_pct, widened by `context` lines and ordered by peak heat. Line
+    numbers index the full listing, for samply_annotate_read_around."""
+    total = a.objects[a.selected].ms
+    out = _annotation_header(a)
+    hot = sorted(
+        (i for i, line in enumerate(a.lines) if line.ms),
+        key=lambda i: -a.lines[i].ms,
+    )
+    out += ["", "Top instructions:", f"{'line':>6}  {'pct':>6}  {'address':>12}  asm"]
+    out += [_listing_line(a, i) for i in hot[:top]]
+
+    threshold = total * min_pct / 100
+    blocks: list[list[int]] = []
+    for i in sorted(i for i in hot if a.lines[i].ms >= threshold):
+        lo, hi = max(0, i - context), min(len(a.lines) - 1, i + context)
+        if blocks and lo <= blocks[-1][1] + 1:
+            blocks[-1][1] = max(blocks[-1][1], hi)
+        else:
+            blocks.append([lo, hi])
+    blocks.sort(key=lambda b: -max(a.lines[i].ms for i in range(b[0], b[1] + 1)))
+    for n, (lo, hi) in enumerate(blocks, 1):
+        peak = max(a.lines[i].ms for i in range(lo, hi + 1))
+        out += [
+            "",
+            f"Hot block #{n} (lines {lo + 1}-{hi + 1}, peak {_pct(peak, total):.1f}%):",
+        ]
+        out += [_listing_line(a, i) for i in range(lo, hi + 1)]
+    return "\n".join(out)
+
+
+def format_read_around(a: samply.Annotation, line: int, context: int = 30) -> str:
+    """Lines line-context .. line+context of the listing (1-based)."""
+    if not 1 <= line <= len(a.lines):
+        raise ValueError(f"line must be 1..{len(a.lines)}")
+    lo, hi = max(0, line - 1 - context), min(len(a.lines), line + context)
+    out = _annotation_header(a) + [""]
+    return "\n".join(out + [_listing_line(a, i) for i in range(lo, hi)])

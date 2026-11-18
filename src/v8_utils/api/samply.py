@@ -2,8 +2,11 @@
 frames, and the analyses behind the samply_* tools."""
 
 from ..samply import (
+    AnnotatedLine,
+    Annotation,
     Callers,
     CallPath,
+    CodeObject,
     DiffRow,
     Flamegraph,
     Frame,
@@ -15,6 +18,7 @@ from ..samply import (
     StackPath,
     Thread,
     ThreadSummary,
+    annotate,
     callers,
     diff,
     flamegraph,
@@ -26,8 +30,11 @@ from ..samply import (
 )
 
 __all__ = [
+    "AnnotatedLine",
+    "Annotation",
     "CallPath",
     "Callers",
+    "CodeObject",
     "DiffRow",
     "Flamegraph",
     "Frame",
@@ -39,6 +46,7 @@ __all__ = [
     "StackPath",
     "Thread",
     "ThreadSummary",
+    "annotate",
     "callers",
     "diff",
     "flamegraph",

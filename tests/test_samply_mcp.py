@@ -58,3 +58,9 @@ def test_threads_diff_and_flamegraph(server):
     paths = flame.splitlines()[2:]
     # The native frames above the first JIT frame are left out by default.
     assert paths and all(not p.split("  ", 1)[1].startswith("start;") for p in paths)
+
+
+def test_annotate_needs_the_jitdump(server):
+    # The fixture keeps the profile but not its 2.5 MB jitdump.
+    with pytest.raises(ToolError, match="needs the jitdump"):
+        _call(server, "samply_annotate", recording=FIXTURE, symbol="hotLoop")

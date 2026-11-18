@@ -1,74 +1,16 @@
 """samply analyses on synthetic profiles with known stacks and weights."""
 
+from pathlib import Path
+
 import pytest
+from samply_profiles import JIT, raw_profile
 
 from v8_utils import samply
 from v8_utils.samply import Function, Profile
 
-JIT = "jit-1.dump"
-
 
 def _profile(*threads) -> Profile:
-    """threads: (name, tid, samples); a sample is (root-first frame names,
-    weight, cpu_us). Names are jitdump names, e.g. "JS:*'f a.js:1:1"."""
-    raw_threads = []
-    for name, tid, samples in threads:
-        strings: list[str] = []
-        funcs: dict[str, int] = {}
-        stacks: dict[tuple[int, ...], int] = {}
-        st = {"prefix": [], "frame": []}
-        sample_stacks = []
-        for frames, _, _ in samples:
-            prefix = None
-            path: tuple[int, ...] = ()
-            for fname in frames:
-                if fname not in funcs:
-                    funcs[fname] = len(funcs)
-                    strings.append(fname)
-                path += (funcs[fname],)
-                if path not in stacks:
-                    stacks[path] = len(st["prefix"])
-                    st["prefix"].append(prefix)
-                    st["frame"].append(funcs[fname])
-                prefix = stacks[path]
-            sample_stacks.append(prefix)
-        n_funcs = len(funcs)
-        raw_threads.append(
-            {
-                "name": name,
-                "tid": str(tid),
-                "pid": "1",
-                "isMainThread": tid == 1,
-                "stringArray": strings,
-                "frameTable": {
-                    "length": n_funcs,
-                    "address": [0x100 * i for i in range(n_funcs)],
-                    "func": list(range(n_funcs)),
-                },
-                "funcTable": {
-                    "length": n_funcs,
-                    "name": list(range(n_funcs)),
-                    "isJS": [False] * n_funcs,
-                    "resource": [0] * n_funcs,
-                },
-                "resourceTable": {"length": 1, "lib": [0]},
-                "stackTable": {"length": len(st["prefix"]), **st},
-                "samples": {
-                    "length": len(samples),
-                    "weightType": "samples",
-                    "stack": sample_stacks,
-                    "time": [float(i) for i in range(len(samples))],
-                    "weight": [w for _, w, _ in samples],
-                    "threadCPUDelta": [c for _, _, c in samples],
-                },
-            }
-        )
-    raw = {
-        "meta": {"preprocessedProfileVersion": 49, "interval": 1.0},
-        "libs": [{"name": JIT, "path": f"/rec/{JIT}", "codeId": ""}],
-        "threads": raw_threads,
-    }
-    return Profile(raw, samply.Path("/rec/profile.json.gz"), symbolize=False)
+    return Profile(raw_profile(*threads), Path("/rec/profile.json.gz"), symbolize=False)
 
 
 MAIN = "JS:~main a.js:1:1"
