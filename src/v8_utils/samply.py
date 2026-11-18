@@ -17,7 +17,6 @@ import bisect
 import gzip
 import json
 import sys
-import tempfile
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,16 +125,9 @@ def _load_lib_symbols(path: Path, uuid: str) -> LibSymbols | str:
     dsym = symbol_file(path)
     if dsym != path and any(i.uuid == uuid for i in macho.images(dsym)):
         symbols = read_symbols(dsym, text_only=True)
-    elif image.universal:
-        # nm selects slices by architecture name, which not every slice has
-        # (arm64e.x1), so give it the slice as a file of its own.
-        with path.open("rb") as f, tempfile.NamedTemporaryFile() as thin:
-            f.seek(image.offset)
-            thin.write(f.read(image.size))
-            thin.flush()
-            symbols = read_symbols(Path(thin.name), text_only=True)
     else:
-        symbols = read_symbols(path, text_only=True)
+        with macho.thin_file(path, image) as thin:
+            symbols = read_symbols(thin, text_only=True)
     if symbols is None:
         return f"nm failed on {path}"
     return LibSymbols([_strip_c_underscore(s) for s in symbols], image.text_vmaddr)

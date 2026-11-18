@@ -3,7 +3,10 @@ __TEXT address that tie a profile's library to the file on disk."""
 
 from __future__ import annotations
 
+import contextlib
 import struct
+import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -47,6 +50,21 @@ def images(path: Path) -> list[Image]:
         size = path.stat().st_size
         image = _read_image(f, 0, size, universal=False)
         return [image] if image is not None else []
+
+
+@contextlib.contextmanager
+def thin_file(path: Path, image: Image) -> Iterator[Path]:
+    """`path` itself for a thin file, else a temporary copy of the image's
+    slice. Tools select slices by architecture name, which not every slice
+    has (arm64e.x1)."""
+    if not image.universal:
+        yield path
+        return
+    with path.open("rb") as f, tempfile.NamedTemporaryFile(suffix=path.name) as thin:
+        f.seek(image.offset)
+        thin.write(f.read(image.size))
+        thin.flush()
+        yield Path(thin.name)
 
 
 def _read_image(f, offset: int, size: int, *, universal: bool) -> Image | None:
