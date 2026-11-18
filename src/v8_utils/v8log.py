@@ -51,7 +51,7 @@ def _split_line(line: str) -> list[str]:
 
 # ── Data structures ──────────────────────────────────────────────────────────
 
-_TIER_MAP = {
+TIER_BY_MARKER = {
     "": "compiled",
     "~": "ignition",
     "^": "sparkplug",
@@ -125,7 +125,7 @@ class CodeEntry:
 
     @property
     def tier(self) -> str:
-        return _TIER_MAP.get(self.state, "compiled")
+        return TIER_BY_MARKER.get(self.state, "compiled")
 
     @property
     def tier_marker(self) -> str:
