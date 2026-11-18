@@ -20,7 +20,7 @@ def _only(*groups: str) -> dict[str, bool]:
 
 @pytest.mark.parametrize(("platform", "expected"), [("linux", True), ("darwin", False)])
 def test_perf_group_defaults_by_platform(monkeypatch, platform, expected):
-    import v8_utils.mcp_tools as mcp_tools
+    from v8_utils import mcp_tools
 
     monkeypatch.setattr(sys, "platform", platform)
     try:
