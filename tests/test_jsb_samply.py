@@ -59,7 +59,7 @@ def suite(tmp_path):
     return suite_dir, d8
 
 
-def _record(suite, tmp_path, lineitems=("regexp-octane",)) -> Path:
+def _record(suite, tmp_path, lineitems=("regexp-octane",), **kwargs) -> Path:
     suite_dir, d8 = suite
     return run_samply(
         Variant.parse(f"{d8}:--turbolev"),
@@ -67,7 +67,13 @@ def _record(suite, tmp_path, lineitems=("regexp-octane",)) -> Path:
         list(lineitems),
         d8.parent.parent,
         tmp_path / "recordings",
+        **kwargs,
     )
+
+
+def _rate_arg(log: Path) -> str:
+    argv = json.loads(log.read_text())["argv"]
+    return argv[argv.index("-r") + 1]
 
 
 @pytest.mark.parametrize(
@@ -101,7 +107,14 @@ def test_recording_dir_is_self_contained(fake_samply, suite, tmp_path):
     call = json.loads(fake_samply.read_text())
     assert call["cwd"] == str(suite_dir)
     argv = call["argv"]
-    assert argv[:4] == ["record", "--save-only", "-o", str(rec / "profile.json.gz")]
+    assert argv[:6] == [
+        "record",
+        "--save-only",
+        "-r",
+        "1000",
+        "-o",
+        str(rec / "profile.json.gz"),
+    ]
     d8_cmd = argv[argv.index("--") + 1 :]
     assert d8_cmd[0] == str(d8)
     # d8 runs with cwd=suite_dir, so every output path must point into rec.
@@ -113,6 +126,7 @@ def test_recording_dir_is_self_contained(fake_samply, suite, tmp_path):
     meta = json.loads((rec / "meta.json").read_text())
     assert meta["d8_cmd"] == d8_cmd
     assert meta["samply_version"] == "samply 0.13.1"
+    assert meta["rate_hz"] == 1000
     assert meta["lineitems"] == ["regexp-octane"]
 
 
@@ -150,6 +164,7 @@ def samply_config(tmp_path, suite):
             f"""\
             profiler = "samply"
             recordings_dir = "{tmp_path / "recordings"}"
+            sample_rate = 4000
             [repos.js3]
             path = "{suite_dir}"
             """
@@ -174,4 +189,34 @@ def test_perf_upload_is_refused_with_samply(fake_samply, samply_config, suite):
     _, d8 = suite
     with pytest.raises(ValueError, match="perf_upload needs linux-perf"):
         jsb.jsb_record(["regexp-octane"], [str(d8)], "js3", "perf_upload")
+    assert not fake_samply.exists()
+
+
+def test_sample_rate(fake_samply, suite, tmp_path):
+    rec = _record(suite, tmp_path, rate=10000)
+    assert _rate_arg(fake_samply) == "10000"
+    assert json.loads((rec / "meta.json").read_text())["rate_hz"] == 10000
+    with pytest.raises(ValueError, match="sample rate must be positive"):
+        _record(suite, tmp_path, rate=0)
+
+
+def test_jsb_record_rate_from_config_or_argument(fake_samply, samply_config, suite):
+    _, d8 = suite
+    jsb.jsb_record(["regexp-octane"], [str(d8)], "js3", "perf")
+    assert _rate_arg(fake_samply) == "4000"
+    jsb.jsb_record(["regexp-octane"], [str(d8)], "js3", "perf", sample_rate=20000)
+    assert _rate_arg(fake_samply) == "20000"
+
+
+def test_sample_rate_is_refused_where_it_does_not_apply(
+    fake_samply, samply_config, suite, tmp_path
+):
+    _, d8 = suite
+    with pytest.raises(ValueError, match="samply recordings only"):
+        jsb.jsb_record(["regexp-octane"], [str(d8)], "js3", "v8log", sample_rate=5000)
+    path = tmp_path / "config.toml"
+    path.write_text(path.read_text().replace('"samply"', '"linux-perf"'))
+    config.configure(path)
+    with pytest.raises(ValueError, match="samply recordings only"):
+        jsb.jsb_record(["regexp-octane"], [str(d8)], "js3", "perf", sample_rate=5000)
     assert not fake_samply.exists()

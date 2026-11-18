@@ -127,6 +127,12 @@ examples:
         action="store_true",
         help="Record a v8.log profiling trace (single variant)",
     )
+    p.add_argument(
+        "--rate",
+        type=int,
+        metavar="HZ",
+        help="Sampling rate for --perf with samply (default: config sample_rate)",
+    )
     args = p.parse_args(argv or None)
     lineitems = args.lineitems or None  # empty list → None (full suite)
 
@@ -168,12 +174,17 @@ examples:
         if profiler == "samply":
             if args.perf_upload:
                 sys.exit("error: --perf-upload needs linux-perf; use --perf")
+            rate = args.rate if args.rate is not None else cfg.sample_rate
             try:
-                rec = run_samply(v, suite_dir, lineitems, v8_out, cfg.recordings_dir)
-            except (FileNotFoundError, RuntimeError) as e:
+                rec = run_samply(
+                    v, suite_dir, lineitems, v8_out, cfg.recordings_dir, rate
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as e:
                 sys.exit(f"error: {e}")
             print(rec)
             return
+        if args.rate is not None:
+            sys.exit("error: --rate applies to samply recordings only")
         result = run_perf(
             v,
             suite_dir,

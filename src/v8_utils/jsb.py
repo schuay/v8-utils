@@ -241,13 +241,17 @@ def run_samply(
     lineitems: list[str] | None,
     v8_out: Path,
     recordings_dir: Path,
+    rate: int = 1000,
 ) -> Path:
-    """Record a samply profile into a new directory under recordings_dir.
+    """Record a samply profile at `rate` Hz into a new directory under
+    recordings_dir.
 
     The directory holds profile.json.gz, the jit-<pid>.dump that names and
     disassembles JIT frames, v8.log, d8's output and meta.json. d8 runs with
     cwd=suite_dir, so every output path is passed explicitly.
     """
+    if rate <= 0:
+        raise ValueError(f"sample rate must be positive, got {rate}")
     samply = shutil.which("samply")
     if samply is None:
         raise FileNotFoundError(
@@ -279,7 +283,8 @@ def run_samply(
     )
     if lineitems:
         d8_cmd += ["--", ",".join(lineitems)]
-    cmd = [samply, "record", "--save-only", "-o", str(rec / "profile.json.gz"), "--"]
+    cmd = [samply, "record", "--save-only", "-r", str(rate)]
+    cmd += ["-o", str(rec / "profile.json.gz"), "--"]
     cmd += d8_cmd
     (rec / "meta.json").write_text(
         json.dumps(
@@ -288,6 +293,7 @@ def run_samply(
                 "lineitems": lineitems,
                 "d8_cmd": d8_cmd,
                 "samply_version": version,
+                "rate_hz": rate,
                 "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             },
             indent=2,
@@ -497,11 +503,13 @@ def jsb_record(
     binaries: list[str],
     suite: str,
     record: str,
+    sample_rate: int | None = None,
 ) -> str:
     """Record one binary's run of a JetStream story. "perf" returns the
     linux-perf-d8.py output or, with samply, the recording directory;
     "perf_upload" (linux-perf only) also uploads; "v8log" returns the path of
-    the recorded v8.log."""
+    the recorded v8.log. sample_rate (Hz, samply only) overrides the
+    configured one."""
     cfg, suite_dir, _, _, variants = _bench_setup(binaries, suite)
     _RECORD_MODES = ("perf", "perf_upload", "v8log")
     if record not in _RECORD_MODES:
@@ -509,15 +517,20 @@ def jsb_record(
     if len(variants) != 1:
         raise ValueError("record mode requires exactly one binary")
     v = variants[0]
+    samply = record != "v8log" and resolve_profiler(cfg.profiler) == "samply"
+    if sample_rate is not None and not samply:
+        raise ValueError("sample_rate applies to samply recordings only")
     if record == "v8log":
         return str(run_v8log(v, suite_dir, lineitems, cfg.v8_out))
-    if resolve_profiler(cfg.profiler) == "samply":
+    if samply:
         if record == "perf_upload":
             raise ValueError(
                 "perf_upload needs linux-perf; samply recordings stay local."
                 ' Use record="perf".'
             )
-        return str(run_samply(v, suite_dir, lineitems, cfg.v8_out, cfg.recordings_dir))
+        rate = sample_rate if sample_rate is not None else cfg.sample_rate
+        rec = run_samply(v, suite_dir, lineitems, cfg.v8_out, cfg.recordings_dir, rate)
+        return str(rec)
     return run_perf(
         v,
         suite_dir,

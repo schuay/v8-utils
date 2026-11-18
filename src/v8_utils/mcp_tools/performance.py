@@ -120,6 +120,16 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = None,
+        sample_rate: Annotated[
+            int | None,
+            Field(
+                description=(
+                    'sampling rate in Hz for record="perf" with samply (default:'
+                    " the configured sample_rate, 1000). Short stories need a"
+                    " higher rate, e.g. 10000, for enough samples to annotate."
+                )
+            ),
+        ] = None,
     ) -> CallToolResult:
         """Run a JetStream2/3 story with one or more JS shell binaries and return scores.
 
@@ -129,7 +139,11 @@ def register(mcp: FastMCP) -> None:
         if binaries is None:
             binaries = []
         if record is not None:
-            return _text_result(jsb.jsb_record(lineitems, binaries, suite, record))
+            return _text_result(
+                jsb.jsb_record(lineitems, binaries, suite, record, sample_rate)
+            )
+        if sample_rate is not None:
+            raise ValueError('sample_rate needs record="perf"')
         return _text_result(
             format_comparison(jsb.jsb_compare(lineitems, binaries, runs, suite))
         )

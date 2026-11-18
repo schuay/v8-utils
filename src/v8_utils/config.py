@@ -136,6 +136,10 @@ class Config:
         default=Path(user_cache_dir("v8-utils")) / "recordings",
         metadata={_HELP: "Where `jsb --perf` with samply writes recordings"},
     )
+    sample_rate: int = field(
+        default=1000,
+        metadata={_HELP: "Sampling rate in Hz for `jsb --perf` with samply"},
+    )
 
     # ── repos — source repos accessible via MCP tools ─────────────────────────
     repos: dict[str, Repo] = field(
@@ -345,6 +349,7 @@ def load() -> Config:
             Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
         ),
         profiler=data.get("profiler", "auto"),
+        sample_rate=int(data.get("sample_rate", 1000)),
         recordings_dir=_path(
             "recordings_dir", Path(user_cache_dir("v8-utils")) / "recordings"
         ),
