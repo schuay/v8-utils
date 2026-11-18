@@ -17,10 +17,22 @@ from platformdirs import user_cache_dir, user_config_dir
 # rather than reading the user's. The variable is read once, at import; a
 # process that decides later uses configure().
 CONFIG_ENV = "V8_UTILS_CONFIG"
+
+
+def _config_dir() -> Path:
+    # platformdirs puts macOS config under ~/Library/Application Support. Use
+    # ~/.config there as well, like most command-line tools on macOS.
+    if sys.platform == "darwin":
+        base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
+        return Path(base).expanduser() / "v8-utils"
+    return Path(user_config_dir("v8-utils"))
+
+
+CONFIG_DIR = _config_dir()
 CONFIG_PATH = (
     Path(os.environ[CONFIG_ENV]).expanduser()
     if os.environ.get(CONFIG_ENV)
-    else Path(user_config_dir("v8-utils")) / "config.toml"
+    else CONFIG_DIR / "config.toml"
 )
 
 _SECTION = "section"  # metadata key for section headings

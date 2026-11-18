@@ -50,3 +50,16 @@ def test_configure_expands_the_home_directory(monkeypatch):
     monkeypatch.setattr(config, "_cache", None)
     api_config.configure(Path("~/x.toml"))
     assert api_config.config_path() == Path.home() / "x.toml"
+
+
+def test_macos_config_lives_under_dot_config(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    assert config._config_dir() == tmp_path / ".config" / "v8-utils"
+
+
+def test_macos_config_honours_xdg_config_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert config._config_dir() == tmp_path / "xdg" / "v8-utils"
