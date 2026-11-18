@@ -136,3 +136,18 @@ def test_missing_symbolizer_is_reported(tmp_path, build, monkeypatch):
     assert "llvm-symbolizer not found" in p.no_lines["t"]
     (sample,) = [s for s in p.main_thread().samples() if s.frames]
     assert [f.name for f in sample.frames] == ["f"]
+
+
+def test_rendering(tmp_path, build):
+    from v8_utils.render import samply as render
+
+    binary, _, rva = build
+    where = f"{binary.parent.name}/t.c"
+    p = _profile(tmp_path, build, ([("t", 0, rva)], 1, 2000))
+    rows = render.format_hotspots(p, samply.hotspots(p)).splitlines()
+    assert any(line.endswith(f"  sq  ({where}:1)") for line in rows)
+    assert any(line.endswith(f"  f  ({where}:4)") for line in rows)
+    callers = render.format_callers(samply.callers(p, "sq"))
+    assert callers.splitlines()[-1].endswith(f"<- f ({where}:5)")
+    flame = render.format_flamegraph(samply.flamegraph(p, min_pct=0, native_root=True))
+    assert flame.splitlines()[-1].endswith("f;sq [inl] 2.0")

@@ -85,3 +85,10 @@ def test_read_around_bounds():
     ]
     with pytest.raises(ValueError, match="line must be 1..5"):
         format_read_around(a, 6)
+
+
+def test_location():
+    from v8_utils.render.samply import location
+
+    assert location(("/b/src/v8/src/heap/factory.cc", 306)) == "heap/factory.cc:306"
+    assert location(None) == ""

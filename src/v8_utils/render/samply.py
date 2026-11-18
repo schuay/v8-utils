@@ -1,6 +1,8 @@
 """Text for the samply_* analyses: fixed-width tables in the style of the
 perf_* tools, headed by the thread and the time base they cover."""
 
+from pathlib import Path
+
 from ..api import samply
 
 
@@ -44,11 +46,24 @@ def _pct(ms: float, total_ms: float) -> float:
     return 100 * ms / total_ms if total_ms else 0.0
 
 
+def location(where: tuple[str, int] | None) -> str:
+    """A source location as "dir/file.cc:line", or "" when unknown."""
+    if where is None:
+        return ""
+    path, line = where
+    return f"{'/'.join(Path(path).parts[-2:])}:{line}"
+
+
 def _unsymbolized(profile: samply.Profile) -> list[str]:
-    if not profile.unsymbolized:
-        return []
-    lines = ["", "Not symbolized (frames named <lib>+<rva>):"]
-    lines += [f"  {lib}: {why}" for lib, why in sorted(profile.unsymbolized.items())]
+    lines = []
+    if profile.unsymbolized:
+        lines += ["", "Not symbolized (frames named <lib>+<rva>):"]
+        lines += [
+            f"  {lib}: {why}" for lib, why in sorted(profile.unsymbolized.items())
+        ]
+    if profile.no_lines:
+        lines += ["", "No line info or inline frames:"]
+        lines += [f"  {lib}: {why}" for lib, why in sorted(profile.no_lines.items())]
     return lines
 
 
@@ -69,6 +84,7 @@ def format_hotspots(profile: samply.Profile, h: samply.Hotspots) -> str:
             f"{i:>{idx_w}}  {_pct(r.self_ms, h.total_ms):5.1f}%"
             f"  {_pct(r.total_ms, h.total_ms):5.1f}%  {r.self_ms:8.1f}"
             f"  {f.kind:<7}  {tier_label(f):<15}  {f.lib or '':<{lib_w}}  {f.name}"
+            + (f"  ({location(f.defined_at)})" if f.defined_at else "")
         )
     return "\n".join(lines + _unsymbolized(profile))
 
@@ -90,7 +106,13 @@ def format_callers(c: samply.Callers) -> str:
     ]
     for p in c.paths:
         share = _pct(p.ms, c.inclusive_ms)
-        chain = " <- ".join(_short(f) for f in p.callers) or "(no callers)"
+        chain = (
+            " <- ".join(
+                _short(f) + (f" ({location(src)})" if src else "")
+                for f, src in zip(p.callers, p.sources, strict=True)
+            )
+            or "(no callers)"
+        )
         lines.append(f"{share:5.1f}%  {p.ms:8.1f} ms  <- {chain}")
     return "\n".join(lines)
 
@@ -104,7 +126,10 @@ def format_flamegraph(fg: samply.Flamegraph) -> str:
     for p in fg.paths:
         lines.append(
             f"{_pct(p.ms, fg.total_ms):5.1f}%  "
-            + ";".join(_short(f) for f in p.frames)
+            + ";".join(
+                _short(f) + (" [inl]" if inl else "")
+                for f, inl in zip(p.frames, p.inlined, strict=True)
+            )
             + f" {p.ms:.1f}"
         )
     if not fg.paths:
