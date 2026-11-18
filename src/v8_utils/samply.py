@@ -6,7 +6,8 @@ code, and for V8 JIT code an offset into the jitdump, which samply presents
 as one library made of every JIT_CODE_LOAD record's code bytes, concatenated
 in file order. JIT frames arrive named from the jitdump; native frames are
 unsymbolicated, and are named here with nm on the library (or its dSYM)
-whose Mach-O UUID matches the recording.
+whose Mach-O UUID matches the recording. With a matching dSYM, each native
+frame becomes its inline chain, with source lines, from DWARF.
 
 Leaf addresses are exact PCs; caller addresses are return address - 1.
 """
@@ -22,7 +23,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, disasm, macho
+from . import config, disasm, dwarf, macho
 from .jitdump import CodeLoad, JitDump
 from .symbols import Symbol, read_symbols, symbol_file
 from .v8log import TIER_BY_MARKER
@@ -56,6 +57,13 @@ class Frame:
     # Code object flavour for "js" frames: OSR or context-specialized code.
     osr: bool = False
     specialized: bool = False
+    # Native frames with DWARF: (file, line) at this address (for an inline
+    # parent, of its call into the next inner frame), where the function
+    # starts, and whether it was inlined into the next outer frame, which
+    # then has the same address.
+    source: tuple[str, int] | None = None
+    defined_at: tuple[str, int] | None = None
+    inlined: bool = False
 
 
 @dataclass(frozen=True)
@@ -92,10 +100,14 @@ def parse_jit_name(name: str, lib: str | None, address: int | None) -> Frame:
 class LibSymbols:
     """A library's text symbols, looked up by profile RVA."""
 
-    def __init__(self, symbols: list[Symbol], text_vmaddr: int) -> None:
+    def __init__(
+        self, symbols: list[Symbol], text_vmaddr: int, dwarf_file: Path | None = None
+    ) -> None:
         self._symbols = symbols
         self._addresses = [s.address for s in symbols]
         self.text_vmaddr = text_vmaddr
+        #: The DWARF of a dSYM matching the image, for line info.
+        self.dwarf_file = dwarf_file
 
     def lookup(self, rva: int) -> Symbol | None:
         address = rva + self.text_vmaddr
@@ -124,15 +136,51 @@ def _load_lib_symbols(path: Path, uuid: str) -> LibSymbols | str:
     image = next((i for i in macho.images(path) if i.uuid == uuid), None)
     if image is None:
         return f"{path} does not match the recording (UUID {uuid}); rebuilt since?"
-    dsym = symbol_file(path)
+    dsym: Path | None = symbol_file(path)
     if dsym != path and any(i.uuid == uuid for i in macho.images(dsym)):
         symbols = read_symbols(dsym, text_only=True)
     else:
+        dsym = None
         with macho.thin_file(path, image) as thin:
             symbols = read_symbols(thin, text_only=True)
     if symbols is None:
         return f"nm failed on {path}"
-    return LibSymbols([_strip_c_underscore(s) for s in symbols], image.text_vmaddr)
+    return LibSymbols(
+        [_strip_c_underscore(s) for s in symbols], image.text_vmaddr, dsym
+    )
+
+
+# Inline chains by (DWARF file, mtime, UUID) and link-time address.
+_chain_cache: dict[
+    tuple[str, float, str], dict[int, tuple[dwarf.InlineFrame, ...]]
+] = {}
+
+
+def inline_chains(
+    table: LibSymbols, uuid: str, rvas: set[int], symbolizer: str
+) -> dict[int, tuple[dwarf.InlineFrame, ...]]:
+    """The DWARF inline chains of a library at the given RVAs, by link-time
+    address, from the cache where already known."""
+    path = table.dwarf_file
+    key = (str(path), path.stat().st_mtime, uuid)
+    known = _chain_cache.setdefault(key, {})
+    missing = sorted({rva + table.text_vmaddr for rva in rvas} - known.keys())
+    known.update(dwarf.symbolize(symbolizer, path, missing))
+    return known
+
+
+def find_symbolizer() -> str | None:
+    """llvm-symbolizer from the configured V8 or Chromium checkout, or PATH."""
+    repos = config.load().repos
+    return dwarf.find_symbolizer(
+        [repos[name].path for name in ("v8", "chromium") if name in repos]
+    )
+
+
+_NO_SYMBOLIZER = (
+    "llvm-symbolizer not found: no line info or inline frames. It comes with a"
+    " V8 or Chromium checkout (third_party/llvm-build) or an LLVM install."
+)
 
 
 def _strip_c_underscore(symbol: Symbol) -> Symbol:
@@ -145,21 +193,62 @@ def _strip_c_underscore(symbol: Symbol) -> Symbol:
 
 
 class NativeNames:
-    """Names native frames, loading each library's symbols on first use."""
+    """Native frames for library RVAs: the nm name, or with DWARF the inline
+    chain, innermost first. prepare() loads what the profile's frames need,
+    so each library is symbolized in one batch."""
 
-    def __init__(self, libs: list[dict]) -> None:
+    def __init__(self, libs: list[dict], symbolizer: str | None) -> None:
         self._libs = libs
+        self._symbolizer = symbolizer
         self._loaded: dict[int, LibSymbols | str] = {}
+        self._chains: dict[int, dict[int, tuple[dwarf.InlineFrame, ...]]] = {}
+        #: Library name -> why its native frames have no line info.
+        self.no_lines: dict[str, str] = {}
 
-    def __call__(self, lib_index: int, rva: int) -> str | None:
-        if lib_index not in self._loaded:
+    def prepare(self, rvas_by_lib: dict[int, set[int]]) -> None:
+        for lib_index, rvas in rvas_by_lib.items():
             lib = self._libs[lib_index]
-            self._loaded[lib_index] = lib_symbols(Path(lib["path"]), lib["codeId"])
-        table = self._loaded[lib_index]
-        if isinstance(table, str):
+            table = lib_symbols(Path(lib["path"]), lib["codeId"])
+            self._loaded[lib_index] = table
+            if isinstance(table, str):
+                continue
+            if table.dwarf_file is None:
+                # System libraries come without dSYMs; only say so for others.
+                if not lib["path"].startswith(("/usr/", "/System/")):
+                    self.no_lines[lib["name"]] = "no dSYM matching the recording"
+            elif self._symbolizer is None:
+                self.no_lines[lib["name"]] = _NO_SYMBOLIZER
+            else:
+                self._chains[lib_index] = inline_chains(
+                    table, lib["codeId"], rvas, self._symbolizer
+                )
+
+    def __call__(self, lib_index: int, rva: int) -> tuple[Frame, ...] | None:
+        table = self._loaded.get(lib_index)
+        if not isinstance(table, LibSymbols):
             return None
+        lib = self._libs[lib_index]["name"]
+        chain = self._chains.get(lib_index, {}).get(rva + table.text_vmaddr)
         symbol = table.lookup(rva)
-        return symbol.name if symbol else None
+        if not chain:
+            return (Frame(symbol.name, "native", None, lib, rva),) if symbol else None
+        return tuple(
+            Frame(
+                f.function or (symbol.name if symbol else f"{lib}+{rva:#x}"),
+                "native",
+                None,
+                lib,
+                rva,
+                source=(f.file, f.line) if f.file and f.line else None,
+                defined_at=(
+                    (f.start_file, f.start_line)
+                    if f.start_file and f.start_line
+                    else None
+                ),
+                inlined=i < len(chain) - 1,
+            )
+            for i, f in enumerate(chain)
+        )
 
     def unavailable(self) -> dict[str, str]:
         """Why each library native frames were in has no symbols."""
@@ -175,7 +264,7 @@ class Thread:
         self,
         raw: dict,
         libs: list[dict],
-        native_name: Callable[[int, int], str | None] | None,
+        native_frames: Callable[[int, int], tuple[Frame, ...] | None] | None,
     ) -> None:
         self.name: str = raw["name"]
         self.tid: int = int(raw["tid"])
@@ -187,7 +276,7 @@ class Thread:
                 f"thread {self.name}: unsupported weightType"
                 f" {self._samples['weightType']!r}"
             )
-        self._stacks = _resolve_stacks(raw, libs, native_name)
+        self._stacks = _resolve_stacks(raw, libs, native_frames)
         # A sample's CPU delta is the thread's CPU time since the previous
         # sample. For a thread that existed before its first sample (the
         # main thread, from process startup on), the first delta covers that
@@ -214,16 +303,36 @@ class Thread:
         return sum(d or 0 for d in self._cpu)
 
 
+def _frame_lib(raw: dict, i: int) -> int | None:
+    """The libs index of frameTable entry i."""
+    res = raw["funcTable"]["resource"][raw["frameTable"]["func"][i]]
+    return raw["resourceTable"]["lib"][res] if res is not None and res >= 0 else None
+
+
+def _native_rvas(raw: dict, libs: list[dict], into: dict[int, set[int]]) -> None:
+    """Add the RVAs of a thread's native frames to `into`, by libs index."""
+    ft = raw["frameTable"]
+    for i in range(ft["length"]):
+        lib_index = _frame_lib(raw, i)
+        address = ft["address"][i]
+        if lib_index is None or address is None or address < 0:
+            continue
+        if not _is_jitdump(libs[lib_index]["name"]):
+            into.setdefault(lib_index, set()).add(address)
+
+
 def _resolve_stacks(
     raw: dict,
     libs: list[dict],
-    native_name: Callable[[int, int], str | None] | None,
+    native_frames: Callable[[int, int], tuple[Frame, ...] | None] | None,
 ) -> list[tuple[Frame, ...]]:
     """Leaf-first frames for every stackTable index."""
     strings = raw["stringArray"]
-    ft, fn, rt = raw["frameTable"], raw["funcTable"], raw["resourceTable"]
+    ft, fn = raw["frameTable"], raw["funcTable"]
 
-    frames: list[Frame | None] = []
+    # Each frameTable entry becomes one frame, a native one with DWARF the
+    # frames of its inline chain, innermost first.
+    frames: list[tuple[Frame, ...]] = []
     for i in range(ft["length"]):
         func = ft["func"][i]
         address = ft["address"][i]
@@ -231,19 +340,21 @@ def _resolve_stacks(
         # of a JS function. It duplicates the JIT frame's name minus the
         # tier, so drop it.
         if fn["isJS"][func] and address == -1:
-            frames.append(None)
+            frames.append(())
             continue
-        res = fn["resource"][func]
-        lib_index = rt["lib"][res] if res is not None and res >= 0 else None
+        lib_index = _frame_lib(raw, i)
         lib = libs[lib_index]["name"] if lib_index is not None else None
         name = strings[fn["name"][func]]
         if lib is not None and _is_jitdump(lib):
-            frames.append(parse_jit_name(name, lib, address))
-        else:
-            if lib_index is not None and address is not None:
-                symbolized = native_name(lib_index, address) if native_name else None
-                name = symbolized or f"{lib}+{address:#x}"
-            frames.append(Frame(name, "native", None, lib, address))
+            frames.append((parse_jit_name(name, lib, address),))
+            continue
+        if lib_index is not None and address is not None:
+            symbolized = native_frames(lib_index, address) if native_frames else None
+            if symbolized:
+                frames.append(symbolized)
+                continue
+            name = f"{lib}+{address:#x}"
+        frames.append((Frame(name, "native", None, lib, address),))
 
     st = raw["stackTable"]
     stacks: list[tuple[Frame, ...]] = []
@@ -251,8 +362,7 @@ def _resolve_stacks(
         prefix = st["prefix"][i]
         # A prefix always precedes its stack in the table.
         parent = stacks[prefix] if prefix is not None else ()
-        frame = frames[st["frame"][i]]
-        stacks.append(parent if frame is None else (frame, *parent))
+        stacks.append((*frames[st["frame"][i]], *parent))
     return stacks
 
 
@@ -275,10 +385,18 @@ class Profile:
         self.product: str = meta.get("product", "")
         self.libs: list[dict] = raw["libs"]
         self._jitdumps: dict[str, JitDump] = {}
-        natives = NativeNames(self.libs) if symbolize else None
+        natives = None
+        if symbolize:
+            natives = NativeNames(self.libs, find_symbolizer())
+            rvas: dict[int, set[int]] = {}
+            for t in raw["threads"]:
+                _native_rvas(t, self.libs, rvas)
+            natives.prepare(rvas)
         self.threads = [Thread(t, self.libs, natives) for t in raw["threads"]]
         #: Library name -> why its frames stay "<lib>+<rva>".
         self.unsymbolized: dict[str, str] = natives.unavailable() if natives else {}
+        #: Library name -> why its native frames have no lines or inlines.
+        self.no_lines: dict[str, str] = natives.no_lines if natives else {}
 
     @classmethod
     def load(cls, path: Path | str, *, symbolize: bool = True) -> Profile:
@@ -348,13 +466,20 @@ class Function:
     tier: str | None = None
     osr: bool = False
     specialized: bool = False
+    defined_at: tuple[str, int] | None = None  # native functions with DWARF
 
     @classmethod
     def of(cls, frame: Frame, merge_tiers: bool = False) -> Function:
         if merge_tiers:
-            return cls(frame.name, frame.kind, frame.lib)
+            return cls(frame.name, frame.kind, frame.lib, defined_at=frame.defined_at)
         return cls(
-            frame.name, frame.kind, frame.lib, frame.tier, frame.osr, frame.specialized
+            frame.name,
+            frame.kind,
+            frame.lib,
+            frame.tier,
+            frame.osr,
+            frame.specialized,
+            frame.defined_at,
         )
 
 
@@ -424,6 +549,8 @@ def match_functions(profile: Profile, thread: Thread, symbol: str) -> set[str]:
 @dataclass(frozen=True)
 class CallPath:
     callers: tuple[Function, ...]  # nearest caller first
+    # Each caller's (file, line) of the call, for native code with DWARF.
+    sources: tuple[tuple[str, int] | None, ...]
     ms: float
 
 
@@ -461,17 +588,24 @@ def callers(
             continue
         inclusive += w
         outer = hits[-1]
-        key = tuple(Function.of(f) for f in s.frames[outer + 1 : outer + 1 + depth])
+        chain = s.frames[outer + 1 : outer + 1 + depth]
+        key = (tuple(Function.of(f) for f in chain), tuple(f.source for f in chain))
         paths[key] = paths.get(key, 0.0) + w
     ordered = sorted(paths.items(), key=lambda kv: -kv[1])[:n]
     return Callers(
-        t, wall, total, matched, inclusive, [CallPath(k, v) for k, v in ordered]
+        t,
+        wall,
+        total,
+        matched,
+        inclusive,
+        [CallPath(fns, sources, ms) for (fns, sources), ms in ordered],
     )
 
 
 @dataclass(frozen=True)
 class StackPath:
     frames: tuple[Function, ...]  # root first
+    inlined: tuple[bool, ...]  # per frame: inlined into the frame before it
     ms: float
 
 
@@ -521,11 +655,15 @@ def flamegraph(
         elif not native_root:
             first_jit = next((i for i, f in enumerate(frames) if f.kind != "native"), 0)
             frames = frames[first_jit:]
-        key = tuple(Function.of(f) for f in frames[:depth])
+        kept_frames = frames[:depth]
+        key = (
+            tuple(Function.of(f) for f in kept_frames),
+            tuple(f.inlined for f in kept_frames),
+        )
         paths[key] = paths.get(key, 0.0) + w
     cutoff = total * min_pct / 100
     kept = sorted(
-        (StackPath(k, v) for k, v in paths.items() if v >= cutoff),
+        (StackPath(fns, inl, ms) for (fns, inl), ms in paths.items() if ms >= cutoff),
         key=lambda p: -p.ms,
     )
     return Flamegraph(t, wall, total, matched, kept)
@@ -653,9 +791,14 @@ def annotate(
     objects: dict[tuple, CodeObject] = {}
     for s in t.samples():
         w = _weight_ms(s, profile.interval_ms, wall)
-        if not s.frames or not w or s.frames[0].name not in matched:
+        if not s.frames or not w:
             continue
-        leaf = s.frames[0]
+        # The leaf frame and the frames it is inlined into share one address
+        # and one code object; any of them can be the one asked for.
+        group = _inline_group(s.frames)
+        if not any(f.name in matched for f in group):
+            continue
+        leaf = group[-1]
         located = _locate(profile, leaf)
         if located is None:
             continue
@@ -699,9 +842,18 @@ def _object_key(obj: CodeObject) -> tuple:
     return ("native", lib["name"], sym.address)
 
 
+def _inline_group(frames: tuple[Frame, ...]) -> tuple[Frame, ...]:
+    """The leaf frame and the frames it is inlined into, outermost last."""
+    for i, f in enumerate(frames):
+        if not f.inlined:
+            return frames[: i + 1]
+    return frames
+
+
 def _locate(profile: Profile, leaf: Frame) -> tuple[tuple, int, CodeObject] | None:
-    """The code object a leaf frame ran in, and its PC there: a runtime
-    address for JIT code, a link-time address for native code."""
+    """The code object a leaf frame (the outermost of an inline group) ran
+    in, and its PC there: a runtime address for JIT code, a link-time
+    address for native code."""
     if leaf.lib is None or leaf.address is None:
         return None
     if _is_jitdump(leaf.lib):
@@ -720,7 +872,7 @@ def _locate(profile: Profile, leaf: Frame) -> tuple[tuple, int, CodeObject] | No
     if sym is None:
         return None
     obj = CodeObject(
-        Function.of(leaf), f"{leaf.lib} {sym.name}", 0.0, native=(lib, table, sym)
+        Function.of(leaf), f"{leaf.lib} {leaf.name}", 0.0, native=(lib, table, sym)
     )
     return _object_key(obj), leaf.address + table.text_vmaddr, obj
 

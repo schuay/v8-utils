@@ -20,9 +20,13 @@ _BUNDLED = "third_party/llvm-build/Release+Asserts/bin/llvm-symbolizer"
 @dataclass(frozen=True)
 class InlineFrame:
     function: str
-    file: str  # "" when DWARF has none
-    line: int  # 0 when DWARF has none
-    start_line: int  # the function's first line, 0 when unknown
+    # Where the address is in this function: for an inline parent, the call
+    # into the next inner function. "" and 0 when DWARF has none.
+    file: str
+    line: int
+    # Where the function starts; "" and 0 when unknown.
+    start_file: str
+    start_line: int
 
 
 def find_symbolizer(roots: list[Path]) -> str | None:
@@ -59,8 +63,9 @@ def symbolize(
         frames = tuple(
             InlineFrame(
                 s["FunctionName"],
-                os.path.normpath(s["FileName"]) if s["FileName"] else "",
+                _normpath(s["FileName"]),
                 s["Line"],
+                _normpath(s.get("StartFileName", "")),
                 s["StartLine"],
             )
             for s in entry.get("Symbol", [])
@@ -71,3 +76,8 @@ def symbolize(
             frames if any(f.file for f in frames) else ()
         )
     return chains
+
+
+def _normpath(path: str) -> str:
+    # Build directories record paths like out/release/../../src/heap/x.h.
+    return os.path.normpath(path) if path else ""

@@ -66,7 +66,7 @@ def test_inline_chain_innermost_first(binary, symbolizer):
     sq, outer = inlined[0]
     assert (sq.function, sq.line, sq.start_line) == ("sq", 2, 1)
     assert (outer.function, outer.line, outer.start_line) == ("f", 5, 4)
-    assert outer.file == str(binary.parent / "t.c")
+    assert outer.file == outer.start_file == sq.start_file == str(binary.parent / "t.c")
 
 
 def test_addresses_without_lines(binary, symbolizer):
