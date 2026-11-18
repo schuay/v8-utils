@@ -18,13 +18,20 @@ _CODE_LOAD = struct.Struct("<IIQQQQ")  # pid, tid, vma, code_addr, code_size, in
 _DEBUG_INFO = struct.Struct("<QQ")  # code_addr, entry count
 _DEBUG_ENTRY = struct.Struct("<Qii")  # address, line, column; then a name
 _LOAD, _DEBUG = 0, 2
-# perf-jit.cc offsets debug-entry addresses by this for `perf inject`, which
-# places the code after an ELF header (PerfJitLogger::kElfHeaderSize).
-_ELF_HEADER_SIZE = 0x34
 
 # ELF e_machine values from the jitdump header.
+EM_386 = 0x03
+EM_ARM = 0x28
 EM_X86_64 = 0x3E
 EM_AARCH64 = 0xB7
+
+
+def _elf_header_size(machine: int) -> int:
+    """perf-jit.cc offsets debug-entry addresses by the ELF header size of
+    the target (PerfJitLogger::kElfHeaderSize) for `perf inject`, which
+    places the code after one. RISC-V names both widths alike; take the
+    64-bit one."""
+    return 0x34 if machine in (EM_386, EM_ARM) else 0x40
 
 
 @dataclass(frozen=True)
@@ -96,7 +103,9 @@ class JitDump:
                 start += code_size
             elif kind == _DEBUG:
                 code_addr, count = _DEBUG_INFO.unpack_from(data, body)
-                positions[code_addr] = _read_positions(data, body, code_addr, count)
+                positions[code_addr] = _read_positions(
+                    data, body, code_addr, count, _elf_header_size(machine)
+                )
             pos += size
         return cls(machine, loads)
 
@@ -118,7 +127,7 @@ class JitDump:
 
 
 def _read_positions(
-    data: bytes, body: int, code_addr: int, count: int
+    data: bytes, body: int, code_addr: int, count: int, bias: int
 ) -> tuple[SourcePosition, ...]:
     out = []
     pos = body + _DEBUG_INFO.size
@@ -128,7 +137,7 @@ def _read_positions(
         name_end = data.index(b"\0", name_start)
         out.append(
             SourcePosition(
-                address - _ELF_HEADER_SIZE - code_addr,
+                address - bias - code_addr,
                 line,
                 column,
                 data[name_start:name_end].decode(errors="replace"),

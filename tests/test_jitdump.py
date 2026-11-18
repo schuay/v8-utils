@@ -1,10 +1,19 @@
 """jitdump reading, on files written the way V8's perf-jit.cc writes them."""
 
 import struct
+from pathlib import Path
 
 import pytest
 
-from v8_utils.jitdump import EM_AARCH64, JitDump
+from v8_utils.jitdump import EM_AARCH64, EM_ARM, JitDump
+
+# Cut from a recorded arm64 jitdump: the header, then the debug-info and
+# code-load records of Sparkplug code for Scheduler.schedule (richards).
+REAL = Path(__file__).parent / "fixtures" / "samply" / "jit-sparkplug.dump"
+
+# kElfHeaderSize in V8's perf-jit.h, which perf-jit.cc adds to each debug
+# entry's address.
+ELF_HEADER_SIZE = {EM_AARCH64: 0x40, EM_ARM: 0x34}
 
 
 def _record(kind: int, body: bytes, timestamp: int = 0) -> bytes:
@@ -16,18 +25,20 @@ def _load(addr: int, code: bytes, name: str, timestamp: int = 0) -> bytes:
     return _record(0, body + name.encode() + b"\0" + code, timestamp)
 
 
-def _debug(addr: int, entries: list[tuple[int, int, int, str]]) -> bytes:
+def _debug(
+    addr: int, entries: list[tuple[int, int, int, str]], machine: int = EM_AARCH64
+) -> bytes:
     body = struct.pack("<QQ", addr, len(entries))
     for offset, line, column, script in entries:
-        # perf-jit.cc adds kElfHeaderSize (0x34) to each entry's address.
-        body += struct.pack("<Qii", addr + offset + 0x34, line, column)
+        bias = ELF_HEADER_SIZE[machine]
+        body += struct.pack("<Qii", addr + offset + bias, line, column)
         body += script.encode() + b"\0"
     body += bytes(-len(body) % 8)
     return _record(2, body)
 
 
-def _write(tmp_path, *records: bytes):
-    header = struct.pack("<IIIIIIQQ", 0x4A695444, 1, 40, EM_AARCH64, 0, 1, 0, 0)
+def _write(tmp_path, *records: bytes, machine: int = EM_AARCH64):
+    header = struct.pack("<IIIIIIQQ", 0x4A695444, 1, 40, machine, 0, 1, 0, 0)
     path = tmp_path / "jit-1.dump"
     path.write_bytes(header + b"".join(records))
     return path
@@ -79,3 +90,24 @@ def test_not_a_jitdump(tmp_path):
     path.write_bytes(bytes(64))
     with pytest.raises(ValueError, match="is not a jitdump"):
         JitDump.read(path)
+
+
+def test_32_bit_targets_use_the_smaller_elf_header(tmp_path):
+    path = _write(
+        tmp_path,
+        _debug(0x1000, [(0, 1, 1, "a.js"), (8, 2, 1, "a.js")], machine=EM_ARM),
+        _load(0x1000, bytes(16), "JS:~f a.js:1:1"),
+        machine=EM_ARM,
+    )
+    (f,) = JitDump.read(path).loads
+    assert [p.offset for p in f.positions] == [0, 8]
+
+
+def test_recorded_sparkplug_code_starts_at_its_first_position():
+    (load,) = JitDump.read(REAL).loads
+    assert load.name == "JS:^Scheduler.schedule (d8):183:41"
+    # Baseline code is emitted from the first bytecode on, so its source
+    # position table starts at code offset 0.
+    assert load.positions[0].offset == 0
+    assert all(0 <= p.offset < len(load.code) for p in load.positions)
+    assert (load.positions[0].line, load.positions[0].script) == (184, "(d8)")

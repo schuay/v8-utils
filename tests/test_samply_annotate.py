@@ -45,7 +45,8 @@ def _jitdump(path: Path) -> None:
     def debug(addr, entries):
         body = struct.pack("<QQ", addr, len(entries))
         for offset, line, column in entries:
-            body += struct.pack("<Qii", addr + offset + 0x34, line, column) + b"a.js\0"
+            # V8 adds the arm64 ELF header size (0x40) to each entry address.
+            body += struct.pack("<Qii", addr + offset + 0x40, line, column) + b"a.js\0"
         return record(2, body + bytes(-len(body) % 8))
 
     f_opt = ADD + _bl(0x1004, 0x9000) + RET
