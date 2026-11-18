@@ -12,8 +12,10 @@ from ..jsb import (
     jsb_record,
     parse_js2,
     parse_js3,
+    resolve_profiler,
     run_perf,
     run_round_robin,
+    run_samply,
     run_v8log,
 )
 
@@ -28,7 +30,9 @@ __all__ = [
     "jsb_record",
     "parse_js2",
     "parse_js3",
+    "resolve_profiler",
     "run_perf",
     "run_round_robin",
+    "run_samply",
     "run_v8log",
 ]

@@ -108,9 +108,11 @@ def register(mcp: FastMCP) -> None:
             Field(
                 description=(
                     "profiling mode -- omit to run for scores (the default)."
-                    ' Options: "perf" records a linux-perf trace and returns the'
-                    " perf.data path for perf_hotspots/perf_annotate;"
-                    ' "perf_upload" does the same and uploads it via pprof;'
+                    ' Options: "perf" records with the configured profiler:'
+                    " linux-perf returns the perf.data path for"
+                    " perf_hotspots/perf_annotate, samply (the macOS default)"
+                    " returns a recording directory;"
+                    ' "perf_upload" records with linux-perf and uploads via pprof;'
                     ' "v8log" records a v8.log and returns its path for'
                     " v8log_analyze. Every record mode requires exactly one"
                     " binary."

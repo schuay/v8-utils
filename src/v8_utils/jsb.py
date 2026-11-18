@@ -5,8 +5,13 @@ The command-line frontend is v8_utils.cli.jsb.
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -215,6 +220,101 @@ def run_perf(
     return output
 
 
+PROFILERS = ("linux-perf", "samply")
+
+
+def resolve_profiler(setting: str) -> str:
+    """The profiler behind `jsb --perf` for the `profiler` config value."""
+    if setting == "auto":
+        return "samply" if sys.platform == "darwin" else "linux-perf"
+    if setting not in PROFILERS:
+        raise ValueError(
+            f"profiler must be auto, {' or '.join(PROFILERS)}, got {setting!r}"
+            f" (config key `profiler` in {config.CONFIG_PATH})"
+        )
+    return setting
+
+
+def run_samply(
+    variant: Variant,
+    suite_dir: Path,
+    lineitems: list[str] | None,
+    v8_out: Path,
+    recordings_dir: Path,
+) -> Path:
+    """Record a samply profile into a new directory under recordings_dir.
+
+    The directory holds profile.json.gz, the jit-<pid>.dump that names and
+    disassembles JIT frames, v8.log, d8's output and meta.json. d8 runs with
+    cwd=suite_dir, so every output path is passed explicitly.
+    """
+    samply = shutil.which("samply")
+    if samply is None:
+        raise FileNotFoundError(
+            "samply not found on PATH. Install it with `brew install samply`"
+            " or `cargo install --locked samply`."
+        )
+    version = subprocess.run(
+        [samply, "--version"], check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    recordings_dir.mkdir(parents=True, exist_ok=True)
+    label = "+".join(lineitems) if lineitems else "all"
+    rec = Path(
+        tempfile.mkdtemp(
+            prefix=f"{label[:60]}-{time.strftime('%Y%m%d-%H%M%S')}-",
+            dir=recordings_dir,
+        )
+    )
+    d8_cmd = (
+        [str(variant.d8(v8_out))]
+        + (variant.flags.split() if variant.flags else [])
+        + [
+            "--perf-prof",
+            f"--perf-prof-path={rec}",
+            "--interpreted-frames-native-stack",
+            f"--logfile={rec / 'v8.log'}",
+            str(suite_dir / "cli.js"),
+        ]
+    )
+    if lineitems:
+        d8_cmd += ["--", ",".join(lineitems)]
+    cmd = [samply, "record", "--save-only", "-o", str(rec / "profile.json.gz"), "--"]
+    cmd += d8_cmd
+    (rec / "meta.json").write_text(
+        json.dumps(
+            {
+                "suite_dir": str(suite_dir),
+                "lineitems": lineitems,
+                "d8_cmd": d8_cmd,
+                "samply_version": version,
+                "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    r = subprocess.run(cmd, check=False, cwd=suite_dir, capture_output=True, text=True)
+    output = (r.stdout + r.stderr).strip()
+    (rec / "output.txt").write_text(output + "\n")
+    if r.returncode != 0:
+        raise RuntimeError(
+            f"samply record failed (exit {r.returncode}), output in {rec}:\n"
+            f"{output[:1000]}"
+        )
+    missing = [
+        name
+        for name, found in (
+            ("profile.json.gz", (rec / "profile.json.gz").exists()),
+            ("jit-<pid>.dump", any(rec.glob("jit-*.dump"))),
+        )
+        if not found
+    ]
+    if missing:
+        raise RuntimeError(f"samply run left no {' or '.join(missing)} in {rec}")
+    return rec
+
+
 # ---------- Formatting ----------
 
 _METRIC_ORDER = [
@@ -398,8 +498,10 @@ def jsb_record(
     suite: str,
     record: str,
 ) -> str:
-    """Record one binary's run of a JetStream story: "perf" or "perf_upload"
-    returns the perf result, "v8log" the path of the recorded v8.log."""
+    """Record one binary's run of a JetStream story. "perf" returns the
+    linux-perf-d8.py output or, with samply, the recording directory;
+    "perf_upload" (linux-perf only) also uploads; "v8log" returns the path of
+    the recorded v8.log."""
     cfg, suite_dir, _, _, variants = _bench_setup(binaries, suite)
     _RECORD_MODES = ("perf", "perf_upload", "v8log")
     if record not in _RECORD_MODES:
@@ -409,6 +511,13 @@ def jsb_record(
     v = variants[0]
     if record == "v8log":
         return str(run_v8log(v, suite_dir, lineitems, cfg.v8_out))
+    if resolve_profiler(cfg.profiler) == "samply":
+        if record == "perf_upload":
+            raise ValueError(
+                "perf_upload needs linux-perf; samply recordings stay local."
+                ' Use record="perf".'
+            )
+        return str(run_samply(v, suite_dir, lineitems, cfg.v8_out, cfg.recordings_dir))
     return run_perf(
         v,
         suite_dir,

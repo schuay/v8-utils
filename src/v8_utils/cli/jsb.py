@@ -22,7 +22,15 @@ import sys
 from rich.console import Console
 
 from ..api import config as cfg_module
-from ..api.jsb import Variant, compare, run_perf, run_round_robin, run_v8log
+from ..api.jsb import (
+    Variant,
+    compare,
+    resolve_profiler,
+    run_perf,
+    run_round_robin,
+    run_samply,
+    run_v8log,
+)
 from ..render.jsb import format_comparison
 
 
@@ -52,7 +60,7 @@ examples:
   jsb crypto-md5-SP -b release --js2                  # JetStream2
   jsb crypto-md5-SP -b release --gdb                  # run under gdb
   jsb crypto-md5-SP -b release --rr                   # record with rr
-  jsb crypto-md5-SP -b release --perf                 # linux-perf-d8.py
+  jsb crypto-md5-SP -b release --perf                 # linux-perf or samply
   jsb crypto-md5-SP -b release --v8log                # record v8.log
   jsb regexp-octane -b ~/v8-alt/out/release/d8        # full d8 path
 """,
@@ -104,12 +112,15 @@ examples:
     perf_group.add_argument(
         "--perf",
         action="store_true",
-        help="Record a perf trace locally via linux-perf-d8.py (single variant)",
+        help=(
+            "Record a profile locally with the configured profiler:"
+            " linux-perf-d8.py, or samply on macOS (single variant)"
+        ),
     )
     perf_group.add_argument(
         "--perf-upload",
         action="store_true",
-        help="Record a perf trace and upload via pprof (single variant)",
+        help="Record a linux-perf trace and upload via pprof (single variant)",
     )
     perf_group.add_argument(
         "--v8log",
@@ -150,6 +161,19 @@ examples:
         if len(variants) != 1:
             sys.exit("error: --perf/--perf-upload requires exactly one build")
         v = variants[0]
+        try:
+            profiler = resolve_profiler(cfg.profiler)
+        except ValueError as e:
+            sys.exit(f"error: {e}")
+        if profiler == "samply":
+            if args.perf_upload:
+                sys.exit("error: --perf-upload needs linux-perf; use --perf")
+            try:
+                rec = run_samply(v, suite_dir, lineitems, v8_out, cfg.recordings_dir)
+            except (FileNotFoundError, RuntimeError) as e:
+                sys.exit(f"error: {e}")
+            print(rec)
+            return
         result = run_perf(
             v,
             suite_dir,

@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from platformdirs import user_config_dir
+from platformdirs import user_cache_dir, user_config_dir
 
 # A deployment that runs v8-utils on the user's behalf (an automated reviewer,
 # say) keeps its own config -- its own repo map, no personal chat webhook --
@@ -107,9 +107,22 @@ class Config:
     perf_script: Path = field(
         default=Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
         metadata={
-            _HELP: "Path to linux-perf-d8.py, used by `jsb --perf`",
+            _HELP: "Path to linux-perf-d8.py, used by `jsb --perf` with linux-perf",
             _TOML: "~/v8/tools/profiling/linux-perf-d8.py",
         },
+    )
+    profiler: str = field(
+        default="auto",
+        metadata={
+            _HELP: (
+                "Profiler behind `jsb --perf`: auto, linux-perf or samply"
+                " (auto: samply on macOS, linux-perf elsewhere)"
+            ),
+        },
+    )
+    recordings_dir: Path = field(
+        default=Path(user_cache_dir("v8-utils")) / "recordings",
+        metadata={_HELP: "Where `jsb --perf` with samply writes recordings"},
     )
 
     # ── repos — source repos accessible via MCP tools ─────────────────────────
@@ -318,6 +331,10 @@ def load() -> Config:
         perf_script=_path(
             "perf_script",
             Path("~/v8/tools/profiling/linux-perf-d8.py").expanduser(),
+        ),
+        profiler=data.get("profiler", "auto"),
+        recordings_dir=_path(
+            "recordings_dir", Path(user_cache_dir("v8-utils")) / "recordings"
         ),
         repos=repos,
         sources=data.get("sources", {}),
