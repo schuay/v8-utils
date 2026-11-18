@@ -549,7 +549,10 @@ def diff(
 ) -> list[DiffRow]:
     """Per-function self time as a share of each profile's thread time,
     sorted by the size of the change. Tiers are merged by default, so a
-    function that tiered up differently still lines up."""
+    function that tiered up differently still lines up. `thread` is a name:
+    tids differ between recordings."""
+    if isinstance(thread, int):
+        raise TypeError("diff takes a thread name; tids differ between recordings")
 
     def shares(profile: Profile) -> dict[Function, float]:
         h = hotspots(profile, thread, n=sys.maxsize, wall=wall, merge_tiers=merge_tiers)
@@ -723,8 +726,9 @@ def _locate(profile: Profile, leaf: Frame) -> tuple[tuple, int, CodeObject] | No
 
 
 # An address operand in llvm-objdump's listing, with its label if it has one.
-# Immediates are written "#0x...", so they don't match.
-_ADDRESS_OPERAND = re.compile(r"(?<![#\w])0x([0-9a-f]+)(?: <[^>]*>)?")
+# Immediates ("#0x..." on arm64, "$0x..." in AT&T syntax) and x64
+# displacements ("0x10(%rax)") don't match.
+_ADDRESS_OPERAND = re.compile(r"(?<![#$\w])0x([0-9a-f]+)(?![\w(])(?: <[^>]*>)?")
 
 
 def _relabel(text: str, name_at: Callable[[int], str | None]) -> str:
@@ -735,7 +739,9 @@ def _relabel(text: str, name_at: Callable[[int], str | None]) -> str:
         name = name_at(int(m.group(1), 16))
         return f"0x{m.group(1)} <{name}>" if name else f"0x{m.group(1)}"
 
-    return _ADDRESS_OPERAND.sub(label, text)
+    # x64 listings end in comments such as "# imm = 0x10".
+    code, sep, comment = text.partition(" # ")
+    return _ADDRESS_OPERAND.sub(label, code) + sep + comment
 
 
 def _annotate_jit(

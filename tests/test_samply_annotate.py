@@ -154,3 +154,27 @@ def test_native_listing(tmp_path, objdump):
     path.write_text(json.dumps(raw_main))
     a = samply.annotate(samply.Profile.load(path), "main", objdump=objdump)
     assert any(line.text.endswith(f" {f.address:#x} <f>") for line in a.lines)
+
+
+@pytest.mark.parametrize(
+    ("text", "labelled"),
+    [
+        ("bl 0x9000", "bl 0x9000 <T>"),
+        ("b.ne 0x9004 <.text+0x4>", "b.ne 0x9004 <T+4>"),
+        ("ldr w11, 0x9008 <.text+0x8>", "ldr w11, 0x9008 <T+8>"),
+        ("add x0, x1, #0x9000", "add x0, x1, #0x9000"),
+        ("movl $0x9000, %eax # imm = 0x9000", "movl $0x9000, %eax # imm = 0x9000"),
+        ("movq 0x9000(%rax), %rcx", "movq 0x9000(%rax), %rcx"),
+        ("callq 0x9000 <.text+0x16>", "callq 0x9000 <T>"),
+        ("jmp 0x5 <.text+0x5>", "jmp 0x5"),
+    ],
+)
+def test_relabel_only_address_operands(text, labelled):
+    def name_at(address):
+        return (
+            None
+            if address < 0x9000
+            else ("T" if address == 0x9000 else f"T+{address - 0x9000}")
+        )
+
+    assert samply._relabel(text, name_at) == labelled

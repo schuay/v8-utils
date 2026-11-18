@@ -86,8 +86,10 @@ def register(mcp: FastMCP) -> None:
             by_lib=by_lib,
             filter=filter,
         )
-        if not by_lib:
-            _symbols.remember(recording, [{"symbol": r.function.name} for r in h.rows])
+        # A per-library listing has no function rows; drop the previous ones
+        # so #N cannot name a row this call did not show.
+        rows = [] if by_lib else [{"symbol": r.function.name} for r in h.rows]
+        _symbols.remember(recording, rows)
         return _text_result(render.format_hotspots(profile, h))
 
     @mcp.tool()
@@ -167,7 +169,15 @@ def register(mcp: FastMCP) -> None:
     def samply_diff(
         baseline: Annotated[str, Field(description="baseline samply recording")],
         experiment: Annotated[str, Field(description="experiment samply recording")],
-        thread: Annotated[str | None, Field(description=THREAD_ARG)] = None,
+        thread: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "thread name, looked up in both recordings (default: each"
+                    " one's thread with the most CPU time)"
+                )
+            ),
+        ] = None,
         n: Annotated[int, Field(description="number of functions to return")] = 30,
         wall: Annotated[bool, Field(description=WALL_ARG)] = False,
         merge_tiers: Annotated[

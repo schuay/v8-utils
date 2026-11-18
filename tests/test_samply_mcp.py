@@ -64,3 +64,10 @@ def test_annotate_needs_the_jitdump(server):
     # The fixture keeps the profile but not its 2.5 MB jitdump.
     with pytest.raises(ToolError, match="needs the jitdump"):
         _call(server, "samply_annotate", recording=FIXTURE, symbol="hotLoop")
+
+
+def test_per_library_hotspots_drop_the_function_numbers(server):
+    _call(server, "samply_hotspots", recording=FIXTURE, n=2)
+    _call(server, "samply_hotspots", recording=FIXTURE, by_lib=True)
+    with pytest.raises(ToolError, match="out of range"):
+        _call(server, "samply_callers", recording=FIXTURE, symbol="#1")

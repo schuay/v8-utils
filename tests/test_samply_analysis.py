@@ -172,3 +172,10 @@ def test_thread_selection():
     assert samply.hotspots(p).thread.name == "worker"  # most CPU
     assert samply.hotspots(p, "d8").rows[0].function == _fn(F_OPT)
     assert samply.hotspots(p, 1).rows[0].function == _fn(F_OPT)
+
+
+def test_diff_takes_thread_names():
+    p = _profile(("d8", 1, [([MAIN, F_OPT], 1, 1000)]))
+    assert samply.diff(p, p, "d8")
+    with pytest.raises(TypeError, match="tids differ between recordings"):
+        samply.diff(p, p, 1)
