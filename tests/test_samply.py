@@ -107,7 +107,8 @@ def test_samply_js_label_frames_are_dropped(profile):
             assert all(f.address != -1 for f in s.frames)
 
 
-def test_natives_are_named_by_lib_and_rva(profile):
+def test_unsymbolized_natives_are_named_by_lib_and_rva():
+    profile = Profile.load(FIXTURE_DIR, symbolize=False)
     natives = {
         f
         for s in profile.main_thread().samples()
@@ -117,6 +118,19 @@ def test_natives_are_named_by_lib_and_rva(profile):
     assert natives
     for f in natives:
         assert f.name == f"{f.lib}+{f.address:#x}"
+    assert profile.unsymbolized == {}
+
+
+def test_missing_binary_is_reported(profile):
+    # The fixture's d8 path was rewritten to one that does not exist.
+    assert profile.unsymbolized["d8"] == "/v8/out/d8 not found"
+    d8_frames = {
+        f.name
+        for s in profile.main_thread().samples()
+        for f in s.frames
+        if f.lib == "d8"
+    }
+    assert d8_frames and all(n.startswith("d8+0x") for n in d8_frames)
 
 
 def test_jit_frames_come_from_the_jitdump(profile):
