@@ -13,6 +13,8 @@ from ..api import gerrit as gerrit_tools
 from ..render.gerrit import format_cl_list, format_comments, format_draft_results
 from ._shared import _text_result
 
+SUMMARY = "gerrit_* (Chromium Gerrit code review)"
+
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
 # client sends it as the parameter's own schema description rather than leaving
 # the model to match a prose line against a signature by name.

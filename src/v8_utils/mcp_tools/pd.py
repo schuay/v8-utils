@@ -17,6 +17,8 @@ from ..api.pd import CommitStore, changepoints_to_payload
 from ..render import pd as report
 from ._shared import _text_result
 
+SUMMARY = "pd_* (perf data: change-point detection and AB compare)"
+
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
 # client sends it as the parameter's own schema description rather than leaving
 # the model to match a prose line against a signature by name.

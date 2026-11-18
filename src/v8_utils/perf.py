@@ -7,7 +7,9 @@ All functions invoke the `perf` binary via subprocess and parse its
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -44,6 +46,18 @@ class SymbolCache:
 
 
 def _run(args: list[str]) -> str:
+    if shutil.which(args[0]) is None:
+        # Not a RuntimeError: callers treat those as "no data" and would turn a
+        # missing install into an empty result.
+        if not sys.platform.startswith("linux"):
+            raise FileNotFoundError(
+                f"perf is Linux-only and cannot run on {sys.platform}. Analyze"
+                " this perf.data on a Linux host."
+            )
+        raise FileNotFoundError(
+            "perf not found on PATH. Install Linux perf (Debian: linux-perf,"
+            " Ubuntu: linux-tools-generic, Fedora/Arch: perf)."
+        )
     r = subprocess.run(args, check=False, capture_output=True, text=True)
     # perf exits non-zero for harmless warnings; only fail when stdout is empty
     if r.returncode != 0 and not r.stdout.strip():

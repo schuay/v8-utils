@@ -10,6 +10,8 @@ from ..api import repo_git
 from ..api import worktree as worktree_mod
 from ._shared import _text_result
 
+SUMMARY = "worktree (create/remove V8 git worktrees)"
+
 
 def register(mcp: FastMCP) -> None:
     @mcp.tool()

@@ -26,6 +26,8 @@ from ..render.pinpoint import (
 )
 from ._shared import _text_result
 
+SUMMARY = "pinpoint_* (Chromium Pinpoint A/B jobs)"
+
 # Argument documentation lives on the argument (Annotated[..., Field(...)]) so a
 # client sends it as the parameter's own schema description rather than leaving
 # the model to match a prose line against a signature by name. These recur

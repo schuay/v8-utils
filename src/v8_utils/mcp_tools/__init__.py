@@ -5,7 +5,12 @@ that defines and decorates its tools. ``build_server`` constructs a FastMCP and
 registers the enabled groups; ``GROUPS`` is the authoritative table of group
 names, the module that implements each, its default-on/off state, and the
 v8-utils-core extra that supplies its dependencies (None for groups that need
-only the base install).
+only the base install). Each module also exports ``SUMMARY``, its line in the
+server instructions, so the instructions name only the registered tools.
+
+Groups that wrap a platform-specific profiler default to on only where that
+profiler runs. They are still registered when their binary is missing, so a
+call says what to install instead of the tools silently disappearing.
 
 Group modules are imported lazily inside ``build_server`` rather than at package
 import time: the v8-utils-core distribution puts the heavy scientific/cloud
@@ -23,6 +28,7 @@ daemon never has to call a tool over MCP to get a structured answer.
 
 import importlib
 import logging
+import sys
 from typing import NamedTuple
 
 from mcp.server.fastmcp import FastMCP
@@ -47,9 +53,12 @@ class Group(NamedTuple):
     extra: str | None  # pip extra supplying its deps; None means base install
 
 
+_LINUX = sys.platform.startswith("linux")
+
 GROUPS: dict[str, Group] = {
     "gerrit": Group("gerrit", True, None),
     "pd": Group("pd", False, "analysis"),
+    "perf": Group("perf", _LINUX, "analysis"),
     "performance": Group("performance", True, "analysis"),
     "pinpoint": Group("pinpoint", True, "pinpoint"),
     "repo_git": Group("repo_git", True, None),
@@ -90,35 +99,7 @@ def build_server(
             " text and author read as placeholders, and CLs they own or uploaded"
             " to are not shown."
         )
-    mcp = FastMCP(
-        "v8-utils",
-        log_level="WARNING",
-        instructions=(
-            f"V8 engine development toolkit. Configured repos: {REPOS_LINE}.\n"
-            "\n"
-            "v8 work often happens in git worktrees. A repo_git_* call reads the "
-            "main checkout unless the session has bound it elsewhere; name "
-            "`worktree=<name>` to read a specific checkout (uncommitted edits "
-            "included) or `ref=` a specific revision, and either wins over any "
-            "default. repo_git_worktree_select, where it is offered, sets the "
-            "session default instead; it is per server process, so callers "
-            "sharing one server use the per-call arguments.\n"
-            "\n"
-            "Tools: "
-            "repo_git_* (search/read companion repos), "
-            "run_d8 (execute JS in V8 shell), "
-            "worktree (create/remove V8 git worktrees), "
-            "perf_* (Linux perf profiles), "
-            "godbolt_* (Compiler Explorer), "
-            "llvm_mca (assembly throughput), "
-            "d8_trace_index (V8 traces), "
-            "v8log_analyze (V8 logs: deopts, ICs, maps, profile), "
-            "jsb_run_bench (run/compare JS benchmarks), "
-            "pd_* (perf data: change-point detection and AB compare), "
-            "pinpoint_* (Chromium Pinpoint A/B jobs), "
-            "gerrit_* (Chromium Gerrit code review)." + trust_note
-        ),
-    )
+    modules = {}
     for name, group in GROUPS.items():
         if not overrides.get(name, group.default):
             continue
@@ -135,6 +116,28 @@ def build_server(
             )
             _log.warning("skipping MCP tool group %r: %s (%s)", name, exc, hint)
             continue
+        modules[name] = module
+    mcp = FastMCP(
+        "v8-utils",
+        log_level="WARNING",
+        instructions=(
+            f"V8 engine development toolkit. Configured repos: {REPOS_LINE}.\n"
+            "\n"
+            "v8 work often happens in git worktrees. A repo_git_* call reads the "
+            "main checkout unless the session has bound it elsewhere; name "
+            "`worktree=<name>` to read a specific checkout (uncommitted edits "
+            "included) or `ref=` a specific revision, and either wins over any "
+            "default. repo_git_worktree_select, where it is offered, sets the "
+            "session default instead; it is per server process, so callers "
+            "sharing one server use the per-call arguments.\n"
+            "\n"
+            "Tools: "
+            + ", ".join(m.SUMMARY for m in modules.values())
+            + "."
+            + trust_note
+        ),
+    )
+    for name, module in modules.items():
         if name == "gerrit":
             module.register(
                 mcp,
