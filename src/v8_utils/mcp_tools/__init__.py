@@ -58,7 +58,7 @@ _LINUX = sys.platform.startswith("linux")
 GROUPS: dict[str, Group] = {
     "gerrit": Group("gerrit", True, None),
     "pd": Group("pd", False, "analysis"),
-    "perf": Group("perf", _LINUX, "analysis"),
+    "perf": Group("perf", _LINUX, None),
     "performance": Group("performance", True, "analysis"),
     "pinpoint": Group("pinpoint", True, "pinpoint"),
     "repo_git": Group("repo_git", True, None),
