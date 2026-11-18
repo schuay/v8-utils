@@ -188,11 +188,20 @@ def test_non_sample_weights_are_refused(tmp_path):
         Profile.load(_write(tmp_path, raw))
 
 
-def test_first_sample_cpu_delta_is_not_counted(profile):
-    # samply gives the first sample the thread's CPU time from before
-    # sampling started: 5958 us of startup on the fixture's d8 thread.
-    raw = _raw()["threads"][0]["samples"]["threadCPUDelta"]
-    assert raw[0] == 5958
+def test_cpu_from_before_the_first_sample_is_not_counted(profile):
+    # The d8 thread registered before sampling began; samply gives its first
+    # sample the CPU time since then: 5958 us of startup.
+    raw = _raw()["threads"][0]
+    assert raw["registerTime"] < raw["samples"]["time"][0]
+    deltas = raw["samples"]["threadCPUDelta"]
+    assert deltas[0] == 5958
     main = profile.main_thread()
     assert next(iter(main.samples())).cpu_us == 0
-    assert main.cpu_us() == sum(raw[1:])
+    assert main.cpu_us() == sum(deltas[1:])
+
+
+def test_threads_started_while_sampling_keep_their_first_delta(profile):
+    raw = next(t for t in _raw()["threads"] if t["tid"] == "2594930")
+    assert raw["registerTime"] == raw["samples"]["time"][0]
+    worker = profile.thread(2594930)
+    assert worker.cpu_us() == sum(raw["samples"]["threadCPUDelta"]) > 0

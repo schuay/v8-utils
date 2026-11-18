@@ -189,11 +189,12 @@ class Thread:
             )
         self._stacks = _resolve_stacks(raw, libs, native_name)
         # A sample's CPU delta is the thread's CPU time since the previous
-        # sample. The first one has none, and samply reports the CPU time
-        # the thread used before sampling started (process startup for the
-        # main thread), which would all land on one arbitrary PC.
+        # sample. For a thread that existed before its first sample (the
+        # main thread, from process startup on), the first delta covers that
+        # unsampled time and would all land on one arbitrary PC.
         self._cpu = list(self._samples.get("threadCPUDelta") or [])
-        if self._cpu:
+        times = self._samples["time"]
+        if self._cpu and raw.get("registerTime", times[0]) < times[0]:
             self._cpu[0] = 0
 
     def __len__(self) -> int:

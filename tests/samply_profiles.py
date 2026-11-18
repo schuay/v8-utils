@@ -10,8 +10,9 @@ def raw_profile(*threads, libs: list[dict] | None = None) -> dict:
     at a made-up address, or (name, lib index, address). libs defaults to
     one jitdump.
 
-    Each thread starts with a stackless, weightless sample, standing in for
-    samply's first sample, whose CPU delta is not counted.
+    Each thread starts with a stackless, weightless sample after its
+    registration, standing in for samply's first sample of a thread that ran
+    before sampling started, whose CPU delta is not counted.
     """
     libs = libs or [{"name": JIT, "path": f"/rec/{JIT}", "codeId": ""}]
     raw_threads = []
@@ -55,6 +56,7 @@ def raw_profile(*threads, libs: list[dict] | None = None) -> dict:
                 "tid": str(tid),
                 "pid": "1",
                 "isMainThread": tid == 1,
+                "registerTime": -1.0,
                 "stringArray": strings,
                 "frameTable": {"length": len(ft["func"]), **ft},
                 "funcTable": {
