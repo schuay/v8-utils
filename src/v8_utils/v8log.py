@@ -11,7 +11,6 @@ import bisect
 import logging
 import os
 import re
-import subprocess
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -21,6 +20,8 @@ from pathlib import Path
 from rich import box
 from rich.console import Console
 from rich.table import Table
+
+from .symbols import read_symbols, symbol_file
 
 # ── CSV parsing (ported from tools/csvparser.mjs) ────────────────────────────
 
@@ -252,10 +253,6 @@ class CodeMap:
 
 _log = logging.getLogger(__name__)
 
-# nm output: "0000000000abcdef 0000000000000123 T symbolName"
-# or without size: "0000000000abcdef T symbolName"
-_NM_RE = re.compile(r"^([0-9a-fA-F]+)\s+(?:([0-9a-fA-F]+)\s+)?[A-Za-z]\s+(.+)$")
-
 
 class CppSymbolizer:
     """Lazily resolves C++ symbols from shared libraries via nm."""
@@ -272,55 +269,19 @@ class CppSymbolizer:
             self._loaded.add(lib.name)
             self._load_lib(lib, code_map)
 
-    @staticmethod
-    def _symbol_file(path: Path) -> Path:
-        # Stripped Mach-O binaries keep their symbols in a dSYM bundle.
-        dsym = path.with_name(path.name + ".dSYM") / "Contents/Resources/DWARF"
-        dsym /= path.name
-        return dsym if dsym.exists() else path
-
     def _load_lib(self, lib: SharedLibrary, code_map: CodeMap) -> None:
         path = Path(lib.name)
         if not path.exists():
             _log.debug("Skipping %s: file not found", lib.name)
             return
-        path = self._symbol_file(path)
-        try:
-            result = subprocess.run(
-                ["nm", "-C", "-n", "-S", str(path)],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            _log.debug("nm failed for %s", lib.name)
+        symbols = read_symbols(symbol_file(path))
+        if symbols is None:
             return
-        if result.returncode != 0:
-            _log.debug("nm returned %d for %s", result.returncode, lib.name)
-            return
-
-        symbols: list[tuple[int, int, str]] = []
-        for line in result.stdout.splitlines():
-            m = _NM_RE.match(line)
-            if not m:
-                continue
-            addr = int(m.group(1), 16)
-            size = int(m.group(2), 16) if m.group(2) else 0
-            name = m.group(3)
-            symbols.append((addr, size, name))
-
-        # Fill in missing sizes from gaps between consecutive symbols
-        for i in range(len(symbols) - 1):
-            if symbols[i][1] == 0:
-                gap = symbols[i + 1][0] - symbols[i][0]
-                symbols[i] = (symbols[i][0], gap, symbols[i][2])
-        if symbols and symbols[-1][1] == 0:
-            symbols[-1] = (symbols[-1][0], 1, symbols[-1][2])
 
         lib_base = lib.start
         lib_end = lib.end
-        for nm_addr, size, name in symbols:
+        for sym in symbols:
+            nm_addr, size, name = sym.address, sym.size, sym.name
             # Same rule as tools/tickprocessor.mjs: small addresses are
             # library-relative (ELF), otherwise they are link-time addresses
             # that only need the ASLR slide (Mach-O).

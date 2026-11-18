@@ -958,7 +958,7 @@ class TestCppSymbolizer:
                 seen.append(cmd[-1])
             return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
 
-        monkeypatch.setattr("v8_utils.v8log.subprocess.run", run)
+        monkeypatch.setattr("v8_utils.symbols.subprocess.run", run)
 
     def test_symbolize_library_relative(self, tmp_path, monkeypatch):
         """Addresses below the library size are relative to its start (ELF)."""
