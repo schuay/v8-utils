@@ -135,10 +135,26 @@ read specific sections by line number.
 
 ---
 
+## Profiling on macOS
+
+`jsb_run_bench(record="perf")` records with samply there and returns a
+recording directory; read it with the `samply_*` tools instead of `perf_*`.
+They weigh samples by CPU time (`wall=true` adds blocked time) and default to
+the thread with the most CPU time (`samply_threads` lists the others).
+
+- `samply_hotspots` rows are per code object: the tier column (`turbofan`,
+  `maglev osr`, `turbofan ctx`, ...) separates a function's tiers unless
+  `merge_tiers`.
+- `samply_annotate` lists every code object of the function (pick one with
+  `code=N`) and interleaves JS source positions. JetStream sources are
+  evaluated as `(d8)`, so positions there come without the source line.
+- Hardware counters (`perf_stat`, `perf_tma`) have no macOS equivalent yet.
+
 ## Investigation workflow
 
 1. **Profile** — start with `perf_hotspots`, filter by `dso` to reduce noise.
    Use `perf_annotate` on top symbols, `perf_callers` when `total_pct >> self_pct`.
+   On macOS: `samply_hotspots`, `samply_annotate`, `samply_callers`.
 
 2. **Correlate with V8** — extract function names from perf symbols (strip
    `LazyCompile:~` prefix), print optimized code with `--code-comments`, use
@@ -147,5 +163,5 @@ read specific sections by line number.
 3. **Form and test hypotheses** — use targeted trace flags to confirm or
    reject what the profile data suggests.
 
-4. **Validate** — use `perf_diff` or `godbolt_compile` (with `mca` for pipeline
+4. **Validate** — use `perf_diff` (`samply_diff` on macOS) or `godbolt_compile` (with `mca` for pipeline
    analysis) to confirm that a change moves things in the expected direction.
