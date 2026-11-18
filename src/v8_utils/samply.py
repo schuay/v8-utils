@@ -188,6 +188,13 @@ class Thread:
                 f" {self._samples['weightType']!r}"
             )
         self._stacks = _resolve_stacks(raw, libs, native_name)
+        # A sample's CPU delta is the thread's CPU time since the previous
+        # sample. The first one has none, and samply reports the CPU time
+        # the thread used before sampling started (process startup for the
+        # main thread), which would all land on one arbitrary PC.
+        self._cpu = list(self._samples.get("threadCPUDelta") or [])
+        if self._cpu:
+            self._cpu[0] = 0
 
     def __len__(self) -> int:
         return self._samples["length"]
@@ -195,7 +202,7 @@ class Thread:
     def samples(self) -> Iterator[Sample]:
         s = self._samples
         weights = s.get("weight") or [1] * s["length"]
-        cpu = s.get("threadCPUDelta") or [0] * s["length"]
+        cpu = self._cpu or [0] * s["length"]
         for stack, time, weight, delta in zip(
             s["stack"], s["time"], weights, cpu, strict=True
         ):
@@ -203,7 +210,7 @@ class Thread:
             yield Sample(frames, time, weight, delta or 0)
 
     def cpu_us(self) -> float:
-        return sum(d or 0 for d in self._samples.get("threadCPUDelta") or ())
+        return sum(d or 0 for d in self._cpu)
 
 
 def _resolve_stacks(

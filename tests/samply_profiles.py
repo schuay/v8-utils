@@ -8,10 +8,15 @@ def raw_profile(*threads, libs: list[dict] | None = None) -> dict:
     """threads: (name, tid, samples); a sample is (root-first frames, weight,
     cpu_us). A frame is a jitdump name ("JS:*f a.js:1:1"), placed in libs[0]
     at a made-up address, or (name, lib index, address). libs defaults to
-    one jitdump."""
+    one jitdump.
+
+    Each thread starts with a stackless, weightless sample, standing in for
+    samply's first sample, whose CPU delta is not counted.
+    """
     libs = libs or [{"name": JIT, "path": f"/rec/{JIT}", "codeId": ""}]
     raw_threads = []
     for name, tid, samples in threads:
+        samples = [((), 0, 5000), *samples]
         strings: list[str] = []
         funcs: dict[tuple[str, int], int] = {}
         frames: dict[tuple[str, int, int], int] = {}

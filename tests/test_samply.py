@@ -186,3 +186,13 @@ def test_non_sample_weights_are_refused(tmp_path):
     raw["threads"][0]["samples"]["weightType"] = "tracing-ms"
     with pytest.raises(ValueError, match="unsupported weightType 'tracing-ms'"):
         Profile.load(_write(tmp_path, raw))
+
+
+def test_first_sample_cpu_delta_is_not_counted(profile):
+    # samply gives the first sample the thread's CPU time from before
+    # sampling started: 5958 us of startup on the fixture's d8 thread.
+    raw = _raw()["threads"][0]["samples"]["threadCPUDelta"]
+    assert raw[0] == 5958
+    main = profile.main_thread()
+    assert next(iter(main.samples())).cpu_us == 0
+    assert main.cpu_us() == sum(raw[1:])

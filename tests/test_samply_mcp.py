@@ -25,7 +25,7 @@ def _call(server, name: str, **args) -> str:
 def test_hotspots_table(server):
     text = _call(server, "samply_hotspots", recording=FIXTURE, n=2)
     lines = text.splitlines()
-    assert lines[0] == "thread d8 (tid 2594876), CPU time 405 ms"
+    assert lines[0] == "thread d8 (tid 2594876), CPU time 399 ms"
     assert "turbofan osr" in lines[4] and "/work/work.js:1:1" in lines[4]
     assert "turbofan ctx" in lines[5] and "hotLoop /work/work.js:3:17" in lines[5]
     assert "d8: /v8/out/d8 not found" in text
