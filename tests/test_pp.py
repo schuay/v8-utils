@@ -878,6 +878,23 @@ class TestConfigurationValidation:
             )
         assert created == [], "no job should be created when validation fails"
 
+    def test_unreachable_config_endpoint_skips_validation(self, monkeypatch):
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
+
+        monkeypatch.setattr(pinpoint, "known_configurations", lambda: frozenset())
+        created = []
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kw: created.append(kw) or {}
+        )
+        tools.create_pinpoint_jobs(
+            benchmarks=["js3"],
+            configurations=["linux"],
+            exp_patches=[None],
+            watch=False,
+        )
+        assert [c["configuration"] for c in created] == ["linux"]
+
     def test_unknown_configuration_message_lists_bots(self, monkeypatch):
         from v8_utils import pinpoint
         from v8_utils import pinpoint_jobs as tools

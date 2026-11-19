@@ -263,12 +263,13 @@ def create_pinpoint_jobs(
 
     # Validate every configuration up front.  Creating jobs one at a time means
     # a bad name in the middle of the list would otherwise leave the earlier
-    # ones running, which reads as a complete batch.
+    # ones running, which reads as a complete batch.  An empty set means the
+    # config endpoint was unreachable; leave the check to Pinpoint then.
     known = pinpoint.known_configurations()
     unknown = [
         c
         for c in configurations
-        if pinpoint.CONFIGURATION_ALIASES.get(c, c) not in known
+        if known and pinpoint.CONFIGURATION_ALIASES.get(c, c) not in known
     ]
     if unknown:
         others = sorted(known - set(pinpoint.CONFIGURATION_ALIASES.values()))
