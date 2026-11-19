@@ -275,11 +275,30 @@ def create(
 
     # Symlink gclient-managed deps.
     _create_symlinks(main, wt_path, gclient_root)
+    _skip_v8_worktree_deps(wt_path)
 
     # Set up default build directories.
     build_results = _setup_builds(wt_path, _DEFAULT_BUILDS)
 
     return Created(path=wt_path, builds=build_results)
+
+
+def _skip_v8_worktree_deps(wt_path: Path) -> None:
+    """Turn off V8's own worktree dependency setup for this worktree.
+
+    gm.py runs tools/dev/setup_worktree_build.py on every invocation. When the
+    worktree's DEPS differs from the main checkout's, that script runs a
+    separate gclient sync into <main>/worktrees/.deps_cache (several GB per
+    distinct DEPS, at least three entries kept) and repoints the worktree's
+    links into it. Deps here come from _create_symlinks, so the script is
+    disabled before _setup_builds first runs gm.py.
+
+    Worktree scope, because a linked worktree shares the common .git/config: a
+    plain write would disable it for the main checkout and every other worktree.
+    """
+    git = ["git", "-C", str(wt_path), "config"]
+    _run([*git, "extensions.worktreeConfig", "true"])
+    _run([*git, "--worktree", "v8.skip-worktree-deps", "true"])
 
 
 def _create_symlinks(main: Path, wt_path: Path, gclient_root: Path) -> list[str]:
