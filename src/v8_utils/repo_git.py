@@ -319,6 +319,8 @@ def log(
         f"-{limit + 1}",
         "--format=%h %as %an  %s",
     ]
+    if grep or author:
+        cmd.append("-E")
     if grep:
         cmd.extend(["--grep", grep, "-i"])
     if author:

@@ -256,6 +256,12 @@ class TestRepoGitLog:
         out = _log(mcp, author="Nobody")
         assert out == "No commits found."
 
+    def test_grep_uses_extended_regex(self, mcp):
+        out = _log(mcp, grep="first|second")
+        assert "first commit" in out
+        assert "second commit" in out
+        assert _log(mcp, author="Nobody|Tester") != "No commits found."
+
     def test_since_bounds_lower(self, mcp):
         # Only the 2021 commit is after this cutoff.
         out = _log(mcp, since="2021-01-01")

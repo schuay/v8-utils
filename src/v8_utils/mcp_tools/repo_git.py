@@ -186,7 +186,12 @@ def register(mcp: FastMCP) -> None:
         ] = 20,
         grep: Annotated[
             str | None,
-            Field(description="optional pattern to filter commit messages"),
+            Field(
+                description=(
+                    "optional extended regex (-E, case-insensitive) to filter"
+                    " commit messages"
+                )
+            ),
         ] = None,
         author: Annotated[
             str | None,
