@@ -16,9 +16,9 @@ SUMMARY = (
     "samply_* (macOS samply recordings: hotspots, callers, flamegraph, diff, annotate)"
 )
 
-# samply_hotspots remembers its most recent rows per recording so that later
-# calls can name a function as "#3".
-_symbols = perf_tools.SymbolCache()
+# samply_hotspots remembers its most recent function rows per canonical profile
+# path so that later calls can name a function as "#3".
+_symbols = perf_tools.SymbolCache("samply_hotspots")
 
 RECORDING_ARG = (
     'samply recording directory (as returned by jsb_run_bench record="perf"),'
@@ -39,8 +39,12 @@ def _thread(thread: str | None) -> str | int | None:
     return int(thread) if thread is not None and thread.isdigit() else thread
 
 
-def _resolve(recording: str, symbol: str) -> str:
-    return _symbols.resolve(recording, symbol)
+def _symbol_key(profile: samply.Profile) -> str:
+    return str(profile.path.resolve())
+
+
+def _resolve(profile: samply.Profile, symbol: str) -> str:
+    return _symbols.resolve(_symbol_key(profile), symbol)
 
 
 def register(mcp: FastMCP) -> None:
@@ -86,10 +90,13 @@ def register(mcp: FastMCP) -> None:
             by_lib=by_lib,
             filter=filter,
         )
-        # A per-library listing has no function rows; drop the previous ones
-        # so #N cannot name a row this call did not show.
-        rows = [] if by_lib else [{"symbol": r.function.name} for r in h.rows]
-        _symbols.remember(recording, rows)
+        # Keep the last function-level #N listing intact when called with
+        # by_lib=True (often in parallel with samply_hotspots(n=...)).
+        if not by_lib:
+            _symbols.remember(
+                _symbol_key(profile),
+                [{"symbol": r.function.name} for r in h.rows],
+            )
         return _text_result(render.format_hotspots(profile, h))
 
     @mcp.tool()
@@ -107,9 +114,10 @@ def register(mcp: FastMCP) -> None:
         Use this when total% >> self% in samply_hotspots, or to see which call
         site makes a builtin or runtime function hot.
         """
+        profile = samply.load(recording)
         c = samply.callers(
-            samply.load(recording),
-            _resolve(recording, symbol),
+            profile,
+            _resolve(profile, symbol),
             _thread(thread),
             depth=depth,
             n=n,
@@ -152,10 +160,11 @@ def register(mcp: FastMCP) -> None:
         With focus, paths start at that function, which shows where its
         inclusive time goes.
         """
+        profile = samply.load(recording)
         if focus is not None:
-            focus = _resolve(recording, focus)
+            focus = _resolve(profile, focus)
         fg = samply.flamegraph(
-            samply.load(recording),
+            profile,
             _thread(thread),
             focus=focus,
             depth=depth,
@@ -238,9 +247,10 @@ def register(mcp: FastMCP) -> None:
         Line numbers index the full listing: use samply_annotate_read_around
         to read more of it.
         """
+        profile = samply.load(recording)
         a = samply.annotate(
-            samply.load(recording),
-            _resolve(recording, symbol),
+            profile,
+            _resolve(profile, symbol),
             _thread(thread),
             code=code,
             wall=wall,
@@ -266,9 +276,10 @@ def register(mcp: FastMCP) -> None:
     ) -> CallToolResult:
         """A window of the samply_annotate listing around a line, for reading
         beyond the hot blocks."""
+        profile = samply.load(recording)
         a = samply.annotate(
-            samply.load(recording),
-            _resolve(recording, symbol),
+            profile,
+            _resolve(profile, symbol),
             _thread(thread),
             code=code,
             wall=wall,

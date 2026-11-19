@@ -66,8 +66,24 @@ def test_annotate_needs_the_jitdump(server):
         _call(server, "samply_annotate", recording=FIXTURE, symbol="hotLoop")
 
 
-def test_per_library_hotspots_drop_the_function_numbers(server):
+def test_per_library_hotspots_preserve_function_numbers_and_canonicalize_paths(
+    server, tmp_path
+):
+    import shutil
+
+    other = tmp_path / "other"
+    shutil.copytree(FIXTURE, other)
     _call(server, "samply_hotspots", recording=FIXTURE, n=2)
+    # Parallel or follow-up by_lib=True calls must not wipe #N references,
+    # nor should profiling another recording clobber FIXTURE's #N entries.
     _call(server, "samply_hotspots", recording=FIXTURE, by_lib=True)
-    with pytest.raises(ToolError, match="out of range"):
-        _call(server, "samply_callers", recording=FIXTURE, symbol="#1")
+    _call(server, "samply_hotspots", recording=str(other), n=1)
+    # Resolving via profile.json.gz path hits the same canonical entry as the dir.
+    text = _call(
+        server,
+        "samply_callers",
+        recording=f"{FIXTURE}/profile.json.gz",
+        symbol="#2",
+        depth=1,
+    )
+    assert "matched: hotLoop /work/work.js:3:17" in text

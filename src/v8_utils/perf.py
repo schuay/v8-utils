@@ -14,10 +14,11 @@ from pathlib import Path
 
 
 class SymbolCache:
-    """The most recent hotspots() rows per perf.data path, so a caller can
+    """The most recent hotspots() rows per profile path, so a caller can
     name a symbol as "#N" from that listing in later calls."""
 
-    def __init__(self) -> None:
+    def __init__(self, tool_name: str = "perf_hotspots") -> None:
+        self._tool_name = tool_name
         self._rows: dict[str, list[dict]] = {}
 
     def remember(self, perf_data: str, rows: list[dict]) -> None:
@@ -35,7 +36,7 @@ class SymbolCache:
         if rows is None:
             raise ValueError(
                 f"No cached hotspots for {perf_data!r}. "
-                f"Run perf_hotspots first, then use #N references."
+                f"Run {self._tool_name} first, then use #N references."
             )
         if idx < 1 or idx > len(rows):
             raise ValueError(f"Symbol index {idx} out of range (1–{len(rows)})")
