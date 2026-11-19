@@ -53,6 +53,12 @@ ENTRIES: list[str] = [
     "`pp create-job` no longer sends invalid default stories for `js3`, `js2`, and `sp3` Crossbench jobs",
     "`pp` and `vt` now check for updates on interactive startup and prompt before installing from GitHub; disable with `auto_update = false` or `V8_UTILS_NO_AUTO_UPDATE=1`",
     "*create-job* `--extra-test-args` passes arguments to the benchmark runner of both arms, e.g. `pp c -t sp3 --extra-test-args=--iterations=20`",
+    "`pp create-job -c m5pro` runs on the new M5 Pro bot (`mac-m5-pro-perf`); help texts and errors now list all bot aliases",
+    "`vt rm` now deletes the branch by default; pass `--keep-branch` to keep it _(replaces `--remove-branch`)_",
+    "*macOS profiling*: `jsb --perf` records with samply; new MCP tools `samply_hotspots`, `samply_callers`, `samply_flamegraph`, `samply_diff`, `samply_threads`, `samply_annotate` read the recordings _(on by default only on macOS; `--enable-samply` elsewhere)_",
+    "`jsb --perf --rate HZ` sets the samply sampling rate _(default 1000, config key `sample_rate`)_",
+    "On macOS, the config at `~/.config/v8-utils/config.toml` is now read _(was silently ignored)_",
+    "v8-utils mcp: `perf_*` tools are on by default only on Linux; `--enable-perf` registers them elsewhere",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────
