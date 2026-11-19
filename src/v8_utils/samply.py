@@ -495,7 +495,7 @@ class Hotspots:
     thread: Thread
     wall: bool
     total_ms: float
-    rows: list[Hotspot]  # by self time, descending
+    rows: list[Hotspot]  # descending by sort_by ("self" or "total")
 
 
 def hotspots(
@@ -507,8 +507,11 @@ def hotspots(
     merge_tiers: bool = False,
     by_lib: bool = False,
     filter: str | None = None,
+    sort_by: str = "self",
 ) -> Hotspots:
     """Self and total time per function (or per library with by_lib)."""
+    if sort_by not in ("self", "total"):
+        raise ValueError(f"sort_by must be 'self' or 'total', got {sort_by!r}")
     t = _select_thread(profile, thread)
     self_ms: dict[Function, float] = {}
     total_ms: dict[Function, float] = {}
@@ -530,7 +533,10 @@ def hotspots(
         for k, v in total_ms.items()
         if filter is None or filter in k.name
     ]
-    rows.sort(key=lambda r: (-r.self_ms, -r.total_ms, r.function.name))
+    if sort_by == "total":
+        rows.sort(key=lambda r: (-r.total_ms, -r.self_ms, r.function.name))
+    else:
+        rows.sort(key=lambda r: (-r.self_ms, -r.total_ms, r.function.name))
     return Hotspots(t, wall, total, rows[:n])
 
 
@@ -572,6 +578,7 @@ def callers(
     depth: int = 5,
     n: int = 20,
     wall: bool = False,
+    merge_tiers: bool = False,
 ) -> Callers:
     """The call paths leading into functions matching `symbol`, `depth`
     callers deep, weighted by the time spent in (and under) the function.
@@ -589,7 +596,10 @@ def callers(
         inclusive += w
         outer = hits[-1]
         chain = s.frames[outer + 1 : outer + 1 + depth]
-        key = (tuple(Function.of(f) for f in chain), tuple(f.source for f in chain))
+        key = (
+            tuple(Function.of(f, merge_tiers) for f in chain),
+            tuple(f.source for f in chain),
+        )
         paths[key] = paths.get(key, 0.0) + w
     ordered = sorted(paths.items(), key=lambda kv: -kv[1])[:n]
     return Callers(
@@ -627,6 +637,7 @@ def flamegraph(
     min_pct: float = 0.5,
     wall: bool = False,
     native_root: bool = False,
+    merge_tiers: bool = False,
 ) -> Flamegraph:
     """Collapsed stacks: root-to-leaf paths with their time, cut to `depth`
     frames below the root (or below the focused function, whose subtree is
@@ -657,7 +668,7 @@ def flamegraph(
             frames = frames[first_jit:]
         kept_frames = frames[:depth]
         key = (
-            tuple(Function.of(f) for f in kept_frames),
+            tuple(Function.of(f, merge_tiers) for f in kept_frames),
             tuple(f.inlined for f in kept_frames),
         )
         paths[key] = paths.get(key, 0.0) + w

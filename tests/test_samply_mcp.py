@@ -87,3 +87,29 @@ def test_per_library_hotspots_preserve_function_numbers_and_canonicalize_paths(
         depth=1,
     )
     assert "matched: hotLoop /work/work.js:3:17" in text
+
+
+def test_hotspots_sort_by_total_and_merge_tiers_on_callers_and_flamegraph(server):
+    by_total = _call(server, "samply_hotspots", recording=FIXTURE, n=3, sort_by="total")
+    # Entry frames have 0% self time and 100% total time, so sort_by="total"
+    # surfaces them at #1 ahead of leaf hotspots.
+    row1 = by_total.splitlines()[4]
+    assert "0.0%" in row1 and "100.0%" in row1 and "start" in row1
+
+    merged_callers = _call(
+        server,
+        "samply_callers",
+        recording=FIXTURE,
+        symbol="hotLoop",
+        merge_tiers=True,
+    )
+    assert "[turbofan" not in merged_callers and "[maglev" not in merged_callers
+
+    merged_fg = _call(
+        server,
+        "samply_flamegraph",
+        recording=FIXTURE,
+        min_pct=1,
+        merge_tiers=True,
+    )
+    assert "[turbofan" not in merged_fg and "[maglev" not in merged_fg

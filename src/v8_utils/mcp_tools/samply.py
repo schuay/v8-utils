@@ -1,7 +1,7 @@
 """MCP tools for reading samply recordings (macOS profiles from jsb_run_bench
 record="perf")."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult
@@ -33,6 +33,10 @@ WALL_ARG = (
     "weigh samples by elapsed time instead of CPU time, so blocked time"
     " (waits, I/O) counts"
 )
+MERGE_TIERS_ARG = (
+    "count a JS function's Ignition/Sparkplug/Maglev/Turbofan (and osr/ctx)"
+    " code flavours together"
+)
 
 
 def _thread(thread: str | None) -> str | int | None:
@@ -56,12 +60,7 @@ def register(mcp: FastMCP) -> None:
         wall: Annotated[bool, Field(description=WALL_ARG)] = False,
         merge_tiers: Annotated[
             bool,
-            Field(
-                description=(
-                    "count a JS function's Ignition/Sparkplug/Maglev/Turbofan code"
-                    " as one row"
-                )
-            ),
+            Field(description=MERGE_TIERS_ARG),
         ] = False,
         by_lib: Annotated[
             bool, Field(description="aggregate per library instead of per function")
@@ -69,10 +68,19 @@ def register(mcp: FastMCP) -> None:
         filter: Annotated[
             str | None, Field(description="only functions whose name contains this")
         ] = None,
+        sort_by: Annotated[
+            Literal["self", "total"],
+            Field(
+                description=(
+                    'rank by "self" (exclusive time, default) or "total"'
+                    " (inclusive time, to surface dispatchers and wrappers)"
+                )
+            ),
+        ] = "self",
     ) -> CallToolResult:
-        """Top functions of a samply recording by self time, with total
-        (inclusive) time, frame kind (js, builtin, regexp, native), JS tier
-        and library.
+        """Top functions of a samply recording by self (or total) time, with
+        total (inclusive) time, frame kind (js, builtin, regexp, native), JS
+        tier and library.
 
         JS rows are per code object flavour: tier, "osr" for on-stack
         replacement code and "ctx" for context-specialized code.
@@ -89,6 +97,7 @@ def register(mcp: FastMCP) -> None:
             merge_tiers=merge_tiers,
             by_lib=by_lib,
             filter=filter,
+            sort_by=sort_by,
         )
         # Keep the last function-level #N listing intact when called with
         # by_lib=True (often in parallel with samply_hotspots(n=...)).
@@ -107,6 +116,10 @@ def register(mcp: FastMCP) -> None:
         depth: Annotated[int, Field(description="callers to show per path")] = 5,
         n: Annotated[int, Field(description="number of paths to return")] = 20,
         wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+        merge_tiers: Annotated[
+            bool,
+            Field(description=MERGE_TIERS_ARG),
+        ] = False,
     ) -> CallToolResult:
         """Who calls a function: the distinct caller chains into it, nearest
         caller first, weighted by the time spent in and under it.
@@ -122,6 +135,7 @@ def register(mcp: FastMCP) -> None:
             depth=depth,
             n=n,
             wall=wall,
+            merge_tiers=merge_tiers,
         )
         return _text_result(render.format_callers(c))
 
@@ -153,6 +167,10 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = False,
+        merge_tiers: Annotated[
+            bool,
+            Field(description=MERGE_TIERS_ARG),
+        ] = False,
     ) -> CallToolResult:
         """Collapsed stacks: every hot root-to-leaf path with its share of the
         thread's time, heaviest first ("a;b;c <ms>").
@@ -171,6 +189,7 @@ def register(mcp: FastMCP) -> None:
             min_pct=min_pct,
             wall=wall,
             native_root=native_root,
+            merge_tiers=merge_tiers,
         )
         return _text_result(render.format_flamegraph(fg))
 

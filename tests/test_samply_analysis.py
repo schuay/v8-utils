@@ -179,3 +179,51 @@ def test_diff_takes_thread_names():
     assert samply.diff(p, p, "d8")
     with pytest.raises(TypeError, match="tids differ between recordings"):
         samply.diff(p, p, 1)
+
+
+def test_hotspots_sort_by_total():
+    p = _profile(
+        (
+            "d8",
+            1,
+            [
+                ([MAIN, F_OPT], 1, 3000),
+                ([MAIN, G], 1, 2000),
+            ],
+        )
+    )
+    # MAIN has 0 self time and 5 ms total time; F_OPT has 3 ms self/total.
+    by_self = [r.function for r in samply.hotspots(p).rows]
+    by_total = [r.function for r in samply.hotspots(p, sort_by="total").rows]
+    assert by_self[0] == _fn(F_OPT) and by_self[-1] == _fn(MAIN)
+    assert by_total == [_fn(MAIN), _fn(F_OPT), _fn(G)]
+    with pytest.raises(ValueError, match="sort_by must be"):
+        samply.hotspots(p, sort_by="inclusive")
+
+
+def test_callers_and_flamegraph_merge_tiers():
+    p = _profile(
+        (
+            "d8",
+            1,
+            [
+                ([MAIN, F_OPT, BUILTIN], 1, 3000),
+                ([MAIN, F_MAG, BUILTIN], 1, 2000),
+                ([MAIN, "JS:*'f a.js:2:1", BUILTIN], 1, 1000),
+            ],
+        )
+    )
+    split_callers = samply.callers(p, "Add", depth=2)
+    assert len(split_callers.paths) == 3
+    merged_callers = samply.callers(p, "Add", depth=2, merge_tiers=True)
+    assert [([f.name for f in c.callers], c.ms) for c in merged_callers.paths] == [
+        (["f a.js:2:1", "main a.js:1:1"], 6.0)
+    ]
+    assert all(f.tier is None for f in merged_callers.paths[0].callers)
+
+    split_fg = samply.flamegraph(p, min_pct=0)
+    assert len(split_fg.paths) == 3
+    merged_fg = samply.flamegraph(p, min_pct=0, merge_tiers=True)
+    assert [([f.name for f in s.frames], s.ms) for s in merged_fg.paths] == [
+        (["main a.js:1:1", "f a.js:2:1", "Add"], 6.0)
+    ]
