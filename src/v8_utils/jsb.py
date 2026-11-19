@@ -20,6 +20,7 @@ from statistics import mean, stdev
 from scipy.stats import ttest_ind
 
 from . import config
+from .samply_slices import timings_preload_js
 
 # ---------- Variant ----------
 
@@ -271,6 +272,8 @@ def run_samply(
         )
     )
     d8_path = variant.d8(v8_out)
+    preload = rec / "timings-preload.js"
+    preload.write_text(timings_preload_js(rec / "timings.tsv", rec / "iterations.json"))
     d8_cmd = (
         [str(d8_path)]
         + (variant.flags.split() if variant.flags else [])
@@ -279,6 +282,7 @@ def run_samply(
             f"--perf-prof-path={rec}",
             "--interpreted-frames-native-stack",
             f"--logfile={rec / 'v8.log'}",
+            str(preload),
             str(suite_dir / "cli.js"),
         ]
     )

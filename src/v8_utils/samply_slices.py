@@ -18,10 +18,80 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from .samply import Profile, Thread
 
 _ITERATION_RE = re.compile(r"^(.*)-iteration-(\d+)$")
 NAMED_SLICES = frozenset({"first", "worst", "best", "average", "iters"})
+
+
+def timings_preload_js(timings_path: Path, iterations_path: Path) -> str:
+    """d8 preload script that intercepts JetStream3's performance.mark/measure
+    calls across child Realms and flushes `timings.tsv` (+ `iterations.json`
+    with worstCaseCount when available) on Realm.dispose. Zero I/O during
+    benchmark iterations."""
+    t_path = json.dumps(str(timings_path))
+    i_path = json.dumps(str(iterations_path))
+    return f"""\
+(function() {{
+  if (typeof performance !== "object" || typeof writeFile !== "function") return;
+  const now = performance.now.bind(performance);
+  const anchorWallUs = Date.now() * 1000;
+  const anchorPerfUs = now() * 1000;
+  const marks = new Map();
+  const rows = [];
+  const iterRe = /-iteration-\\d+$/;
+  function wrapPerf(p) {{
+    if (!p || typeof p.mark !== "function" || typeof p.measure !== "function") return;
+    const origMark = p.mark.bind(p);
+    const origMeasure = p.measure.bind(p);
+    p.mark = function(name) {{
+      if (typeof name === "string" && iterRe.test(name)) {{
+        marks.set(name, now() * 1000);
+      }}
+      return origMark.apply(this, arguments);
+    }};
+    p.measure = function(name, startMark) {{
+      const s = marks.get(startMark);
+      if (s !== undefined) {{
+        rows.push(name + "\\t" + s.toFixed(1) + "\\t" + (now() * 1000).toFixed(1));
+      }}
+      return origMeasure.apply(this, arguments);
+    }};
+  }}
+  function flush() {{
+    if (!rows.length) return;
+    const header = "# anchor " + anchorWallUs + " " + anchorPerfUs.toFixed(1) + "\\n";
+    writeFile({t_path}, header + rows.join("\\n") + "\\n");
+    try {{
+      if (typeof JetStream === "object" && Array.isArray(JetStream.benchmarks)) {{
+        const firstBench = rows[0].split("\\t")[0].replace(iterRe, "");
+        const b = JetStream.benchmarks.find(x => x && x.name === firstBench);
+        if (b && typeof b.worstCaseCount === "number" && b.worstCaseCount > 0) {{
+          writeFile({i_path}, JSON.stringify({{worstCaseCount: b.worstCaseCount}}) + "\\n");
+        }}
+      }}
+    }} catch (_) {{}}
+  }}
+  wrapPerf(performance);
+  if (typeof Realm === "object" && typeof Realm.createAllowCrossRealmAccess === "function") {{
+    const origCreate = Realm.createAllowCrossRealmAccess.bind(Realm);
+    Realm.createAllowCrossRealmAccess = function() {{
+      const r = origCreate.apply(this, arguments);
+      try {{ wrapPerf(Realm.global(r).performance); }} catch (_) {{}}
+      return r;
+    }};
+    if (typeof Realm.dispose === "function") {{
+      const origDispose = Realm.dispose.bind(Realm);
+      Realm.dispose = function() {{
+        flush();
+        return origDispose.apply(this, arguments);
+      }};
+    }}
+  }}
+}})();
+"""
 
 
 @dataclass(frozen=True)
