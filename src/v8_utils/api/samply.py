@@ -16,6 +16,7 @@ from ..samply import (
     Profile,
     RecordingInfo,
     Sample,
+    Slices,
     StackPath,
     Thread,
     ThreadSummary,
@@ -27,8 +28,11 @@ from ..samply import (
     load,
     match_functions,
     parse_jit_name,
+    resolve_time,
+    slices,
     threads,
 )
+from ..samply_slices import Slice
 
 __all__ = [
     "AnnotatedLine",
@@ -45,6 +49,8 @@ __all__ = [
     "Profile",
     "RecordingInfo",
     "Sample",
+    "Slice",
+    "Slices",
     "StackPath",
     "Thread",
     "ThreadSummary",
@@ -56,5 +62,7 @@ __all__ = [
     "load",
     "match_functions",
     "parse_jit_name",
+    "resolve_time",
+    "slices",
     "threads",
 ]

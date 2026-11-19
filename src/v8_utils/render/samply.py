@@ -38,9 +38,12 @@ def short_name(f: samply.Function) -> str:
     return f.name
 
 
-def _basis(thread: samply.Thread, wall: bool, total_ms: float) -> str:
+def _basis(
+    thread: samply.Thread, wall: bool, total_ms: float, time: str | None = None
+) -> str:
     kind = "wall time" if wall else "CPU time"
-    return f"thread {thread.name} (tid {thread.tid}), {kind} {total_ms:.0f} ms"
+    suffix = f", time {time}" if time else ""
+    return f"thread {thread.name} (tid {thread.tid}), {kind} {total_ms:.0f} ms{suffix}"
 
 
 def _pct(ms: float, total_ms: float) -> float:
@@ -101,7 +104,8 @@ def format_recording_info(profile: samply.Profile) -> list[str]:
 
 
 def format_hotspots(profile: samply.Profile, h: samply.Hotspots) -> str:
-    basis = f"{_basis(h.thread, h.wall, h.total_ms)}, {h.thread.sample_count()} samples"
+    n_samples = h.samples if h.samples is not None else h.thread.sample_count()
+    basis = f"{_basis(h.thread, h.wall, h.total_ms, h.time)}, {n_samples} samples"
     if not h.rows:
         return "\n".join([*format_recording_info(profile), f"No samples ({basis})."])
     idx_w = len(str(len(h.rows)))
@@ -130,7 +134,7 @@ def _short(f: samply.Function) -> str:
 
 def format_callers(c: samply.Callers) -> str:
     lines = [
-        _basis(c.thread, c.wall, c.total_ms),
+        _basis(c.thread, c.wall, c.total_ms, c.time),
         f"matched: {', '.join(sorted(c.matched))}",
         (
             f"inclusive: {c.inclusive_ms:.1f} ms"
@@ -153,7 +157,7 @@ def format_callers(c: samply.Callers) -> str:
 
 def format_flamegraph(fg: samply.Flamegraph) -> str:
     """Collapsed stacks, "root;...;leaf <ms>", heaviest first."""
-    lines = [_basis(fg.thread, fg.wall, fg.total_ms)]
+    lines = [_basis(fg.thread, fg.wall, fg.total_ms, fg.time)]
     if fg.focus is not None:
         lines.append(f"focus: {', '.join(sorted(fg.focus))}")
     lines.append("")
@@ -206,10 +210,42 @@ def format_threads(
     return "\n".join(lines)
 
 
+def format_slices(profile: samply.Profile, sl: samply.Slices) -> str:
+    kind = "wall ms" if sl.wall else "CPU ms"
+    span0, span1 = sl.span_ms
+    lines = [
+        *format_recording_info(profile),
+        (
+            f"thread {sl.thread.name} (tid {sl.thread.tid}), span"
+            f" {span0:.1f}..{span1:.1f} ms ({span1 - span0:.1f} ms)"
+        ),
+    ]
+    if sl.note:
+        lines.append(sl.note)
+    lines.append("")
+    if not sl.slices:
+        lines.append("No slices.")
+        return "\n".join(lines)
+    name_w = max(len("slice"), *(len(s.name) for s in sl.slices))
+    header = (
+        f"{'slice':<{name_w}}  {'win':>4}  {'samples':>7}  {kind:>8}  hottest (self)"
+    )
+    lines += [header, "-" * len(header)]
+    for s in sl.slices:
+        lines.append(
+            f"{s.name:<{name_w}}  {s.count:>4}  {s.samples:>7}  {s.ms:8.1f}  {s.top}"
+        )
+    lines += ["", "time args:"]
+    for s in sl.slices:
+        arg = s.time_arg if len(s.time_arg) <= 100 else s.time_arg[:97] + "..."
+        lines.append(f"  {s.name:<{name_w}}  {arg}")
+    return "\n".join(lines)
+
+
 def _annotation_header(a: samply.Annotation) -> list[str]:
     chosen = a.objects[a.selected]
     lines = [
-        _basis(a.thread, a.wall, sum(o.ms for o in a.objects))
+        _basis(a.thread, a.wall, sum(o.ms for o in a.objects), a.time)
         + f" in {', '.join(sorted(a.matched))}",
         "",
         "Code objects (pass code=N to annotate another):",

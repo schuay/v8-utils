@@ -27,6 +27,7 @@ from pathlib import Path
 
 from . import config, disasm, dwarf, macho
 from .jitdump import CodeLoad, JitDump
+from .samply_slices import Slices, build_slices, resolve_time
 from .symbols import Symbol, read_symbols, symbol_file
 from .v8log import TIER_BY_MARKER
 
@@ -306,9 +307,7 @@ class NativeNames:
                 if not sidecar_table.has_frames and not lib["path"].startswith(
                     ("/usr/", "/System/")
                 ):
-                    self.no_lines[lib["name"]] = (
-                        "no DWARF frames in .syms.json sidecar"
-                    )
+                    self.no_lines[lib["name"]] = "no DWARF frames in .syms.json sidecar"
                 continue
             table = lib_symbols(Path(lib["path"]), lib["codeId"])
             self._loaded[lib_index] = table
@@ -386,6 +385,8 @@ class Thread:
         # main thread, from process startup on), the first delta covers that
         # unsampled time and would all land on one arbitrary PC.
         self._cpu = list(self._samples.get("threadCPUDelta") or [])
+        self._markers: dict = raw.get("markers") or {}
+        self._string_array: list[str] = raw.get("stringArray") or []
         times = self._samples["time"]
         if self._cpu and raw.get("registerTime", times[0]) < times[0]:
             self._cpu[0] = 0
@@ -393,20 +394,49 @@ class Thread:
     def __len__(self) -> int:
         return self._samples["length"]
 
-    def sample_count(self) -> int:
-        """Number of recorded sample records with non-zero weight."""
-        weights = self._samples.get("weight")
-        if weights is None:
-            return self._samples["length"]
-        return sum(1 for w in weights if w)
+    def time_span(self) -> tuple[float, float]:
+        """(first_sample_ms, last_sample_ms) relative to profile start, or (0, 0)."""
+        times = self._samples["time"]
+        if not times:
+            return (0.0, 0.0)
+        return (float(times[0]), float(times[-1]))
 
-    def samples(self) -> Iterator[Sample]:
+    def sample_count(self, time_ranges: list[tuple[float, float]] | None = None) -> int:
+        """Number of recorded sample records with non-zero weight."""
+        if time_ranges is None:
+            weights = self._samples.get("weight")
+            if weights is None:
+                return self._samples["length"]
+            return sum(1 for w in weights if w)
+        return sum(1 for s in self.samples(time_ranges) if s.weight)
+
+    def samples(
+        self, time_ranges: list[tuple[float, float]] | None = None
+    ) -> Iterator[Sample]:
         s = self._samples
         weights = s.get("weight") or [1] * s["length"]
         cpu = self._cpu or [0] * s["length"]
+        if time_ranges is None:
+            for stack, time, weight, delta in zip(
+                s["stack"], s["time"], weights, cpu, strict=True
+            ):
+                frames = () if stack is None else self._stacks[stack]
+                yield Sample(frames, time, weight, delta or 0)
+            return
+        if not time_ranges:
+            return
+        ri = 0
+        n_ranges = len(time_ranges)
         for stack, time, weight, delta in zip(
             s["stack"], s["time"], weights, cpu, strict=True
         ):
+            # Advance past ranges that ended before `time` (samples are ordered).
+            while ri < n_ranges and time > time_ranges[ri][1]:
+                ri += 1
+            if ri >= n_ranges:
+                break
+            if time < time_ranges[ri][0]:
+                continue
             frames = () if stack is None else self._stacks[stack]
             yield Sample(frames, time, weight, delta or 0)
 
@@ -600,6 +630,7 @@ class Profile:
                 " with a samply release that writes a tested version."
             )
         self.interval_ms: float = meta["interval"]
+        self.start_time_ms: float = float(meta.get("startTime") or 0.0)
         self.product: str = meta.get("product", "")
         self.libs: list[dict] = raw["libs"]
         self._jitdumps: dict[str, JitDump] = {}
@@ -702,6 +733,26 @@ class Function:
         )
 
 
+def slices(
+    profile: Profile,
+    thread: str | int | None = None,
+    *,
+    buckets: int = 5,
+    min_iteration: int = 1,
+    wall: bool = False,
+) -> Slices:
+    """Summarize time slices of a recording: JS3 iteration buckets (first,
+    worst, average, best, iters) when markers or timings.tsv are present,
+    otherwise `buckets` equal-time slices across the thread's span."""
+    return build_slices(
+        profile,
+        _select_thread(profile, thread),
+        buckets=buckets,
+        min_iteration=min_iteration,
+        wall=wall,
+    )
+
+
 @dataclass(frozen=True)
 class Hotspot:
     function: Function
@@ -715,6 +766,8 @@ class Hotspots:
     wall: bool
     total_ms: float
     rows: list[Hotspot]  # descending by sort_by ("self" or "total")
+    time: str | None = None
+    samples: int | None = None
 
 
 def hotspots(
@@ -727,15 +780,20 @@ def hotspots(
     by_lib: bool = False,
     filter: str | None = None,
     sort_by: str = "self",
+    time: str | None = None,
 ) -> Hotspots:
     """Self and total time per function (or per library with by_lib)."""
     if sort_by not in ("self", "total"):
         raise ValueError(f"sort_by must be 'self' or 'total', got {sort_by!r}")
     t = _select_thread(profile, thread)
+    ranges = resolve_time(profile, t, time)
     self_ms: dict[Function, float] = {}
     total_ms: dict[Function, float] = {}
     total = 0.0
-    for s in t.samples():
+    n_samples = 0
+    for s in t.samples(ranges):
+        if s.weight:
+            n_samples += 1
         w = _weight_ms(s, profile.interval_ms, wall)
         total += w
         if not s.frames or not w:
@@ -756,7 +814,7 @@ def hotspots(
         rows.sort(key=lambda r: (-r.total_ms, -r.self_ms, r.function.name))
     else:
         rows.sort(key=lambda r: (-r.self_ms, -r.total_ms, r.function.name))
-    return Hotspots(t, wall, total, rows[:n])
+    return Hotspots(t, wall, total, rows[:n], time=time, samples=n_samples)
 
 
 def match_functions(profile: Profile, thread: Thread, symbol: str) -> set[str]:
@@ -783,10 +841,11 @@ class CallPath:
 class Callers:
     thread: Thread
     wall: bool
-    total_ms: float  # all samples in the thread
+    total_ms: float  # all samples in the thread (or slice)
     matched: set[str]
     inclusive_ms: float  # samples with a matched function on the stack
     paths: list[CallPath]  # heaviest first
+    time: str | None = None
 
 
 def callers(
@@ -798,15 +857,17 @@ def callers(
     n: int = 20,
     wall: bool = False,
     merge_tiers: bool = False,
+    time: str | None = None,
 ) -> Callers:
     """The call paths leading into functions matching `symbol`, `depth`
     callers deep, weighted by the time spent in (and under) the function.
     The outermost matched frame counts, so recursion is not double-counted."""
     t = _select_thread(profile, thread)
+    ranges = resolve_time(profile, t, time)
     matched = match_functions(profile, t, symbol)
     paths: dict[tuple[Function, ...], float] = {}
     total = inclusive = 0.0
-    for s in t.samples():
+    for s in t.samples(ranges):
         w = _weight_ms(s, profile.interval_ms, wall)
         total += w
         hits = [i for i, f in enumerate(s.frames) if f.name in matched]
@@ -828,6 +889,7 @@ def callers(
         matched,
         inclusive,
         [CallPath(fns, sources, ms) for (fns, sources), ms in ordered],
+        time=time,
     )
 
 
@@ -845,6 +907,7 @@ class Flamegraph:
     total_ms: float
     focus: set[str] | None
     paths: list[StackPath]  # heaviest first
+    time: str | None = None
 
 
 def flamegraph(
@@ -857,6 +920,7 @@ def flamegraph(
     wall: bool = False,
     native_root: bool = False,
     merge_tiers: bool = False,
+    time: str | None = None,
 ) -> Flamegraph:
     """Collapsed stacks: root-to-leaf paths with their time, cut to `depth`
     frames below the root (or below the focused function, whose subtree is
@@ -868,10 +932,11 @@ def flamegraph(
     depth goes to the JS side.
     """
     t = _select_thread(profile, thread)
+    ranges = resolve_time(profile, t, time)
     matched = match_functions(profile, t, focus) if focus else None
     paths: dict[tuple[Function, ...], float] = {}
     total = 0.0
-    for s in t.samples():
+    for s in t.samples(ranges):
         w = _weight_ms(s, profile.interval_ms, wall)
         total += w
         if not w:
@@ -896,7 +961,7 @@ def flamegraph(
         (StackPath(fns, inl, ms) for (fns, inl), ms in paths.items() if ms >= cutoff),
         key=lambda p: -p.ms,
     )
-    return Flamegraph(t, wall, total, matched, kept)
+    return Flamegraph(t, wall, total, matched, kept, time=time)
 
 
 @dataclass(frozen=True)
@@ -914,6 +979,8 @@ def diff(
     n: int = 30,
     wall: bool = False,
     merge_tiers: bool = True,
+    baseline_time: str | None = None,
+    experiment_time: str | None = None,
 ) -> list[DiffRow]:
     """Per-function self time as a share of each profile's thread time,
     sorted by the size of the change. Tiers are merged by default, so a
@@ -922,15 +989,22 @@ def diff(
     if isinstance(thread, int):
         raise TypeError("diff takes a thread name; tids differ between recordings")
 
-    def shares(profile: Profile) -> dict[Function, float]:
-        h = hotspots(profile, thread, n=sys.maxsize, wall=wall, merge_tiers=merge_tiers)
+    def shares(profile: Profile, time: str | None) -> dict[Function, float]:
+        h = hotspots(
+            profile,
+            thread,
+            n=sys.maxsize,
+            wall=wall,
+            merge_tiers=merge_tiers,
+            time=time,
+        )
         return {
             r.function: 100 * r.self_ms / h.total_ms
             for r in h.rows
             if r.self_ms and h.total_ms
         }
 
-    a, b = shares(baseline), shares(experiment)
+    a, b = shares(baseline, baseline_time), shares(experiment, experiment_time)
     rows = [DiffRow(k, a.get(k), b.get(k)) for k in a.keys() | b.keys()]
     rows.sort(
         key=lambda r: (-abs((r.after_pct or 0) - (r.base_pct or 0)), r.function.name)
@@ -991,6 +1065,7 @@ class Annotation:
     selected: int  # index into objects
     lines: list[AnnotatedLine]
     unplaced_ms: float  # samples at no instruction boundary of the listing
+    time: str | None = None
 
 
 def _jitdump(profile: Profile, lib_name: str) -> JitDump:
@@ -1014,14 +1089,16 @@ def annotate(
     code: int | None = None,
     wall: bool = False,
     objdump: str | None = None,
+    time: str | None = None,
 ) -> Annotation:
     """Per-instruction self time in one code object of the functions
     matching `symbol`: the hottest, or objects[code - 1]."""
     t = _select_thread(profile, thread)
+    ranges = resolve_time(profile, t, time)
     matched = match_functions(profile, t, symbol)
     by_object: dict[tuple, dict[int, float]] = {}
     objects: dict[tuple, CodeObject] = {}
-    for s in t.samples():
+    for s in t.samples(ranges):
         w = _weight_ms(s, profile.interval_ms, wall)
         if not s.frames or not w:
             continue
@@ -1063,7 +1140,7 @@ def annotate(
     )
     placed = sum(line.ms for line in lines)
     return Annotation(
-        t, wall, matched, ranked, index, lines, sum(pcs.values()) - placed
+        t, wall, matched, ranked, index, lines, sum(pcs.values()) - placed, time=time
     )
 
 

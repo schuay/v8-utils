@@ -13,12 +13,17 @@ from ..render import samply as render
 from ._shared import _text_result
 
 SUMMARY = (
-    "samply_* (macOS samply recordings: hotspots, callers, flamegraph, diff, annotate)"
+    "samply_* (macOS samply recordings: hotspots, callers, flamegraph, diff,"
+    " annotate, slices)"
 )
 
 # samply_hotspots remembers its most recent function rows per canonical profile
 # path so that later calls can name a function as "#3".
 _symbols = perf_tools.SymbolCache("samply_hotspots")
+
+# samply_slices remembers its most recent named slices per canonical profile
+# path so a custom min_iteration carries through to subsequent time="worst" calls.
+_slice_cache: dict[str, dict[str, str]] = {}
 
 RECORDING_ARG = (
     'samply recording directory (as returned by jsb_run_bench record="perf"),'
@@ -37,6 +42,11 @@ MERGE_TIERS_ARG = (
     "count a JS function's Ignition/Sparkplug/Maglev/Turbofan (and osr/ctx)"
     " code flavours together"
 )
+TIME_ARG = (
+    'restrict to time window(s): ms/s ranges ("100,250", "100,150 310,360",'
+    ' "0.1s,0.3s"), percentages ("0%,20%"), or named iteration slices'
+    ' ("first", "worst", "best", "average", "iters"); see samply_slices'
+)
 
 
 def _thread(thread: str | None) -> str | int | None:
@@ -49,6 +59,17 @@ def _symbol_key(profile: samply.Profile) -> str:
 
 def _resolve(profile: samply.Profile, symbol: str) -> str:
     return _symbols.resolve(_symbol_key(profile), symbol)
+
+
+def _resolve_time_arg(profile: samply.Profile, time: str | None) -> str | None:
+    if time is None:
+        return None
+    cached = _slice_cache.get(_symbol_key(profile))
+    if cached is not None:
+        hit = cached.get(time.strip().lower())
+        if hit is not None:
+            return hit
+    return time
 
 
 def register(mcp: FastMCP) -> None:
@@ -77,6 +98,7 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = "self",
+        time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
         """Top functions of a samply recording by self (or total) time, with
         total (inclusive) time, frame kind (js, builtin, regexp, native), JS
@@ -98,6 +120,7 @@ def register(mcp: FastMCP) -> None:
             by_lib=by_lib,
             filter=filter,
             sort_by=sort_by,
+            time=_resolve_time_arg(profile, time),
         )
         # Keep the last function-level #N listing intact when called with
         # by_lib=True (often in parallel with samply_hotspots(n=...)).
@@ -120,6 +143,7 @@ def register(mcp: FastMCP) -> None:
             bool,
             Field(description=MERGE_TIERS_ARG),
         ] = False,
+        time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
         """Who calls a function: the distinct caller chains into it, nearest
         caller first, weighted by the time spent in and under it.
@@ -136,6 +160,7 @@ def register(mcp: FastMCP) -> None:
             n=n,
             wall=wall,
             merge_tiers=merge_tiers,
+            time=_resolve_time_arg(profile, time),
         )
         return _text_result(render.format_callers(c))
 
@@ -171,6 +196,7 @@ def register(mcp: FastMCP) -> None:
             bool,
             Field(description=MERGE_TIERS_ARG),
         ] = False,
+        time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
         """Collapsed stacks: every hot root-to-leaf path with its share of the
         thread's time, heaviest first ("a;b;c <ms>").
@@ -190,6 +216,7 @@ def register(mcp: FastMCP) -> None:
             wall=wall,
             native_root=native_root,
             merge_tiers=merge_tiers,
+            time=_resolve_time_arg(profile, time),
         )
         return _text_result(render.format_flamegraph(fg))
 
@@ -217,17 +244,24 @@ def register(mcp: FastMCP) -> None:
                 )
             ),
         ] = True,
+        baseline_time: Annotated[str | None, Field(description=TIME_ARG)] = None,
+        experiment_time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
-        """Compare two samply recordings: per-function self time as a share of
-        each recording's thread time, biggest change first. "new" and "gone"
-        mark functions present in only one recording."""
+        """Compare two samply recordings (or two time slices of the same
+        recording via baseline_time / experiment_time): per-function self time
+        as a share of each slice's thread time, biggest change first. "new" and
+        "gone" mark functions present in only one side."""
+        base = samply.load(baseline)
+        exp = samply.load(experiment)
         rows = samply.diff(
-            samply.load(baseline),
-            samply.load(experiment),
+            base,
+            exp,
             _thread(thread),
             n=n,
             wall=wall,
             merge_tiers=merge_tiers,
+            baseline_time=_resolve_time_arg(base, baseline_time),
+            experiment_time=_resolve_time_arg(exp, experiment_time),
         )
         return _text_result(render.format_diff(rows))
 
@@ -252,6 +286,7 @@ def register(mcp: FastMCP) -> None:
             int, Field(description="lines of context around each hot cluster")
         ] = 8,
         wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+        time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
         """Annotated disassembly: self time per instruction of one code object
         of a function, with the hottest instructions and hot blocks (+/-context
@@ -273,6 +308,7 @@ def register(mcp: FastMCP) -> None:
             _thread(thread),
             code=code,
             wall=wall,
+            time=_resolve_time_arg(profile, time),
         )
         return _text_result(
             render.format_annotation(a, min_pct=min_pct, context=context)
@@ -292,6 +328,7 @@ def register(mcp: FastMCP) -> None:
         ] = 30,
         thread: Annotated[str | None, Field(description=THREAD_ARG)] = None,
         wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+        time: Annotated[str | None, Field(description=TIME_ARG)] = None,
     ) -> CallToolResult:
         """A window of the samply_annotate listing around a line, for reading
         beyond the hot blocks."""
@@ -302,8 +339,52 @@ def register(mcp: FastMCP) -> None:
             _thread(thread),
             code=code,
             wall=wall,
+            time=_resolve_time_arg(profile, time),
         )
         return _text_result(render.format_read_around(a, line, context=context))
+
+    @mcp.tool()
+    def samply_slices(
+        recording: Annotated[str, Field(description=RECORDING_ARG)],
+        thread: Annotated[str | None, Field(description=THREAD_ARG)] = None,
+        buckets: Annotated[
+            int,
+            Field(
+                description=(
+                    "number of equal-time buckets when the recording has no"
+                    " iteration markers or timings.tsv sidecar"
+                )
+            ),
+        ] = 5,
+        min_iteration: Annotated[
+            int,
+            Field(
+                description=(
+                    "lowest iteration index included in worst/best/average"
+                    " buckets (default 1, excluding First=0)"
+                )
+            ),
+        ] = 1,
+        wall: Annotated[bool, Field(description=WALL_ARG)] = False,
+    ) -> CallToolResult:
+        """Inspect time slices of a samply recording: JS3 iteration buckets
+        (first, worst, average, best, iters) when iteration markers or a
+        timings.tsv sidecar exist, otherwise equal-time buckets across the
+        thread's span. Use the reported slice names or time args with `time=`
+        on samply_hotspots/callers/flamegraph/annotate or `baseline_time=` /
+        `experiment_time=` on samply_diff."""
+        profile = samply.load(recording)
+        sl = samply.slices(
+            profile,
+            _thread(thread),
+            buckets=buckets,
+            min_iteration=min_iteration,
+            wall=wall,
+        )
+        _slice_cache[_symbol_key(profile)] = {
+            s.name.lower(): s.time_arg for s in sl.slices
+        }
+        return _text_result(render.format_slices(profile, sl))
 
     @mcp.tool()
     def samply_threads(
