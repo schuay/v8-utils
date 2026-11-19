@@ -1,5 +1,7 @@
 """Text for Pinpoint jobs and their results, with optional ANSI colour."""
 
+from collections.abc import Mapping
+
 from rich import box
 from rich.console import Console
 from rich.table import Table
@@ -186,11 +188,14 @@ def format_results_table(
     return "\n".join(lines)
 
 
-def format_job_detail(j: pinpoint.Job, patch_subject: str | None = None) -> str:
+def format_job_detail(
+    j: pinpoint.Job, subjects: Mapping[str, str | None] | None = None
+) -> str:
     """Format a job as compact text (mirrors pp's _print_job without ANSI).
 
-    patch_subject: the subject of the job's experiment patch, if known.
+    subjects: the known subjects of the job's patches, by patch URL.
     """
+    subjects = subjects or {}
     created = (j.created or "")[:16].replace("T", " ")
     status = j.status or "?"
     url = j.url or ""
@@ -218,6 +223,7 @@ def format_job_detail(j: pinpoint.Job, patch_subject: str | None = None) -> str:
         ("base", j.base_git_hash),
         ("end", j.end_git_hash),
         ("patch", patch_url),
+        ("base-patch", j.base_patch),
         ("base-flags", j.base_extra_args),
         ("exp-flags", j.experiment_extra_args),
         ("test-args", j.extra_test_args),
@@ -230,8 +236,9 @@ def format_job_detail(j: pinpoint.Job, patch_subject: str | None = None) -> str:
     for key, val in fields:
         if val is None:
             continue
-        if key == "patch" and patch_subject:
-            val = f'{val}  "{patch_subject}"'
+        subject = subjects.get(val) if key in ("patch", "base-patch") else None
+        if subject:
+            val = f'{val}  "{subject}"'
         lines.append(f"  {key:<{w}}  {val}")
     return "\n".join(lines)
 

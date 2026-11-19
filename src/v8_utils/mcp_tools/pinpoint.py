@@ -53,11 +53,14 @@ BOT_ARG = (
 
 def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
     """Format job list as compact text (mirrors pp's list-jobs output)."""
-    subjects = pinpoint_mod.patch_subjects([j.experiment_patch for j in jobs])
+    subjects = pinpoint_mod.patch_subjects(
+        [p for j in jobs for p in (j.experiment_patch, j.base_patch)]
+    )
 
     blocks = []
     for j in jobs:
         subject = subjects.get(j.experiment_patch)
+        base_subject = subjects.get(j.base_patch)
         created = (j.created or "")[:16].replace("T", " ")
         status = j.status or "?"
         url = j.url or ""
@@ -77,6 +80,9 @@ def _format_job_list(jobs: list[pinpoint_mod.Job]) -> str:
         if patch:
             subject_str = f'  "{subject}"' if subject else ""
             lines.append(f"  patch:      {patch}{subject_str}")
+        if j.base_patch:
+            subject_str = f'  "{base_subject}"' if base_subject else ""
+            lines.append(f"  base-patch: {j.base_patch}{subject_str}")
         if base_flags:
             lines.append(f"  base-flags: {base_flags}")
         if exp_flags:
@@ -114,15 +120,15 @@ def register(
             return _text_result("No job URLs provided.")
 
         paired = fetch_job_details_sorted(urls)
-        subjects = pinpoint_mod.patch_subjects([d.experiment_patch for _, d in paired])
+        subjects = pinpoint_mod.patch_subjects(
+            [p for _, d in paired for p in (d.experiment_patch, d.base_patch)]
+        )
         blocks = []
         for jid, detail in paired:
             if detail.error is not None:
                 blocks.append(f"Error fetching {jid}: {detail.error}")
             else:
-                blocks.append(
-                    format_job_detail(detail, subjects.get(detail.experiment_patch))
-                )
+                blocks.append(format_job_detail(detail, subjects))
         return _text_result("\n\n".join(blocks))
 
     @mcp.tool()

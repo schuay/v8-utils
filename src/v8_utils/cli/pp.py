@@ -18,6 +18,7 @@ import os
 import re
 import shlex
 import sys
+from collections.abc import Mapping
 from datetime import datetime
 
 from ..api import config, pinpoint, watch
@@ -148,7 +149,7 @@ def _progress_ctx(label: str, total: int | None = None):
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 
-def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
+def _print_job(j: pinpoint.Job, subjects: Mapping[str, str | None]) -> None:
     url = f"{_CYAN}https://pinpoint-dot-chromeperf.appspot.com/job/{j.job_id}{_RESET}"
     created = (j.created or "")[:16].replace("T", " ")
     status = j.status or "?"
@@ -183,6 +184,7 @@ def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
         ("base", j.base_git_hash),
         ("end", j.end_git_hash),
         ("patch", patch_url),
+        ("base-patch", j.base_patch),
         ("base-flags", j.base_extra_args),
         ("exp-flags", j.experiment_extra_args),
         ("test-args", j.extra_test_args),
@@ -195,8 +197,9 @@ def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
     for key, val in fields:
         if val is None:
             continue
-        if key == "patch":
-            subject_str = f'  {_BOLD}"{patch_subject}"{_RESET}' if patch_subject else ""
+        if key in ("patch", "base-patch"):
+            subject = subjects.get(val)
+            subject_str = f'  {_BOLD}"{subject}"{_RESET}' if subject else ""
             val_str = f"{_CYAN}{val}{_RESET}{subject_str}"
         elif key == "results":
             val_str = f"{_CYAN}{val}{_RESET}"
@@ -208,14 +211,16 @@ def _print_job(j: pinpoint.Job, patch_subject: str | None) -> None:
 def _cmd_show_job(args: argparse.Namespace) -> None:
     with _progress_ctx("Fetching jobs", total=len(args.job_urls)) as on_progress:
         paired = fetch_job_details_sorted(args.job_urls, on_progress=on_progress)
-    subjects = pinpoint.patch_subjects([d.experiment_patch for _, d in paired])
+    subjects = pinpoint.patch_subjects(
+        [p for _, d in paired for p in (d.experiment_patch, d.base_patch)]
+    )
     for i, (jid, detail) in enumerate(paired):
         if i:
             print(f"{_DIM}{'─' * 60}{_RESET}")
         if detail.error is not None:
             print(f"Error fetching {jid}: {detail.error}")
         else:
-            _print_job(detail, subjects.get(detail.experiment_patch))
+            _print_job(detail, subjects)
 
 
 def _cmd_cancel_job(args: argparse.Namespace) -> None:
@@ -267,7 +272,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
             else:
                 t2 = progress.add_task("Fetching details", total=None)
                 subjects = pinpoint.patch_subjects(
-                    [j.experiment_patch for j in jobs],
+                    [p for j in jobs for p in (j.experiment_patch, j.base_patch)],
                     lambda done, total: progress.update(
                         t2, completed=done, total=total
                     ),
@@ -276,7 +281,9 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         jobs = fetch_jobs_list(
             count=args.recent, user=user, filters=filters or None, since=since
         )
-        subjects = pinpoint.patch_subjects([j.experiment_patch for j in jobs])
+        subjects = pinpoint.patch_subjects(
+            [p for j in jobs for p in (j.experiment_patch, j.base_patch)]
+        )
 
     if not jobs:
         print("No jobs found.")
@@ -286,6 +293,7 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
 
     for j in jobs:
         subject = subjects.get(j.experiment_patch)
+        base_subject = subjects.get(j.base_patch)
         created = (j.created or "")[:16].replace("T", " ")
         status = j.status or "?"
         url = j.url or ""
@@ -307,6 +315,11 @@ def _cmd_list_jobs(args: argparse.Namespace) -> None:
         if patch:
             subject_str = f'  {_BOLD}"{subject}"{_RESET}' if subject else ""
             print(f"  {_DIM}patch:{_RESET}      {_CYAN}{patch}{_RESET}{subject_str}")
+        if j.base_patch:
+            subject_str = f'  {_BOLD}"{base_subject}"{_RESET}' if base_subject else ""
+            print(
+                f"  {_DIM}base-patch:{_RESET} {_CYAN}{j.base_patch}{_RESET}{subject_str}"
+            )
         if base_flags:
             print(f"  {_DIM}base-flags:{_RESET} {base_flags}")
         if exp_flags:
@@ -482,7 +495,9 @@ def _cmd_create_job(args: argparse.Namespace) -> None:
             print(f"{_DIM}[{index + 1}/{total}] {' / '.join(parts)}{_RESET}")
         if job.job_id:
             created_job_ids.append(job.job_id)
-            _print_job(job, pinpoint.subject_or_none(job.experiment_patch))
+            _print_job(
+                job, pinpoint.patch_subjects([job.experiment_patch, job.base_patch])
+            )
         else:
             print(f"{_RED}error:{_RESET} {job.error}")
 

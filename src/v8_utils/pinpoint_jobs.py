@@ -303,6 +303,21 @@ def create_pinpoint_jobs(
                 if on_auto_hash:
                     on_auto_hash(cfg, None, e)
 
+    # Pin each patch to its current patchset once, so every job of the batch
+    # runs the same one and records which.  A failed lookup leaves the patch
+    # unpinned; Pinpoint then picks the current patchset itself.
+    def _pin(p: str) -> str:
+        try:
+            return pinpoint.pin_patch(p)
+        except Exception as e:  # noqa: BLE001
+            print(f"warning: could not pin a patchset for {p}: {e}", file=sys.stderr)
+            return p
+
+    pinned = {p: _pin(p) for p in dict.fromkeys([*exp_patches, base_patch]) if p}
+    exp_patches = [pinned[p] if p else p for p in exp_patches]
+    if base_patch:
+        base_patch = pinned[base_patch]
+
     # Pre-fetch Gerrit subjects for human-readable job names.  Unlike the
     # display paths, a miss here warns rather than logging at debug: the subject
     # is baked into the job title on Pinpoint and cannot be edited afterwards,

@@ -221,6 +221,22 @@ def resolve_patch(patch: str) -> str:
     )
 
 
+def pin_patch(patch: str) -> str:
+    """resolve_patch, pinned to the change's current patchset if it names none.
+
+    Pinpoint keeps the patch URL it was given as the job's argument, so a job
+    created from an unpinned URL does not say which patchset it ran.
+    """
+    from .gerrit import _canonical_change, _change_cid, _latest_patchset
+
+    url = resolve_patch(patch)
+    api_base, project, change_id, patchset = _canonical_change(url)
+    if patchset:
+        return url
+    patchset = _latest_patchset(api_base, _change_cid(project, change_id))
+    return f"{api_base}/c/{project}/+/{change_id}/{patchset}"
+
+
 def _extract_patch_fields(
     patch: str,
 ) -> tuple[str | None, str | None, str | None]:
@@ -690,6 +706,7 @@ def summarise_job(j: dict) -> Job:
         benchmark=args.get("benchmark"),
         story=args.get("story"),
         base_git_hash=args.get("base_git_hash"),
+        base_patch=args.get("base_patch"),
         experiment_patch=args.get("experiment_patch"),
         base_extra_args=args.get("base_extra_args"),
         experiment_extra_args=args.get("experiment_extra_args"),

@@ -1142,6 +1142,7 @@ class TestCreatePinpointJobsNaming:
             return {"job_id": "test_job_1", "url": "https://pinpoint/job/1"}
 
         monkeypatch.setattr(pinpoint, "fetch_gerrit_subject", subject_impl)
+        monkeypatch.setattr(pinpoint, "pin_patch", lambda p: p)
         monkeypatch.setattr(pinpoint, "create_job", _create_job)
         monkeypatch.setattr(
             pinpoint, "fetch_latest_build_commit", lambda cfg: ("abc1234", 1)
@@ -1316,3 +1317,128 @@ class TestExtraTestArgs:
         )
 
         assert job.extra_test_args == "--iterations=20"
+
+
+class TestPinPatch:
+    """Pinpoint keeps the patch URL it was given, so an unpinned one leaves
+    the job unable to say which patchset it ran."""
+
+    def _gerrit(self, monkeypatch):
+        from v8_utils import gerrit
+
+        paths = []
+
+        def get(api_base, path, **kw):
+            paths.append(path)
+            if path == "/changes/8824476":
+                return {"project": "v8/v8"}
+            assert path == "/changes/v8%2Fv8~8824476?o=CURRENT_REVISION"
+            return {"current_revision": "abc", "revisions": {"abc": {"_number": 5}}}
+
+        monkeypatch.setattr(gerrit, "_get", get)
+        return paths
+
+    @pytest.mark.parametrize(
+        "patch",
+        [
+            "8824476",
+            "https://chromium-review.googlesource.com/c/v8/v8/+/8824476",
+        ],
+    )
+    def test_unpinned_patch_gets_current_patchset(self, monkeypatch, patch):
+        from v8_utils import pinpoint
+
+        self._gerrit(monkeypatch)
+        assert (
+            pinpoint.pin_patch(patch)
+            == "https://chromium-review.googlesource.com/c/v8/v8/+/8824476/5"
+        )
+
+    def test_pinned_patch_is_kept(self, monkeypatch):
+        from v8_utils import pinpoint
+
+        paths = self._gerrit(monkeypatch)
+        url = "https://chromium-review.googlesource.com/c/v8/v8/+/8824476/3"
+        assert pinpoint.pin_patch(url) == url
+        assert paths == []
+
+    def _batch(self, monkeypatch, pin):
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
+
+        pins = []
+        created = []
+        monkeypatch.setattr(pinpoint, "known_configurations", lambda: frozenset())
+        monkeypatch.setattr(pinpoint, "pin_patch", lambda p: pins.append(p) or pin(p))
+        monkeypatch.setattr(pinpoint, "fetch_gerrit_subject", lambda p: "subject")
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kw: created.append(kw) or {}
+        )
+        tools.create_pinpoint_jobs(
+            benchmarks=["js3"],
+            configurations=["linux", "m1"],
+            exp_patches=["c/2", None],
+            base_patch="c/1",
+            base_git_hash="base",
+            exp_git_hash="exp",
+            watch=False,
+        )
+        return pins, created
+
+    def test_batch_pins_each_patch_once(self, monkeypatch):
+        pins, created = self._batch(monkeypatch, lambda p: f"{p}/7")
+        assert sorted(pins) == ["c/1", "c/2"]
+        assert {c["base_patch"] for c in created} == {"c/1/7"}
+        assert sorted({c["exp_patch"] or "" for c in created}) == ["", "c/2/7"]
+
+    def test_batch_keeps_patch_when_pin_fails(self, monkeypatch, capsys):
+        def fail(p):
+            raise RuntimeError("Rate limited 429")
+
+        _, created = self._batch(monkeypatch, fail)
+        assert {c["exp_patch"] for c in created} == {"c/2", None}
+        assert "could not pin a patchset for c/2" in capsys.readouterr().err
+
+
+class TestBasePatchDisplay:
+    def _job(self):
+        from v8_utils import pinpoint
+
+        return pinpoint.Job(
+            job_id="1",
+            url="https://pinpoint/job/1",
+            status="Running",
+            configuration="mac-m1_mini_2020-perf",
+            benchmark="jetstream-main.crossbench",
+            experiment_patch="https://r/c/v8/v8/+/2/5",
+            base_patch="https://r/c/v8/v8/+/1/3",
+        )
+
+    def test_job_detail_shows_base_patch(self):
+        from v8_utils.render.pinpoint import format_job_detail
+
+        text = format_job_detail(
+            self._job(),
+            {"https://r/c/v8/v8/+/2/5": "exp cl", "https://r/c/v8/v8/+/1/3": "base cl"},
+        )
+        assert '  patch       https://r/c/v8/v8/+/2/5  "exp cl"' in text
+        assert '  base-patch  https://r/c/v8/v8/+/1/3  "base cl"' in text
+
+    def test_mcp_job_list_shows_base_patch(self, monkeypatch):
+        from v8_utils import pinpoint
+        from v8_utils.mcp_tools import pinpoint as mcp
+
+        monkeypatch.setattr(
+            pinpoint, "subject_or_none", lambda p: "base cl" if "/1/" in p else None
+        )
+        text = mcp._format_job_list([self._job()])
+        assert "  patch:      https://r/c/v8/v8/+/2/5\n" in text
+        assert '  base-patch: https://r/c/v8/v8/+/1/3  "base cl"' in text
+
+    def test_summarised_job_carries_base_patch(self):
+        from v8_utils import pinpoint
+
+        job = pinpoint.summarise_job(
+            {"job_id": "1", "arguments": {"base_patch": "https://r/c/v8/v8/+/1/3"}}
+        )
+        assert job.base_patch == "https://r/c/v8/v8/+/1/3"
