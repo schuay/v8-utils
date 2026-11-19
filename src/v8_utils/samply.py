@@ -18,6 +18,7 @@ import bisect
 import datetime
 import gzip
 import json
+import os
 import re
 import sys
 from collections.abc import Callable, Iterator
@@ -193,15 +194,104 @@ def _strip_c_underscore(symbol: Symbol) -> Symbol:
     return symbol
 
 
-class NativeNames:
-    """Native frames for library RVAs: the nm name, or with DWARF the inline
-    chain, innermost first. prepare() loads what the profile's frames need,
-    so each library is symbolized in one batch."""
+def syms_sidecar(profile_path: Path) -> Path:
+    """Path to the samply `--unstable-presymbolicate` sidecar for a profile."""
+    if profile_path.suffix == ".gz":
+        return profile_path.with_suffix(".syms.json")
+    return profile_path.with_name(profile_path.name + ".syms.json")
 
-    def __init__(self, libs: list[dict], symbolizer: str | None) -> None:
+
+class _SymsTable:
+    """Per-library symbols loaded from samply's `.syms.json` sidecar."""
+
+    def __init__(self, entry: dict, strings: list[str]) -> None:
+        self._strings = strings
+        self._syms: list[dict] = entry.get("symbol_table") or []
+        self._known: dict[int, int] = {
+            rva: idx for rva, idx in (entry.get("known_addresses") or ())
+        }
+        # Sorted by rva for fallback range lookup when an address wasn't in
+        # known_addresses.
+        self._by_rva = sorted(self._syms, key=lambda s: s["rva"])
+        self._rvas = [s["rva"] for s in self._by_rva]
+        self.has_frames = any("frames" in s for s in self._syms)
+
+    def lookup(self, lib: str, rva: int) -> tuple[Frame, ...] | None:
+        sym: dict | None = None
+        idx = self._known.get(rva)
+        if idx is not None and 0 <= idx < len(self._syms):
+            sym = self._syms[idx]
+        else:
+            i = bisect.bisect_right(self._rvas, rva) - 1
+            if i >= 0:
+                cand = self._by_rva[i]
+                size = cand.get("size")
+                if size is None or rva < cand["rva"] + size:
+                    sym = cand
+        if sym is None:
+            return None
+        outer = self._strings[sym["symbol"]]
+        frames = sym.get("frames")
+        if not frames:
+            return (Frame(outer, "native", None, lib, rva),)
+        result: list[Frame] = []
+        last = len(frames) - 1
+        for i, f in enumerate(frames):
+            fn_idx = f.get("function")
+            name = self._strings[fn_idx] if fn_idx is not None else outer
+            file_idx = f.get("file")
+            file_path = (
+                os.path.normpath(self._strings[file_idx])
+                if file_idx is not None
+                else ""
+            )
+            line = f.get("line") or 0
+            result.append(
+                Frame(
+                    name,
+                    "native",
+                    None,
+                    lib,
+                    rva,
+                    source=(file_path, line) if file_path and line else None,
+                    inlined=i < last,
+                )
+            )
+        return tuple(result)
+
+
+def _load_syms_sidecar(path: Path) -> dict[str, _SymsTable]:
+    """Load a `.syms.json` sidecar indexed by uppercase code_id."""
+    if not path.is_file():
+        return {}
+    raw = json.loads(path.read_text())
+    strings: list[str] = raw.get("string_table") or []
+    tables: dict[str, _SymsTable] = {}
+    for entry in raw.get("data") or ():
+        code_id = entry.get("code_id")
+        if code_id:
+            tables[code_id.upper()] = _SymsTable(entry, strings)
+    return tables
+
+
+class NativeNames:
+    """Native frames for library RVAs: from a `.syms.json` sidecar when
+    present, else nm + DWARF inline chains from the matching binary/dSYM.
+    prepare() loads what the profile's frames need, so each library is
+    symbolized in one batch."""
+
+    def __init__(
+        self,
+        libs: list[dict],
+        symbolizer: str | None,
+        syms_path: Path | None = None,
+    ) -> None:
         self._libs = libs
         self._symbolizer = symbolizer
-        self._loaded: dict[int, LibSymbols | str] = {}
+        self._sidecar: dict[str, _SymsTable] = (
+            _load_syms_sidecar(syms_path) if syms_path is not None else {}
+        )
+        self._loaded: dict[int, LibSymbols | _SymsTable | str] = {}
         self._chains: dict[int, dict[int, tuple[dwarf.InlineFrame, ...]]] = {}
         #: Library name -> why its native frames have no line info.
         self.no_lines: dict[str, str] = {}
@@ -209,6 +299,17 @@ class NativeNames:
     def prepare(self, rvas_by_lib: dict[int, set[int]]) -> None:
         for lib_index, rvas in rvas_by_lib.items():
             lib = self._libs[lib_index]
+            code_id = (lib.get("codeId") or "").upper()
+            sidecar_table = self._sidecar.get(code_id)
+            if sidecar_table is not None:
+                self._loaded[lib_index] = sidecar_table
+                if not sidecar_table.has_frames and not lib["path"].startswith(
+                    ("/usr/", "/System/")
+                ):
+                    self.no_lines[lib["name"]] = (
+                        "no DWARF frames in .syms.json sidecar"
+                    )
+                continue
             table = lib_symbols(Path(lib["path"]), lib["codeId"])
             self._loaded[lib_index] = table
             if isinstance(table, str):
@@ -226,9 +327,11 @@ class NativeNames:
 
     def __call__(self, lib_index: int, rva: int) -> tuple[Frame, ...] | None:
         table = self._loaded.get(lib_index)
+        lib = self._libs[lib_index]["name"]
+        if isinstance(table, _SymsTable):
+            return table.lookup(lib, rva)
         if not isinstance(table, LibSymbols):
             return None
-        lib = self._libs[lib_index]["name"]
         chain = self._chains.get(lib_index, {}).get(rva + table.text_vmaddr)
         symbol = table.lookup(rva)
         if not chain:
@@ -502,7 +605,7 @@ class Profile:
         self._jitdumps: dict[str, JitDump] = {}
         natives = None
         if symbolize:
-            natives = NativeNames(self.libs, find_symbolizer())
+            natives = NativeNames(self.libs, find_symbolizer(), syms_sidecar(path))
             rvas: dict[int, set[int]] = {}
             for t in raw["threads"]:
                 _native_rvas(t, self.libs, rvas)

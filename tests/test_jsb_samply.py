@@ -107,9 +107,10 @@ def test_recording_dir_is_self_contained(fake_samply, suite, tmp_path):
     call = json.loads(fake_samply.read_text())
     assert call["cwd"] == str(suite_dir)
     argv = call["argv"]
-    assert argv[:6] == [
+    assert argv[:7] == [
         "record",
         "--save-only",
+        "--unstable-presymbolicate",
         "-r",
         "1000",
         "-o",

@@ -284,7 +284,14 @@ def run_samply(
     )
     if lineitems:
         d8_cmd += ["--", ",".join(lineitems)]
-    cmd = [samply, "record", "--save-only", "-r", str(rate)]
+    cmd = [
+        samply,
+        "record",
+        "--save-only",
+        "--unstable-presymbolicate",
+        "-r",
+        str(rate),
+    ]
     cmd += ["-o", str(rec / "profile.json.gz"), "--"]
     cmd += d8_cmd
     meta: dict = {

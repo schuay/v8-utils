@@ -77,3 +77,83 @@ def test_rebuilt_binary_is_not_trusted(tmp_path):
 
 def test_missing_file(tmp_path):
     assert lib_symbols(tmp_path / "gone", "0" * 32) == f"{tmp_path / 'gone'} not found"
+
+
+def test_syms_sidecar_symbolizes_missing_binary_and_inlines(tmp_path):
+    import json
+    from v8_utils.samply import NativeNames, syms_sidecar
+
+    profile_path = tmp_path / "profile.json.gz"
+    sidecar_path = syms_sidecar(profile_path)
+    assert sidecar_path == tmp_path / "profile.json.syms.json"
+
+    sidecar = {
+        "string_table": [
+            "Outer()",
+            "Inner()",
+            "/src/out/release/../../src/inner.h",
+            "/src/out/release/../../src/outer.cc",
+            "malloc",
+        ],
+        "data": [
+            {
+                "debug_name": "d8",
+                "code_id": "AABBCCDD00112233445566778899AABB",
+                "symbol_table": [
+                    {
+                        "rva": 0x1000,
+                        "size": 0x80,
+                        "symbol": 0,
+                        "frames": [
+                            {"function": 1, "file": 2, "line": 42},
+                            {"function": 0, "file": 3, "line": 10},
+                        ],
+                    }
+                ],
+                "known_addresses": [[0x1014, 0]],
+            },
+            {
+                "debug_name": "libsystem_malloc.dylib",
+                "code_id": "11223344556677889900AABBCCDDEEFF",
+                "symbol_table": [{"rva": 0x2000, "size": 0x40, "symbol": 4}],
+                "known_addresses": [[0x2008, 0]],
+            },
+        ],
+    }
+    sidecar_path.write_text(json.dumps(sidecar))
+
+    libs = [
+        {
+            "name": "d8",
+            "path": str(tmp_path / "rebuilt-or-deleted-d8"),
+            "codeId": "aabbccdd00112233445566778899aabb",
+        },
+        {
+            "name": "libsystem_malloc.dylib",
+            "path": "/usr/lib/system/libsystem_malloc.dylib",
+            "codeId": "11223344556677889900AABBCCDDEEFF",
+        },
+    ]
+    natives = NativeNames(libs, symbolizer=None, syms_path=sidecar_path)
+    natives.prepare({0: {0x1014}, 1: {0x2008}})
+
+    assert natives.unavailable() == {}
+    assert natives.no_lines == {}
+
+    d8_frames = natives(0, 0x1014)
+    assert d8_frames is not None and len(d8_frames) == 2
+    assert d8_frames[0].name == "Inner()"
+    assert d8_frames[0].source == ("/src/src/inner.h", 42)
+    assert d8_frames[0].inlined is True
+    assert d8_frames[1].name == "Outer()"
+    assert d8_frames[1].source == ("/src/src/outer.cc", 10)
+    assert d8_frames[1].inlined is False
+
+    # Range fallback when an RVA isn't listed in known_addresses:
+    assert natives(0, 0x1020)[0].name == "Inner()"
+
+    malloc_frames = natives(1, 0x2008)
+    assert malloc_frames is not None and len(malloc_frames) == 1
+    assert malloc_frames[0].name == "malloc"
+    assert malloc_frames[0].source is None
+    assert malloc_frames[0].inlined is False
