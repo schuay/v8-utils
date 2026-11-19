@@ -50,7 +50,7 @@ BOT_ARG = (
     ' "linux" (linux-r350-perf), "m1" (mac-m1_mini_2020-perf),'
     ' "m2" (mac-m2-pro-perf), "m3" (mac-m3-pro-perf),'
     ' "m4" (mac-m4-mini-perf), "m4pro" (mac-m4-pro-perf),'
-    ' "win10" (win-10-perf)'
+    ' "m5pro" (mac-m5-pro-perf), "win10" (win-10-perf)'
 )
 
 
@@ -329,7 +329,8 @@ def register(
                     ' "linux" (linux-r350-perf),'
                     ' "m1" (mac-m1_mini_2020-perf), "m2" (mac-m2-pro-perf),'
                     ' "m3" (mac-m3-pro-perf), "m4" (mac-m4-mini-perf),'
-                    ' "m4pro" (mac-m4-pro-perf), "macintel" (mac-intel-perf),'
+                    ' "m4pro" (mac-m4-pro-perf), "m5pro" (mac-m5-pro-perf),'
+                    ' "macintel" (mac-intel-perf),'
                     ' "win10" (win-10-perf),'
                     ' "win11" (win-11-perf, same R350 silicon as "linux")'
                 )

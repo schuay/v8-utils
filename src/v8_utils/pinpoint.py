@@ -1147,7 +1147,9 @@ BENCHMARK_ALIASES: dict[str, tuple[str, str | None]] = {
 }
 
 # Despite the bot names, mac-m2-pro-perf and mac-m3-pro-perf run base M2/M3
-# chips (the "pro" is the MacBook Pro chassis); mac-m4-pro-perf is a real M4 Pro.
+# chips (the "pro" is the MacBook Pro chassis); mac-m4-pro-perf and
+# mac-m5-pro-perf run real M4 Pro/M5 Pro chips. A "pro" alias suffix means the
+# chip.
 CONFIGURATION_ALIASES: dict[str, str] = {
     "linux": "linux-r350-perf",
     "m1": "mac-m1_mini_2020-perf",
@@ -1155,6 +1157,7 @@ CONFIGURATION_ALIASES: dict[str, str] = {
     "m3": "mac-m3-pro-perf",
     "m4": "mac-m4-mini-perf",
     "m4pro": "mac-m4-pro-perf",
+    "m5pro": "mac-m5-pro-perf",
     "macintel": "mac-intel-perf",
     "win10": "win-10-perf",
     # Same PowerEdge R350 silicon as "linux": an OS comparison, not a
@@ -1164,6 +1167,9 @@ CONFIGURATION_ALIASES: dict[str, str] = {
 }
 
 DEFAULT_CONFIGURATIONS = ["linux", "m1", "m4"]
+
+# Bots Pinpoint accepts that /api/config does not list.
+_UNLISTED_CONFIGURATIONS = frozenset({"mac-m5-pro-perf"})
 
 
 @functools.lru_cache(maxsize=1)
@@ -1176,9 +1182,10 @@ def known_configurations() -> frozenset[str]:
     try:
         r = httpx.post(f"{_PINPOINT_BASE}/api/config", timeout=30)
         r.raise_for_status()
-        return frozenset(r.json().get("configurations", []))
+        listed = frozenset(r.json().get("configurations", []))
     except Exception:  # noqa: BLE001
         return frozenset()
+    return listed | _UNLISTED_CONFIGURATIONS
 
 
 def short_configuration(name: str) -> str:

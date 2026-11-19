@@ -878,6 +878,42 @@ class TestConfigurationValidation:
             )
         assert created == [], "no job should be created when validation fails"
 
+    @pytest.mark.parametrize(
+        "listed",
+        [["linux-r350-perf"], ["linux-r350-perf", "mac-m5-pro-perf"]],
+        ids=["unlisted", "listed"],
+    )
+    def test_unlisted_configuration_accepted(self, monkeypatch, listed):
+        import httpx
+
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
+
+        monkeypatch.setattr(
+            pinpoint.httpx,
+            "post",
+            lambda url, **kw: httpx.Response(
+                200,
+                json={"configurations": listed},
+                request=httpx.Request("POST", url),
+            ),
+        )
+        pinpoint.known_configurations.cache_clear()
+        created = []
+        monkeypatch.setattr(
+            pinpoint, "create_job", lambda **kw: created.append(kw) or {}
+        )
+        try:
+            tools.create_pinpoint_jobs(
+                benchmarks=["js3"],
+                configurations=["m5pro"],
+                exp_patches=[None],
+                watch=False,
+            )
+        finally:
+            pinpoint.known_configurations.cache_clear()
+        assert [c["configuration"] for c in created] == ["m5pro"]
+
     def test_aliases_all_resolve_to_real_configurations(self):
         from v8_utils import pinpoint
 
