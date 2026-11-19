@@ -270,8 +270,9 @@ def run_samply(
             dir=recordings_dir,
         )
     )
+    d8_path = variant.d8(v8_out)
     d8_cmd = (
-        [str(variant.d8(v8_out))]
+        [str(d8_path)]
         + (variant.flags.split() if variant.flags else [])
         + [
             "--perf-prof",
@@ -286,20 +287,31 @@ def run_samply(
     cmd = [samply, "record", "--save-only", "-r", str(rate)]
     cmd += ["-o", str(rec / "profile.json.gz"), "--"]
     cmd += d8_cmd
-    (rec / "meta.json").write_text(
-        json.dumps(
-            {
-                "suite_dir": str(suite_dir),
-                "lineitems": lineitems,
-                "d8_cmd": d8_cmd,
-                "samply_version": version,
-                "rate_hz": rate,
-                "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-            },
-            indent=2,
+    meta: dict = {
+        "suite_dir": str(suite_dir),
+        "lineitems": lineitems,
+        "d8_cmd": d8_cmd,
+        "samply_version": version,
+        "rate_hz": rate,
+        "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    if d8_path.is_file():
+        meta["binary_mtime"] = time.strftime(
+            "%Y-%m-%dT%H:%M:%S%z", time.localtime(d8_path.stat().st_mtime)
         )
-        + "\n"
-    )
+        try:
+            rev = subprocess.run(
+                ["git", "rev-parse", "--short=12", "HEAD"],
+                cwd=d8_path.parent,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if rev.returncode == 0 and rev.stdout.strip():
+                meta["v8_revision"] = rev.stdout.strip()
+        except OSError:
+            pass
+    (rec / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
     r = subprocess.run(cmd, check=False, cwd=suite_dir, capture_output=True, text=True)
     output = (r.stdout + r.stderr).strip()
     (rec / "output.txt").write_text(output + "\n")

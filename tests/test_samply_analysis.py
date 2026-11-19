@@ -227,3 +227,55 @@ def test_callers_and_flamegraph_merge_tiers():
     assert [([f.name for f in s.frames], s.ms) for s in merged_fg.paths] == [
         (["main a.js:1:1", "f a.js:2:1", "Add"], 6.0)
     ]
+
+
+def test_recording_info_from_meta_and_libs(tmp_path):
+    import json
+
+    from v8_utils.render import samply as render
+
+    d8 = tmp_path / "out" / "d8"
+    d8.parent.mkdir()
+    d8.write_bytes(b"not-a-macho")
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    raw = raw_profile(
+        ("d8", 1, [([MAIN, F_OPT], 1, 2000), ([MAIN, G], 1, 1000)]),
+        libs=[
+            {"name": JIT, "path": str(rec / JIT), "codeId": ""},
+            {"name": "d8", "path": str(d8), "codeId": "DEADBEEF" * 4},
+        ],
+    )
+    raw["meta"]["product"] = "d8"
+    (rec / "profile.json").write_text(json.dumps(raw))
+
+    # Without meta.json, a binary on disk whose UUID does not match is flagged
+    # as rebuilt rather than reporting its newer mtime.
+    rebuilt = samply.Profile.load(rec / "profile.json", symbolize=False)
+    assert rebuilt.info.binary == str(d8)
+    assert rebuilt.info.binary_mtime is None
+    assert rebuilt.info.binary_status == "rebuilt since"
+    assert rebuilt.info.samples == 2
+
+    # With meta.json, captured binary_mtime, v8_revision and d8_cmd are shown,
+    # and paths into the recording directory are shortened in the rendered cmd.
+    (rec / "meta.json").write_text(
+        json.dumps(
+            {
+                "d8_cmd": [
+                    str(d8),
+                    f"--perf-prof-path={rec}",
+                    f"--logfile={rec / 'v8.log'}",
+                    "bench.js",
+                ],
+                "binary_mtime": "2026-10-18T12:00:00+00:00",
+                "v8_revision": "abcdef012345",
+                "started": "2026-10-18T12:05:00+00:00",
+            }
+        )
+    )
+    with_meta = samply.Profile.load(rec / "profile.json", symbolize=False)
+    header = "\n".join(render.format_recording_info(with_meta))
+    assert f"binary: {d8} (built 2026-10-18" in header
+    assert "rev abcdef012345)" in header
+    assert "--perf-prof-path=. --logfile=./v8.log bench.js" in header

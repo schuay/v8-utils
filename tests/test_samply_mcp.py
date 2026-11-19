@@ -25,9 +25,11 @@ def _call(server, name: str, **args) -> str:
 def test_hotspots_table(server):
     text = _call(server, "samply_hotspots", recording=FIXTURE, n=2)
     lines = text.splitlines()
-    assert lines[0] == "thread d8 (tid 2594876), CPU time 399 ms"
-    assert "turbofan osr" in lines[4] and "/work/work.js:1:1" in lines[4]
-    assert "turbofan ctx" in lines[5] and "hotLoop /work/work.js:3:17" in lines[5]
+    assert lines[0] == "binary: /v8/out/d8 (not found)"
+    assert "interval 1 ms (1000 Hz), 535 samples" in lines[1]
+    assert lines[2] == "thread d8 (tid 2594876), CPU time 399 ms, 430 samples"
+    assert "turbofan osr" in lines[6] and "/work/work.js:1:1" in lines[6]
+    assert "turbofan ctx" in lines[7] and "hotLoop /work/work.js:3:17" in lines[7]
     assert "d8: /v8/out/d8 not found" in text
 
 
@@ -41,7 +43,7 @@ def test_hotspot_numbers_name_functions_in_later_calls(server):
 
 def test_thread_by_tid(server):
     text = _call(server, "samply_hotspots", recording=FIXTURE, thread="2594930", n=1)
-    assert text.startswith("thread V8 DefaultWorke (tid 2594930)")
+    assert "thread V8 DefaultWorke (tid 2594930)" in text.splitlines()[2]
 
 
 def test_ambiguous_thread_name_is_an_error(server):
@@ -51,7 +53,10 @@ def test_ambiguous_thread_name_is_an_error(server):
 
 def test_threads_diff_and_flamegraph(server):
     threads = _call(server, "samply_threads", recording=FIXTURE, top=1)
-    assert threads.splitlines()[2].split()[0] == "2594876"
+    tlines = threads.splitlines()
+    assert tlines[0] == "binary: /v8/out/d8 (not found)"
+    assert "interval 1 ms (1000 Hz), 535 samples" in tlines[1]
+    assert tlines[5].split()[0] == "2594876"
     diff = _call(server, "samply_diff", baseline=FIXTURE, experiment=FIXTURE)
     assert all(line.startswith("   +0.0%") for line in diff.splitlines()[2:])
     flame = _call(server, "samply_flamegraph", recording=FIXTURE, min_pct=10)
@@ -93,7 +98,7 @@ def test_hotspots_sort_by_total_and_merge_tiers_on_callers_and_flamegraph(server
     by_total = _call(server, "samply_hotspots", recording=FIXTURE, n=3, sort_by="total")
     # Entry frames have 0% self time and 100% total time, so sort_by="total"
     # surfaces them at #1 ahead of leaf hotspots.
-    row1 = by_total.splitlines()[4]
+    row1 = by_total.splitlines()[6]
     assert "0.0%" in row1 and "100.0%" in row1 and "start" in row1
 
     merged_callers = _call(

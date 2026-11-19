@@ -128,6 +128,7 @@ def test_recording_dir_is_self_contained(fake_samply, suite, tmp_path):
     assert meta["samply_version"] == "samply 0.13.1"
     assert meta["rate_hz"] == 1000
     assert meta["lineitems"] == ["regexp-octane"]
+    assert "binary_mtime" in meta
 
 
 def test_recordings_do_not_collide(fake_samply, suite, tmp_path):

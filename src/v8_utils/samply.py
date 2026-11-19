@@ -15,6 +15,7 @@ Leaf addresses are exact PCs; caller addresses are return address - 1.
 from __future__ import annotations
 
 import bisect
+import datetime
 import gzip
 import json
 import re
@@ -289,6 +290,13 @@ class Thread:
     def __len__(self) -> int:
         return self._samples["length"]
 
+    def sample_count(self) -> int:
+        """Number of recorded sample records with non-zero weight."""
+        weights = self._samples.get("weight")
+        if weights is None:
+            return self._samples["length"]
+        return sum(1 for w in weights if w)
+
     def samples(self) -> Iterator[Sample]:
         s = self._samples
         weights = s.get("weight") or [1] * s["length"]
@@ -370,6 +378,113 @@ def _is_jitdump(lib_name: str) -> bool:
     return lib_name.startswith("jit-") and lib_name.endswith(".dump")
 
 
+@dataclass(frozen=True)
+class RecordingInfo:
+    """Provenance of a samply recording, from profile.json.gz and optional
+    meta.json next to it."""
+
+    binary: str | None = None
+    #: Local "YYYY-MM-DD HH:MM" of the binary that produced the recording,
+    #: when known (from meta.json or from a matching UUID on disk).
+    binary_mtime: str | None = None
+    #: Why binary_mtime is unavailable when binary is set ("rebuilt since"
+    #: or "not found").
+    binary_status: str | None = None
+    #: V8 git revision recorded at capture time, when available.
+    revision: str | None = None
+    #: When the recording started ("YYYY-MM-DD HH:MM"), from meta.json or
+    #: the profile's startTime.
+    recorded: str | None = None
+    cmdline: tuple[str, ...] = ()
+    interval_ms: float = 1.0
+    samples: int = 0
+
+
+def _format_epoch(seconds: float) -> str:
+    return (
+        datetime.datetime.fromtimestamp(seconds, tz=datetime.UTC)
+        .astimezone()
+        .strftime("%Y-%m-%d %H:%M")
+    )
+
+
+def _format_iso(value: str) -> str:
+    try:
+        dt = datetime.datetime.fromisoformat(value)
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return value
+
+
+def _recording_info(
+    raw_meta: dict, libs: list[dict], threads: list[Thread], path: Path
+) -> RecordingInfo:
+    rec_meta: dict = {}
+    meta_file = path.parent / "meta.json"
+    if meta_file.is_file():
+        try:
+            rec_meta = json.loads(meta_file.read_text(errors="replace"))
+        except (OSError, json.JSONDecodeError):
+            rec_meta = {}
+
+    cmdline = tuple(str(a) for a in (rec_meta.get("d8_cmd") or ()))
+    product = raw_meta.get("product", "")
+    non_jit = [lib for lib in libs if not _is_jitdump(lib.get("name", ""))]
+    binary_lib = None
+    if cmdline:
+        binary_lib = next(
+            (lib for lib in non_jit if lib.get("path") == cmdline[0]), None
+        ) or next(
+            (lib for lib in non_jit if lib.get("name") == Path(cmdline[0]).name), None
+        )
+    elif product:
+        binary_lib = next((lib for lib in non_jit if lib.get("name") == product), None)
+    if binary_lib is None and not cmdline:
+        binary_lib = next(
+            (
+                lib
+                for lib in non_jit
+                if not lib.get("path", "").startswith(("/usr/", "/System/"))
+            ),
+            None,
+        )
+
+    binary = cmdline[0] if cmdline else (binary_lib["path"] if binary_lib else None)
+    binary_mtime: str | None = None
+    binary_status: str | None = None
+    if rec_meta.get("binary_mtime"):
+        binary_mtime = _format_iso(str(rec_meta["binary_mtime"]))
+    elif binary:
+        bin_path = Path(binary)
+        if not bin_path.is_file():
+            binary_status = "not found"
+        else:
+            code_id = binary_lib.get("codeId", "") if binary_lib else ""
+            if code_id and not any(i.uuid == code_id for i in macho.images(bin_path)):
+                binary_status = "rebuilt since"
+            else:
+                binary_mtime = _format_epoch(bin_path.stat().st_mtime)
+
+    recorded: str | None = None
+    if rec_meta.get("started"):
+        recorded = _format_iso(str(rec_meta["started"]))
+    elif raw_meta.get("startTime"):
+        recorded = _format_epoch(float(raw_meta["startTime"]) / 1000)
+
+    return RecordingInfo(
+        binary=binary,
+        binary_mtime=binary_mtime,
+        binary_status=binary_status,
+        revision=rec_meta.get("v8_revision") or None,
+        recorded=recorded,
+        cmdline=cmdline,
+        interval_ms=raw_meta["interval"],
+        samples=sum(t.sample_count() for t in threads),
+    )
+
+
 class Profile:
     def __init__(self, raw: dict, path: Path, *, symbolize: bool = True) -> None:
         self.path = path
@@ -393,6 +508,7 @@ class Profile:
                 _native_rvas(t, self.libs, rvas)
             natives.prepare(rvas)
         self.threads = [Thread(t, self.libs, natives) for t in raw["threads"]]
+        self.info: RecordingInfo = _recording_info(meta, self.libs, self.threads, path)
         #: Library name -> why its frames stay "<lib>+<rva>".
         self.unsymbolized: dict[str, str] = natives.unavailable() if natives else {}
         #: Library name -> why its native frames have no lines or inlines.

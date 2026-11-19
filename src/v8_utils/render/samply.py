@@ -1,6 +1,7 @@
 """Text for the samply_* analyses: fixed-width tables in the style of the
 perf_* tools, headed by the thread and the time base they cover."""
 
+import shlex
 from pathlib import Path
 
 from ..api import samply
@@ -67,12 +68,45 @@ def _unsymbolized(profile: samply.Profile) -> list[str]:
     return lines
 
 
+def format_recording_info(profile: samply.Profile) -> list[str]:
+    """2-3 line provenance header for a recording: binary + build mtime/rev,
+    recording time + interval + total samples, and command line."""
+    info = profile.info
+    lines: list[str] = []
+    if info.binary:
+        tags: list[str] = []
+        if info.binary_mtime:
+            tags.append(f"built {info.binary_mtime}")
+        elif info.binary_status:
+            tags.append(info.binary_status)
+        if info.revision:
+            tags.append(f"rev {info.revision}")
+        detail = f" ({', '.join(tags)})" if tags else ""
+        lines.append(f"binary: {info.binary}{detail}")
+    hz = f" ({1000 / info.interval_ms:g} Hz)" if info.interval_ms else ""
+    rec_parts = [
+        *([f"recorded {info.recorded}"] if info.recorded else []),
+        f"interval {info.interval_ms:g} ms{hz}",
+        f"{info.samples} samples",
+    ]
+    lines.append(", ".join(rec_parts))
+    if info.cmdline:
+        rec_dir = str(profile.path.parent)
+        short = [
+            a.replace(f"={rec_dir}", "=.") if rec_dir != "." else a
+            for a in info.cmdline
+        ]
+        lines.append(f"cmd: {shlex.join(short)}")
+    return lines
+
+
 def format_hotspots(profile: samply.Profile, h: samply.Hotspots) -> str:
+    basis = f"{_basis(h.thread, h.wall, h.total_ms)}, {h.thread.sample_count()} samples"
     if not h.rows:
-        return f"No samples ({_basis(h.thread, h.wall, h.total_ms)})."
+        return "\n".join([*format_recording_info(profile), f"No samples ({basis})."])
     idx_w = len(str(len(h.rows)))
     lib_w = max(len("lib"), *(len(r.function.lib or "") for r in h.rows))
-    lines = [_basis(h.thread, h.wall, h.total_ms), ""]
+    lines = [*format_recording_info(profile), basis, ""]
     header = (
         f"{'#':>{idx_w}}  {'self%':>6}  {'total%':>6}  {'self ms':>8}"
         f"  {'kind':<7}  {'tier':<15}  {'lib':<{lib_w}}  function"
@@ -153,12 +187,15 @@ def format_diff(rows: list[samply.DiffRow]) -> str:
     return "\n".join(lines)
 
 
-def format_threads(summary: list[samply.ThreadSummary]) -> str:
+def format_threads(
+    summary: list[samply.ThreadSummary], profile: samply.Profile | None = None
+) -> str:
     header = (
         f"{'tid':>9}  {'wall ms':>8}  {'cpu ms':>8}  {'cpu/wall':>8}  {'thread':<16}"
         "  hottest (self CPU)"
     )
-    lines = [header, "-" * len(header)]
+    lines = [*format_recording_info(profile), ""] if profile is not None else []
+    lines += [header, "-" * len(header)]
     for s in summary:
         ratio = f"{100 * s.cpu_ms / s.wall_ms:.0f}%" if s.wall_ms else "-"
         top = ", ".join(f"{_short(h.function)} {h.self_ms:.0f}ms" for h in s.top)

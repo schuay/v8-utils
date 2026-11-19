@@ -314,6 +314,7 @@ def register(mcp: FastMCP) -> None:
         CPU/wall ratio (low means blocked or idle), busiest first, plus its
         hottest functions. Use the tid as `thread` in the other samply_*
         tools; d8's background compiler and GC threads share one name."""
+        profile = samply.load(recording)
         return _text_result(
-            render.format_threads(samply.threads(samply.load(recording), top=top))
+            render.format_threads(samply.threads(profile, top=top), profile)
         )
