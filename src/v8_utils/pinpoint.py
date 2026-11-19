@@ -1160,13 +1160,30 @@ CONFIGURATION_ALIASES: dict[str, str] = {
     "m5pro": "mac-m5-pro-perf",
     "macintel": "mac-intel-perf",
     "win10": "win-10-perf",
-    # Same PowerEdge R350 silicon as "linux": an OS comparison, not a
-    # microarchitecture one.
     "win11": "win-11-perf",
     "macm4": "mac-m4-mini-perf",  # kept for backwards compatibility
 }
 
+_HIDDEN_CONFIGURATION_ALIASES = frozenset({"macm4"})
+
+_CONFIGURATION_ALIAS_NOTES = {
+    # An OS comparison, not a microarchitecture one.
+    "win11": 'same PowerEdge R350 silicon as "linux"',
+}
+
 DEFAULT_CONFIGURATIONS = ["linux", "m1", "m4"]
+
+
+def describe_configuration_aliases() -> str:
+    """Render the configuration aliases for help texts and error messages."""
+    parts = []
+    for alias, name in CONFIGURATION_ALIASES.items():
+        if alias in _HIDDEN_CONFIGURATION_ALIASES:
+            continue
+        note = _CONFIGURATION_ALIAS_NOTES.get(alias)
+        parts.append(f'"{alias}" ({name}, {note})' if note else f'"{alias}" ({name})')
+    return ", ".join(parts)
+
 
 # Bots Pinpoint accepts that /api/config does not list.
 _UNLISTED_CONFIGURATIONS = frozenset({"mac-m5-pro-perf"})

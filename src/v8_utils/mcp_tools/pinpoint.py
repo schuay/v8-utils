@@ -46,11 +46,8 @@ BENCHMARK_ARG = (
     ' "sp3" (speedometer3.crossbench)'
 )
 BOT_ARG = (
-    "filter by bot configuration name or alias:"
-    ' "linux" (linux-r350-perf), "m1" (mac-m1_mini_2020-perf),'
-    ' "m2" (mac-m2-pro-perf), "m3" (mac-m3-pro-perf),'
-    ' "m4" (mac-m4-mini-perf), "m4pro" (mac-m4-pro-perf),'
-    ' "m5pro" (mac-m5-pro-perf), "win10" (win-10-perf)'
+    "filter by bot configuration name or alias: "
+    + pinpoint_mod.describe_configuration_aliases()
 )
 
 
@@ -325,14 +322,8 @@ def register(
             str,
             Field(
                 description=(
-                    "space-separated bot config(s) or alias(es):"
-                    ' "linux" (linux-r350-perf),'
-                    ' "m1" (mac-m1_mini_2020-perf), "m2" (mac-m2-pro-perf),'
-                    ' "m3" (mac-m3-pro-perf), "m4" (mac-m4-mini-perf),'
-                    ' "m4pro" (mac-m4-pro-perf), "m5pro" (mac-m5-pro-perf),'
-                    ' "macintel" (mac-intel-perf),'
-                    ' "win10" (win-10-perf),'
-                    ' "win11" (win-11-perf, same R350 silicon as "linux")'
+                    "space-separated Pinpoint bot config(s) or alias(es): "
+                    + pinpoint_mod.describe_configuration_aliases()
                 )
             ),
         ] = " ".join(pinpoint_mod.DEFAULT_CONFIGURATIONS),

@@ -264,17 +264,18 @@ def create_pinpoint_jobs(
     # Validate every configuration up front.  Creating jobs one at a time means
     # a bad name in the middle of the list would otherwise leave the earlier
     # ones running, which reads as a complete batch.
+    known = pinpoint.known_configurations()
     unknown = [
         c
         for c in configurations
-        if pinpoint.CONFIGURATION_ALIASES.get(c, c)
-        not in pinpoint.known_configurations()
+        if pinpoint.CONFIGURATION_ALIASES.get(c, c) not in known
     ]
     if unknown:
-        known = ", ".join(sorted(pinpoint.CONFIGURATION_ALIASES))
+        others = sorted(known - set(pinpoint.CONFIGURATION_ALIASES.values()))
         raise ValueError(
             f"Unknown bot configuration(s): {', '.join(unknown)}. "
-            f"Known aliases: {known}."
+            f"Aliases: {pinpoint.describe_configuration_aliases()}. "
+            f"Other configurations: {', '.join(others)}."
         )
 
     # Resolve benchmark aliases to (benchmark, story) pairs

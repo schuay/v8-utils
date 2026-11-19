@@ -679,7 +679,8 @@ def main() -> None:
     p.add_argument(
         "--bot",
         default=None,
-        help="Filter by bot config or alias (m1, m2, m3, m4, linux)",
+        help="Filter by bot config or alias: "
+        + pinpoint.describe_configuration_aliases(),
     )
     p.add_argument(
         "--since",
@@ -735,7 +736,8 @@ def main() -> None:
     p.add_argument(
         "--bot",
         default=None,
-        help="Filter by bot config or alias (m1, m2, m3, m4, linux)",
+        help="Filter by bot config or alias: "
+        + pinpoint.describe_configuration_aliases(),
     )
     p.add_argument(
         "--since",
@@ -787,7 +789,9 @@ def main() -> None:
         nargs="+",
         metavar="CONFIG",
         default=list(pinpoint.DEFAULT_CONFIGURATIONS),
-        help=f"Bot config(s) or alias(es) (default: {' '.join(pinpoint.DEFAULT_CONFIGURATIONS)})",
+        help="Pinpoint bot config(s) or alias(es) (default: "
+        f"{' '.join(pinpoint.DEFAULT_CONFIGURATIONS)}). Aliases: "
+        + pinpoint.describe_configuration_aliases(),
     )
     p.add_argument(
         "-s", "--story", default=None, help="Story within the benchmark (only with -b)"

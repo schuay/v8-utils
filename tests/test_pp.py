@@ -878,6 +878,41 @@ class TestConfigurationValidation:
             )
         assert created == [], "no job should be created when validation fails"
 
+    def test_unknown_configuration_message_lists_bots(self, monkeypatch):
+        from v8_utils import pinpoint
+        from v8_utils import pinpoint_jobs as tools
+
+        monkeypatch.setattr(
+            pinpoint,
+            "known_configurations",
+            lambda: frozenset({"linux-r350-perf", "mac-m1-pro-perf"}),
+        )
+        with pytest.raises(ValueError) as exc:
+            tools.create_pinpoint_jobs(
+                benchmarks=["js3"], configurations=["bogus"], exp_patches=[None]
+            )
+        msg = str(exc.value)
+        aliases, others = msg.split("Other configurations: ")
+        assert '"linux" (linux-r350-perf)' in aliases
+        assert '"macm4"' not in aliases
+        assert others == "mac-m1-pro-perf."
+
+    @pytest.mark.parametrize(
+        "argv",
+        [
+            ["create-job", "-h"],
+            ["list-jobs", "-h"],
+            ["show-results", "-h"],
+        ],
+    )
+    def test_help_lists_aliases(self, monkeypatch, capsys, argv):
+        from v8_utils.cli import pp
+
+        monkeypatch.setattr("sys.argv", ["pp", *argv])
+        with pytest.raises(SystemExit):
+            pp.main()
+        assert '"m5pro"' in capsys.readouterr().out
+
     @pytest.mark.parametrize(
         "listed",
         [["linux-r350-perf"], ["linux-r350-perf", "mac-m5-pro-perf"]],
