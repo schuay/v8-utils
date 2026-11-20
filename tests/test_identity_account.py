@@ -193,6 +193,23 @@ def test_change_id_for_reads_the_footer_value(monkeypatch):
         g.change_id_for(f"{URL}/c/v8/v8/+/123")
 
 
+def test_commit_message_for_reads_the_current_patchset(monkeypatch):
+    seen = []
+
+    def fake_get(api_base, path, **kw):
+        seen.append(path)
+        return {"message": "Subject\n\nBody\n\nChange-Id: I" + "a" * 40 + "\n"}
+
+    monkeypatch.setattr(g, "_get", fake_get)
+    message = g.commit_message_for(f"{URL}/c/v8/v8/+/123")
+    assert message.startswith("Subject\n\nBody")
+    assert seen[-1].endswith("/revisions/current/commit")
+
+    monkeypatch.setattr(g, "_get", lambda *a, **k: {})
+    with pytest.raises(RuntimeError, match="no commit message"):
+        g.commit_message_for(f"{URL}/c/v8/v8/+/123")
+
+
 def test_patchset_for_commit_retries_until_gerrit_shows_it(monkeypatch):
     calls = []
 

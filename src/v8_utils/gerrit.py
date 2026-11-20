@@ -1473,6 +1473,24 @@ def change_id_for(change_url: str) -> str:
     return value
 
 
+def commit_message_for(change_url: str) -> str:
+    """The commit message of the change's current patchset.
+
+    This is the CL description as Gerrit shows it, including an edit made in
+    the web UI, which creates a patchset of its own. An uploader that wants to
+    keep the description reads it here and pushes it back.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    data = _get(
+        api_base, f"/changes/{cid}/revisions/current/commit", auth_required=True
+    )
+    value = data.get("message") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeError(f"change {change_id} reported no commit message: {data}")
+    return value
+
+
 def patchset_for_commit(
     change_url: str,
     commit: str,
