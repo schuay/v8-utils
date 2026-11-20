@@ -83,6 +83,9 @@ class Change:
     unresolved_comments: int = 0
     #: The current patchset number, when Gerrit reported one.
     patchset: int | None = None
+    #: The Change-Id footer value ("I" and 40 hex digits). It is fixed when
+    #: the change is created and stays the same across patchsets.
+    change_id: str = ""
     #: Non-zero votes per label.
     labels: dict[str, tuple[Vote, ...]] = field(default_factory=dict)
     #: Gerrit's approved/rejected verdict, for labels that have one.
@@ -577,6 +580,7 @@ def _compact_change(change: dict) -> Change:
         insertions=change.get("insertions", 0),
         deletions=change.get("deletions", 0),
         updated=change.get("updated", ""),
+        change_id=change.get("change_id", ""),
         wip=change.get("work_in_progress", False),
         hashtags=tuple(change.get("hashtags", [])),
         unresolved_comments=change.get("unresolved_comment_count", 0),

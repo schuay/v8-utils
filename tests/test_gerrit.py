@@ -965,3 +965,9 @@ def test_a_project_gerrit_answers_with_is_validated(monkeypatch, project):
     _recording_get(monkeypatch, _change(project=project))
     with pytest.raises(ValueError, match="project"):
         g._canonical_change("https://crrev.com/c/7650974")
+
+
+def test_compact_change_carries_the_change_id():
+    cid = "I" + "a" * 40
+    assert g._compact_change({"_number": 1, "change_id": cid}).change_id == cid
+    assert g._compact_change({"_number": 1}).change_id == ""
