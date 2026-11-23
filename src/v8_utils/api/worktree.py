@@ -1,6 +1,7 @@
 """V8 git worktrees with gclient dependencies symlinked from the main checkout."""
 
 from ..worktree import (
+    BUILD_ARCH,
     Created,
     Refreshed,
     Removed,
@@ -12,6 +13,7 @@ from ..worktree import (
 )
 
 __all__ = [
+    "BUILD_ARCH",
     "Created",
     "Refreshed",
     "Removed",

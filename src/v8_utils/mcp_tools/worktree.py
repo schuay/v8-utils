@@ -57,7 +57,8 @@ def register(mcp: FastMCP) -> None:
 
         Create makes a sibling of the main checkout (name="foo" -> ~/src/v8/foo),
         symlinks gclient deps from it (no gclient sync needed), and leaves three
-        build-ready dirs -- out/x64.{optdebug,debug,release} -- with
+        build-ready dirs -- out/<arch>.{optdebug,debug,release}, <arch> being
+        arm64 on arm64 hosts and x64 otherwise -- with
         symbol_level=2 and `gn gen` done, so `autoninja -C out/<build> d8` runs
         straight away. To update shared deps, gclient sync in the main checkout.
 
@@ -85,7 +86,7 @@ def register(mcp: FastMCP) -> None:
                 f"\n"
                 f"All commands must use this absolute path, e.g.:\n"
                 f"  git -C {wt_path} status\n"
-                f"  cd {wt_path} && autoninja -C out/x64.release d8\n"
+                f"  cd {wt_path} && autoninja -C out/{worktree_mod.BUILD_ARCH}.release d8\n"
             )
 
         if action == "refresh":

@@ -1,6 +1,7 @@
 """Git worktree management for V8 with gclient dependency symlinking."""
 
 import json
+import platform
 import re
 import shutil
 import subprocess
@@ -129,7 +130,9 @@ def _validate_name(name: str) -> None:
         )
 
 
-_DEFAULT_BUILDS = ["x64.optdebug", "x64.debug", "x64.release"]
+# Matches gm.py, which refuses x64 builds on arm64 (Apple silicon) hosts.
+BUILD_ARCH = "arm64" if platform.machine() == "arm64" else "x64"
+_DEFAULT_BUILDS = [f"{BUILD_ARCH}.{mode}" for mode in ("optdebug", "debug", "release")]
 
 
 def _force_symbol_level(args_gn: Path) -> None:
@@ -163,8 +166,6 @@ def _force_remoteexec(args_gn: Path) -> None:
     if "use_remoteexec = true" not in new_text:
         new_text = new_text if new_text.endswith("\n") else new_text + "\n"
         new_text += "use_remoteexec = true\n"
-    if not re.search(r"^reclient_cfg_dir\s*=", new_text, re.MULTILINE):
-        new_text += 'reclient_cfg_dir = "../../buildtools/reclient_cfgs/linux"\n'
     if new_text != text:
         args_gn.write_text(new_text)
 
