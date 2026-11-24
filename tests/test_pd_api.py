@@ -258,3 +258,26 @@ def test_detect_resolved_owns_the_store_and_resolves_hashes(cfg, monkeypatch, tm
         "embedder_id",
         "prev_embedder_id",
     ]
+
+
+def test_detect_defaults_ignore_short_segment_unless_min_size_lowered(cfg, store):
+    rows = []
+    for i, cid in enumerate(range(1000, 1025)):
+        level = 105.0 if i >= 20 else 100.0
+        rows.append(
+            ["bot1", "bench", "Total", "default", cid, level, 0.2, 3, "2026-01-01", "h"]
+        )
+    c = cfg(rows)
+    # Default PELT tuning (penalty=5.0, min_size=8, min_effect_size=1.0) rejects
+    # 5-commit segments while callers can still opt into looser values.
+    assert api.detect("fake", store=store, cfg=c, autosync=False).points == []
+    loose = api.detect(
+        "fake",
+        store=store,
+        cfg=c,
+        penalty=3.0,
+        min_size=2,
+        min_effect=0.5,
+        autosync=False,
+    )
+    assert [cp.commit_id for cp in loose.points] == [1020]

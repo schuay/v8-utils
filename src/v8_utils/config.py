@@ -168,8 +168,9 @@ class Config:
     )
     analysis: dict = field(
         default_factory=lambda: {
-            "penalty": 3.0,
-            "min_effect_size": 0.5,
+            "penalty": 5.0,
+            "min_size": 8,
+            "min_effect_size": 1.0,
             "min_pct_change": 1.0,
         },
         metadata={_HELP: "PELT analysis tuning parameters"},
@@ -358,8 +359,9 @@ def load() -> Config:
         analysis=data.get(
             "analysis",
             {
-                "penalty": 3.0,
-                "min_effect_size": 0.5,
+                "penalty": 5.0,
+                "min_size": 8,
+                "min_effect_size": 1.0,
                 "min_pct_change": 1.0,
             },
         ),

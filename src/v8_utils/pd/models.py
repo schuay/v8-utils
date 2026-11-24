@@ -94,10 +94,10 @@ class CommitInfo:
 class AnalysisConfig:
     """Tuning parameters for PELT."""
 
-    penalty: float = 3.0
-    min_size: int = 2
+    penalty: float = 5.0
+    min_size: int = 8
     min_pct_change: float = 1.0  # percent
-    min_effect_size: float = 0.5
+    min_effect_size: float = 1.0
     delay: int = 0
     refine_window: int = 3
 

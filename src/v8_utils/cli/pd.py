@@ -112,6 +112,9 @@ def detect(
     penalty: Annotated[
         float | None, typer.Option("--penalty", help="PELT penalty")
     ] = None,
+    min_size: Annotated[
+        int | None, typer.Option("--min-size", help="Min segment length in commits")
+    ] = None,
     min_effect: Annotated[
         float | None, typer.Option("--min-effect", help="Min Cohen's d")
     ] = None,
@@ -141,6 +144,7 @@ def detect(
                 since=_parse_date(since) if since else None,
                 until=_parse_date(until) if until else None,
                 penalty=penalty,
+                min_size=min_size,
                 min_effect=min_effect,
                 min_change=min_change,
             )

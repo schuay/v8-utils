@@ -68,6 +68,12 @@ def register(mcp: FastMCP) -> None:
             float | None,
             Field(description="PELT penalty override (default: from config)"),
         ] = None,
+        min_size: Annotated[
+            int | None,
+            Field(
+                description="minimum segment length in commits (default: from config)"
+            ),
+        ] = None,
         min_effect: Annotated[
             float | None,
             Field(description="minimum effect size override (default: from config)"),
@@ -137,6 +143,7 @@ def register(mcp: FastMCP) -> None:
                 since=api.parse_date(since) if since else None,
                 until=api.parse_date(until) if until else None,
                 penalty=penalty,
+                min_size=min_size,
                 min_effect=min_effect,
                 min_change=min_change,
                 min_localization_confidence=min_localization_confidence,

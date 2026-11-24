@@ -215,6 +215,7 @@ def detect(
     since: str | None = None,
     until: str | None = None,
     penalty: float | None = None,
+    min_size: int | None = None,
     min_effect: float | None = None,
     min_change: float | None = None,
     min_localization_confidence: float = 0.0,
@@ -232,9 +233,26 @@ def detect(
     cfg = cfg or load_config()
     analysis = cfg.analysis
     config = AnalysisConfig(
-        penalty=penalty or analysis.get("penalty", 3.0),
-        min_effect_size=min_effect or analysis.get("min_effect_size", 0.5),
-        min_pct_change=min_change or analysis.get("min_pct_change", 1.0),
+        penalty=(
+            penalty
+            if penalty is not None
+            else analysis.get("penalty", AnalysisConfig.penalty)
+        ),
+        min_size=(
+            min_size
+            if min_size is not None
+            else analysis.get("min_size", AnalysisConfig.min_size)
+        ),
+        min_effect_size=(
+            min_effect
+            if min_effect is not None
+            else analysis.get("min_effect_size", AnalysisConfig.min_effect_size)
+        ),
+        min_pct_change=(
+            min_change
+            if min_change is not None
+            else analysis.get("min_pct_change", AnalysisConfig.min_pct_change)
+        ),
     )
     adaptor = make_adaptor(source, cfg)
     default_engine = engine_for_source(source, cfg)
