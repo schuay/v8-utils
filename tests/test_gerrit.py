@@ -317,16 +317,48 @@ def drafts(monkeypatch):
 CL = "https://chromium-review.googlesource.com/c/v8/v8/+/8174846"
 
 
-def test_a_reply_draft_carries_in_reply_to_and_the_ai_marker(drafts):
-    out = g.create_drafts(
-        CL, [{"message": "Done.", "in_reply_to": "c1", "is_ai": True}]
-    )
+def test_a_reply_draft_carries_in_reply_to_and_defaults_to_ai(drafts):
+    out = g.create_drafts(CL, [{"message": "Done.", "in_reply_to": "c1"}])
 
     assert out[0].ok is True
     _path, body = drafts.sent[0]
     assert body["in_reply_to"] == "c1"
-    # A reviewer is entitled to know a reply was not typed by a human.
+    # A reviewer is entitled to know a reply was not typed by a human, so is_ai
+    # defaults to True when omitted.
     assert body["is_ai"] is True
+
+
+def test_a_draft_can_opt_out_of_the_ai_marker(drafts):
+    g.create_drafts(
+        CL,
+        [
+            {"message": "human thought", "is_ai": False},
+            {"message": "agent thought", "is_ai": True},
+        ],
+    )
+
+    assert "is_ai" not in drafts.sent[0][1]
+    assert drafts.sent[1][1]["is_ai"] is True
+
+
+def test_mcp_create_comments_defaults_to_ai(drafts):
+    server = FastMCP("test")
+    mcp_gerrit.register(server)
+    asyncio.run(
+        server.call_tool(
+            "gerrit_create_comments",
+            {
+                "change_url": CL,
+                "comments": [
+                    {"message": "agent comment"},
+                    {"message": "human comment", "is_ai": False},
+                ],
+            },
+        )
+    )
+
+    assert drafts.sent[0][1]["is_ai"] is True
+    assert "is_ai" not in drafts.sent[1][1]
 
 
 def test_a_bare_reply_lands_on_its_parents_location(drafts):
@@ -576,12 +608,17 @@ def test_review_post_keeps_existing_drafts(review_posts):
     assert review_posts[0][1]["drafts"] == "KEEP"
 
 
-def test_review_post_marks_machine_authored_comments(review_posts):
+def test_review_post_marks_machine_authored_comments_by_default(review_posts):
     g.post_review_comments(
         "https://chromium-review.googlesource.com/c/v8/v8/+/8174846",
-        [{"path": "src/a.cc", "line": 1, "message": "x", "is_ai": True}],
+        [
+            {"path": "src/a.cc", "line": 1, "message": "x"},
+            {"path": "src/a.cc", "line": 2, "message": "y", "is_ai": False},
+        ],
     )
-    assert review_posts[0][1]["comments"]["src/a.cc"][0]["is_ai"] is True
+    comments = review_posts[0][1]["comments"]["src/a.cc"]
+    assert comments[0]["is_ai"] is True
+    assert "is_ai" not in comments[1]
 
 
 def test_review_post_files_a_pathless_comment_at_change_level(review_posts):

@@ -928,10 +928,11 @@ def _comment_input(c: dict, src: dict, path: str) -> dict:
             body["range"] = src["range"]
     if c.get("in_reply_to"):
         body["in_reply_to"] = c["in_reply_to"]
-    # Label machine-authored comments as such. Gerrit renders it, and a reviewer
-    # is entitled to know a comment was not typed by a human -- depot_tools
-    # stamps the same field on everything it writes under an AI agent.
-    if c.get("is_ai"):
+    # Label machine-authored comments as such by default. Gerrit renders it, and
+    # a reviewer is entitled to know a comment was not typed by a human --
+    # depot_tools stamps the same field on everything it writes under an AI
+    # agent. Pass is_ai=False explicitly for human-authored comments.
+    if c.get("is_ai", True):
         body["is_ai"] = True
     return body
 
@@ -968,7 +969,8 @@ def create_drafts(
       line        (optional) 1-based line; omit + no range = file-level
       side        (optional) "REVISION" (default, after) or "PARENT" (before)
       in_reply_to (optional) UUID of comment to reply to
-      is_ai       (optional) mark the draft as machine-authored
+      is_ai       (optional) default True; mark the draft as machine-authored
+                  (pass False for human-authored comments)
       unresolved  (optional) default True
       range       (optional) {start_line, start_character, end_line, end_character}
 
