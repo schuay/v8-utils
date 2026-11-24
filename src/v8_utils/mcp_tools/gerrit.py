@@ -118,10 +118,13 @@ def register(
                     " `gerrit_comments` (shown as `[id]` in the output) -- a"
                     " reply with no path/line/range of its own is filed at its"
                     " parent's location and patchset, so a plain reply needs"
-                    " only message + in_reply_to; unresolved (optional) bool,"
-                    " default True; range (optional) {start_line,"
-                    " start_character, end_line, end_character} for a multi-line"
-                    " or character-range selection, which makes `line` ignored"
+                    " only message + in_reply_to; is_ai (optional) bool,"
+                    " default True, marks the draft as machine-authored in"
+                    " Gerrit (pass False for human-authored comments);"
+                    " unresolved (optional) bool, default True; range"
+                    " (optional) {start_line, start_character, end_line,"
+                    " end_character} for a multi-line or character-range"
+                    " selection, which makes `line` ignored"
                 )
             ),
         ],
