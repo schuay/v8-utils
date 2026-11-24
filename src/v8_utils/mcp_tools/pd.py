@@ -78,6 +78,33 @@ def register(mcp: FastMCP) -> None:
             float | None,
             Field(description="minimum effect size override (default: from config)"),
         ] = None,
+        min_z: Annotated[
+            float | None,
+            Field(
+                description=(
+                    "minimum local median |z| against lag-1 MAD noise"
+                    " (default: 3.5; use 6-8 for near-zero-noise leads)"
+                )
+            ),
+        ] = None,
+        max_flips: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "drop bimodal series exceeding this opposite-sign bounce count"
+                    " (e.g. 2)"
+                )
+            ),
+        ] = None,
+        persistent_only: Annotated[
+            bool,
+            Field(
+                description=(
+                    "only report shifts where >=50% of the step still holds in the"
+                    " tail (hides reverted shifts and flip-backs)"
+                )
+            ),
+        ] = False,
         source: Annotated[str, Field(description=SOURCE_ARG)] = "skiz",
         format: Annotated[
             str,
@@ -146,6 +173,9 @@ def register(mcp: FastMCP) -> None:
                 min_size=min_size,
                 min_effect=min_effect,
                 min_change=min_change,
+                min_z=min_z,
+                max_flips=max_flips,
+                persistent_only=persistent_only,
                 min_localization_confidence=min_localization_confidence,
             )
             if format == "json":

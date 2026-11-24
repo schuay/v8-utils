@@ -4,6 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+# Default detection parameters calibrated on the mac-mini-m6 / mac-m3
+# slipstream JetStream3 overlap (see kbase 20261123/change-detection.md).
+DEFAULT_PENALTY = 5.0
+DEFAULT_MIN_SIZE = 8
+DEFAULT_MIN_PCT_CHANGE = 1.0  # percent
+DEFAULT_MIN_EFFECT_SIZE = 1.0
+DEFAULT_MIN_LOCAL_Z = 3.5
+BIMODAL_FLIPS_THRESHOLD = 2
+
 
 @dataclass
 class ChangePoint:
@@ -32,11 +41,22 @@ class ChangePoint:
     # embedder ids: the step is the roll, not the engine commit.
     embedder_id: int = 0
     prev_embedder_id: int = 0
+    # Tier-1 hybrid diagnostics: local median step |z| against lag-1 MAD noise,
+    # series-wide opposite-sign bounce count, and whether >=50% of the shift
+    # still holds in the tail of the series.
+    local_z: float = 0.0
+    flips: int = 0
+    persistent: bool = True
 
     @property
     def embedder_roll(self) -> bool:
         """True when the embedder changed across the breakpoint."""
         return self.embedder_id != self.prev_embedder_id
+
+    @property
+    def bimodal(self) -> bool:
+        """True when the series exhibits repeated opposite-sign mode flips."""
+        return self.flips > BIMODAL_FLIPS_THRESHOLD
 
 
 @dataclass
@@ -92,12 +112,16 @@ class CommitInfo:
 
 @dataclass
 class AnalysisConfig:
-    """Tuning parameters for PELT."""
+    """Tuning parameters for PELT and hybrid step filtering."""
 
-    penalty: float = 5.0
-    min_size: int = 8
-    min_pct_change: float = 1.0  # percent
-    min_effect_size: float = 1.0
+    penalty: float = DEFAULT_PENALTY
+    min_size: int = DEFAULT_MIN_SIZE
+    min_pct_change: float = DEFAULT_MIN_PCT_CHANGE  # percent
+    min_effect_size: float = DEFAULT_MIN_EFFECT_SIZE
+    min_z: float = DEFAULT_MIN_LOCAL_Z
+    max_flips: int | None = None
+    persistent_only: bool = False
+    drop_transients: bool = True
     delay: int = 0
     refine_window: int = 3
 

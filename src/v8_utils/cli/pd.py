@@ -122,6 +122,20 @@ def detect(
         float | None,
         typer.Option("--min-change", help="Min percent change (e.g. 5 = 5%)"),
     ] = None,
+    min_z: Annotated[
+        float | None,
+        typer.Option("--min-z", help="Min local median |z| against lag-1 MAD noise"),
+    ] = None,
+    max_flips: Annotated[
+        int | None,
+        typer.Option("--max-flips", help="Drop bimodal series with more flips than N"),
+    ] = None,
+    persistent_only: Annotated[
+        bool,
+        typer.Option(
+            "--persistent-only", help="Only keep steps that still hold in the tail"
+        ),
+    ] = False,
     group_by_commit: Annotated[
         bool, typer.Option("--group", help="Group results by commit")
     ] = False,
@@ -147,6 +161,9 @@ def detect(
                 min_size=min_size,
                 min_effect=min_effect,
                 min_change=min_change,
+                min_z=min_z,
+                max_flips=max_flips,
+                persistent_only=persistent_only,
             )
         print_detect_report(
             det.points,

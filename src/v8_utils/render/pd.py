@@ -194,6 +194,16 @@ def _fmt_roll(cp: ChangePoint) -> str:
     return f"[dim]embedder roll {cp.prev_embedder_id} -> {cp.embedder_id}[/dim]"
 
 
+def _fmt_conf(cp: ChangePoint) -> str:
+    """Series confidence plus reverted/bimodal diagnostics when applicable."""
+    tags = [cp.confidence]
+    if not cp.persistent:
+        tags.append("[dim]reverted[/dim]")
+    if cp.bimodal:
+        tags.append(f"[dim]bimodal({cp.flips})[/dim]")
+    return " ".join(tags)
+
+
 def _get_commit_info(
     commit_id: int,
     commit_store: CommitStore | None,
@@ -336,6 +346,7 @@ def _print_grouped(
             table.add_column("SUBMETRIC")
         table.add_column("CHANGE", justify="right")
         table.add_column("EFFECT", justify="right")
+        table.add_column("Z", justify="right")
         table.add_column("P-VALUE", justify="right")
         table.add_column("CONF")
 
@@ -355,8 +366,9 @@ def _print_grouped(
                 [
                     f"[{color}]{pct:+.2f}%[/{color}]",
                     f"{cp.cohens_d:.2f}d",
+                    f"{cp.local_z:.1f}",
                     p_str,
-                    cp.confidence,
+                    _fmt_conf(cp),
                 ]
             )
             table.add_row(*row_cells)
@@ -399,6 +411,7 @@ def _print_flat(
         table.add_column("SUBMETRIC")
     table.add_column("CHANGE", justify="right")
     table.add_column("EFFECT", justify="right")
+    table.add_column("Z", justify="right")
     table.add_column("P-VALUE", justify="right")
     table.add_column("CONF")
     table.add_column("COMMIT", no_wrap=False)
@@ -442,8 +455,9 @@ def _print_flat(
             [
                 f"[{color}]{pct:+.2f}%[/{color}]",
                 f"{cp.cohens_d:.2f}d",
+                f"{cp.local_z:.1f}",
                 p_str,
-                cp.confidence,
+                _fmt_conf(cp),
                 desc,
             ]
         )

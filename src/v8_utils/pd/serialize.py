@@ -128,6 +128,9 @@ class ResolvedChangePoint:
     # differ when the step is an embedder roll rather than engine movement.
     embedder_id: int = 0
     prev_embedder_id: int = 0
+    local_z: float = 0.0
+    flips: int = 0
+    persistent: bool = True
 
 
 def resolve_changepoint(
@@ -176,6 +179,9 @@ def resolve_changepoint(
         candidates=[Candidate(commit_id=cid, prob=prob) for cid, prob in cp.candidates],
         embedder_id=cp.embedder_id,
         prev_embedder_id=cp.prev_embedder_id,
+        local_z=cp.local_z,
+        flips=cp.flips,
+        persistent=cp.persistent,
     )
 
 

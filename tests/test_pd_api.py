@@ -257,6 +257,9 @@ def test_detect_resolved_owns_the_store_and_resolves_hashes(cfg, monkeypatch, tm
         "candidates",
         "embedder_id",
         "prev_embedder_id",
+        "local_z",
+        "flips",
+        "persistent",
     ]
 
 

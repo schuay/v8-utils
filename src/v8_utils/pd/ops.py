@@ -218,6 +218,9 @@ def detect(
     min_size: int | None = None,
     min_effect: float | None = None,
     min_change: float | None = None,
+    min_z: float | None = None,
+    max_flips: int | None = None,
+    persistent_only: bool = False,
     min_localization_confidence: float = 0.0,
     autosync: bool = True,
     cfg: v8_config.Config | None = None,
@@ -226,9 +229,10 @@ def detect(
 
     `since`/`until` are already parsed dates (see parse_date). `metric` is a
     glob over the test column. Tuning left None comes from the config's
-    [analysis] table. `min_localization_confidence` drops points whose
-    breakpoint is not pinned to one commit at least that sharply; `autosync`
-    refreshes the commit store when a point outruns it.
+    [analysis] table (or AnalysisConfig defaults). `min_z`, `max_flips`, and
+    `persistent_only` control Tier-1 hybrid filtering; `min_localization_confidence`
+    drops points whose breakpoint is not pinned to one commit at least that
+    sharply; `autosync` refreshes the commit store when a point outruns it.
     """
     cfg = cfg or load_config()
     analysis = cfg.analysis
@@ -253,6 +257,9 @@ def detect(
             if min_change is not None
             else analysis.get("min_pct_change", AnalysisConfig.min_pct_change)
         ),
+        min_z=min_z if min_z is not None else AnalysisConfig.min_z,
+        max_flips=max_flips,
+        persistent_only=persistent_only,
     )
     adaptor = make_adaptor(source, cfg)
     default_engine = engine_for_source(source, cfg)
