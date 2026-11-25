@@ -1,6 +1,6 @@
 [project]
 name = "v8-utils"
-version = "1984"
+version = "1985"
 description = "CLI and MCP tools for V8 JavaScript engine developers"
 readme = "README.md"
 license = "MIT"

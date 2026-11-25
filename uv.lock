@@ -1316,7 +1316,7 @@ wheels = [
 
 [[package]]
 name = "v8-utils"
-version = "1984"
+version = "1985"
 source = { editable = "." }
 dependencies = [
     { name = "dateparser" },

@@ -22,7 +22,7 @@
 # hatchling cannot do that for an sdist.
 [project]
 name = "v8-utils-core"
-version = "1984"
+version = "1985"
 description = "CLI and MCP tools for V8 JavaScript engine developers (subsettable build)"
 # Kept equal to ../../pyproject.toml; see the comment there.
 requires-python = ">=3.12,<3.14"
