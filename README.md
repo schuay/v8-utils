@@ -4,7 +4,7 @@ CLI and MCP tools for [V8](https://v8.dev/) JavaScript engine developers.
 
 ## Requirements
 
-- Python 3.12+
+- Python 3.12 or 3.13 (`uv tool install` selects one automatically)
 - [uv](https://docs.astral.sh/uv/)
 - [luci-auth](https://chromium.googlesource.com/infra/luci/luci-go/+/refs/heads/main/auth/client/cmd/luci-auth/) on `$PATH` (for Pinpoint job creation)
 - `gcloud auth application-default login` (optional, for CAS data access)

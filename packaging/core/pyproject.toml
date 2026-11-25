@@ -24,7 +24,8 @@
 name = "v8-utils-core"
 version = "1984"
 description = "CLI and MCP tools for V8 JavaScript engine developers (subsettable build)"
-requires-python = ">=3.12"
+# Kept equal to ../../pyproject.toml; see the comment there.
+requires-python = ">=3.12,<3.14"
 # Base install: only what the MCP server core and its light tool groups need --
 # the repo_git, worktree and gerrit groups. See the comments in ../../pyproject
 # .toml for why the mcp cap and the explicit httpx/typer/rich entries are there.
