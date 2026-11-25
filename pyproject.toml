@@ -5,10 +5,10 @@ description = "CLI and MCP tools for V8 JavaScript engine developers"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-# Capped below 3.14: ruptures ships no cp314 wheels, and building its sdist
-# needs a C toolchain not every machine has. `uv tool install` picks (or
-# downloads) an interpreter within this range, so no --python flag is needed.
-# Lift the cap once ruptures publishes cp314 wheels.
+# TODO(jgruber): remove the <3.14 cap once ruptures publishes cp314 wheels.
+# ruptures ships no cp314 wheels, and building its sdist needs a C toolchain
+# not every machine has. `uv tool install` picks (or downloads) an interpreter
+# within this range, so no --python flag is needed.
 requires-python = ">=3.12,<3.14"
 # The full developer surface, with no extras to remember: every CLI and every MCP
 # tool group works after a plain `uv tool install git+...`. Nothing here is
