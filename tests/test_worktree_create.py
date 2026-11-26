@@ -1,4 +1,4 @@
-"""Tests for worktree.create, V8 deps setup, and APFS COW build cloning."""
+"""Tests for worktree.create, V8 deps setup, and COW build cloning."""
 
 from __future__ import annotations
 
@@ -260,7 +260,6 @@ def test_is_warm_build_requires_build_log_and_no_lock(tmp_path: Path):
         assert worktree._is_warm_build(build_dir)
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="APFS clonefile is macOS-only")
 def test_create_cow_clones_warm_build_and_syncs_mtimes(checkout: Path, monkeypatch):
     # Populate tracked files in main with known historical mtimes.
     (checkout / ".gitignore").write_text("out/\n")
@@ -311,8 +310,8 @@ def test_create_cow_clones_warm_build_and_syncs_mtimes(checkout: Path, monkeypat
     main_fs_state.write_bytes(worktree._compress_siso_state(state_bytes, "zstd"))
     main_fs_state_before = main_fs_state.read_bytes()
 
-    if not worktree._supports_clonefile(main_build / "args.gn", checkout.parent):
-        pytest.skip("temp filesystem does not support APFS clonefile(2)")
+    if not worktree._supports_cow_clone(main_build / "args.gn", checkout.parent):
+        pytest.skip("temp filesystem does not support COW cloning")
 
     monkeypatch.setattr(worktree, "_create_symlinks", lambda *a: ["build"])
 
@@ -350,7 +349,6 @@ def test_create_cow_clones_warm_build_and_syncs_mtimes(checkout: Path, monkeypat
     assert _git(wt, "diff-files", "--name-only") == (0, "")
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="APFS clonefile is macOS-only")
 def test_create_no_clone_and_fallback_on_corrupt_state(checkout: Path, monkeypatch):
     build_name = f"{worktree.BUILD_ARCH}.optdebug"
     main_build = checkout / "out" / build_name
@@ -358,6 +356,9 @@ def test_create_no_clone_and_fallback_on_corrupt_state(checkout: Path, monkeypat
     (main_build / "args.gn").write_text("is_debug = true\n")
     (main_build / "build.ninja").write_text("# ninja\n")
     (main_build / ".siso_fs_state").write_bytes(b"corrupt-siso-state")
+
+    if not worktree._supports_cow_clone(main_build / "args.gn", checkout.parent):
+        pytest.skip("temp filesystem does not support COW cloning")
 
     monkeypatch.setattr(worktree, "_create_symlinks", lambda *a: [])
 
@@ -374,7 +375,7 @@ def test_create_no_clone_and_fallback_on_corrupt_state(checkout: Path, monkeypat
     assert not (created2.path / "out" / build_name).exists()
 
 
-def test_create_falls_back_when_clonefile_unsupported(checkout: Path, monkeypatch):
+def test_create_falls_back_when_cow_unsupported(checkout: Path, monkeypatch):
     build_name = f"{worktree.BUILD_ARCH}.optdebug"
     main_build = checkout / "out" / build_name
     main_build.mkdir(parents=True)
@@ -383,8 +384,55 @@ def test_create_falls_back_when_clonefile_unsupported(checkout: Path, monkeypatc
     (main_build / ".ninja_log").write_text("# ninja log v6\n")
 
     monkeypatch.setattr(worktree, "_create_symlinks", lambda *a: [])
-    monkeypatch.setattr(worktree, "_supports_clonefile", lambda *a: False)
+    monkeypatch.setattr(worktree, "_supports_cow_clone", lambda *a: False)
 
     created = worktree.create(checkout, "wt-nocow")
     assert created.builds == ["(gm.py not found, skipping build setup)"]
     assert not (created.path / "out" / build_name).exists()
+
+
+def test_linux_reflink_probe_and_copy_command(tmp_path: Path, monkeypatch):
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    src.mkdir()
+    dst.mkdir()
+    src_file = src / "args.gn"
+    src_file.write_text("is_debug = false\n")
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert worktree._cow_copy_cmd(src, dst / "build") == [
+        "cp",
+        "-a",
+        "--reflink=always",
+        str(src),
+        str(dst / "build"),
+    ]
+
+    seen_cmds: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        seen_cmds.append(cmd)
+        # Simulate GNU cp creating the reflinked probe file.
+        Path(cmd[-1]).write_bytes(src_file.read_bytes())
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert worktree._supports_cow_clone(src_file, dst) is True
+    assert seen_cmds[0][:3] == ["cp", "--reflink=always", "-P"]
+    assert seen_cmds[0][3] == str(src_file)
+    # Probe file must be cleaned up afterwards.
+    assert list(dst.iterdir()) == []
+
+    # Non-reflink FS (e.g. ext4): cp --reflink=always exits non-zero.
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1),
+    )
+    assert worktree._supports_cow_clone(src_file, dst) is False
+
+    # Unsupported platform returns False / raises _CowUnavailable.
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert worktree._supports_cow_clone(src_file, dst) is False
+    with pytest.raises(worktree._CowUnavailable):
+        worktree._cow_copy_cmd(src, dst / "build")

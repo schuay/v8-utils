@@ -59,11 +59,12 @@ def register(mcp: FastMCP) -> None:
         symlinks gclient deps from it (no gclient sync needed), and leaves three
         build-ready dirs -- out/<arch>.{optdebug,debug,release}, <arch> being
         arm64 on arm64 hosts and x64 otherwise -- so `autoninja -C out/<build> d8`
-        runs straight away. On macOS APFS, any warm build present in the main
-        checkout is COW-cloned (keeping main's args.gn and rewriting Siso's fs
-        state so unchanged object files stay shared); other configs are generated
-        fresh with symbol_level=2 and `gn gen`. To update shared deps, gclient
-        sync in the main checkout.
+        runs straight away. On COW-capable filesystems (macOS APFS; Linux
+        btrfs/XFS reflinks), any warm build present in the main checkout is
+        COW-cloned (keeping main's args.gn and rewriting Siso's fs state so
+        unchanged object files stay shared); other configs are generated fresh
+        with symbol_level=2 and `gn gen`. To update shared deps, gclient sync in
+        the main checkout.
 
         The symlink set is a create-time snapshot. If a build breaks after a
         rebase with missing or dangling dep directories, action="refresh"

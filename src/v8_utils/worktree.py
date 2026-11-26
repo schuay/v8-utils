@@ -191,20 +191,17 @@ _GZIP_MAGIC = b"\x1f\x8b"
 
 
 class _CowUnavailable(Exception):
-    """Raised when APFS build cloning cannot proceed and gm.py should be used."""
+    """Raised when COW build cloning cannot proceed and gm.py should be used."""
 
 
-def _supports_clonefile(src_file: Path, dst_dir: Path) -> bool:
-    """Return True iff macOS clonefile(2) succeeds from src_file into dst_dir.
+def _probe_macos_clonefile(src_file: Path, probe: Path) -> bool:
+    """Probe macOS APFS clonefile(2) on a single file.
 
     BSD `cp -c` silently falls back to a full physical copy across volumes or on
-    non-APFS filesystems. Probing a single file with clonefile(2) directly
-    guarantees we never trigger a multi-GB copy when COW is unavailable.
+    non-APFS filesystems, so we call clonefile(2) directly first.
     """
-    if sys.platform != "darwin":
-        return False
     try:
-        if src_file.stat().st_dev != dst_dir.stat().st_dev:
+        if src_file.stat().st_dev != probe.parent.stat().st_dev:
             return False
         libc = ctypes.CDLL(None, use_errno=True)
         clonefile = libc.clonefile
@@ -213,12 +210,47 @@ def _supports_clonefile(src_file: Path, dst_dir: Path) -> bool:
     except (OSError, AttributeError):
         return False
 
+    return clonefile(os.fsencode(src_file), os.fsencode(probe), _CLONE_NOFOLLOW) == 0
+
+
+def _probe_linux_reflink(src_file: Path, probe: Path) -> bool:
+    """Probe Linux FICLONE reflinks (btrfs, XFS, bcachefs) via GNU `cp`.
+
+    Does not pre-check st_dev because btrfs assigns distinct device IDs per
+    subvolume even though reflinks work across subvolumes on the same FS.
+    `--reflink=always` refuses to fall back to a physical copy.
+    """
+    try:
+        r = subprocess.run(
+            ["cp", "--reflink=always", "-P", str(src_file), str(probe)],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        return False
+    return r.returncode == 0
+
+
+def _supports_cow_clone(src_file: Path, dst_dir: Path) -> bool:
+    """Return True iff copy-on-write cloning works from src_file into dst_dir."""
+    if sys.platform != "darwin" and not sys.platform.startswith("linux"):
+        return False
     probe = dst_dir / f".cow-probe-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     try:
-        rc = clonefile(os.fsencode(src_file), os.fsencode(probe), _CLONE_NOFOLLOW)
-        return rc == 0
+        if sys.platform == "darwin":
+            return _probe_macos_clonefile(src_file, probe)
+        return _probe_linux_reflink(src_file, probe)
     finally:
         probe.unlink(missing_ok=True)
+
+
+def _cow_copy_cmd(src_dir: Path, dst_dir: Path) -> list[str]:
+    """Return the platform recursive COW copy command for src_dir -> dst_dir."""
+    if sys.platform == "darwin":
+        return ["cp", "-cRPp", str(src_dir), str(dst_dir)]
+    if sys.platform.startswith("linux"):
+        return ["cp", "-a", "--reflink=always", str(src_dir), str(dst_dir)]
+    raise _CowUnavailable(f"COW cloning unsupported on {sys.platform}")
 
 
 def _is_siso_locked(build_dir: Path) -> bool:
@@ -610,7 +642,7 @@ def _clone_build(
     symlinked_deps: Sequence[str],
     drop_paths: Collection[str],
 ) -> bool:
-    """APFS COW-clone main/out/<build> into wt_path/out/<build>.
+    """COW-clone main/out/<build> into wt_path/out/<build> (APFS / Linux reflink).
 
     Returns True on success. Returns False (cleaning up any partial copy) on
     any error or unsupported environment so the caller can fall back to gm.py.
@@ -622,7 +654,7 @@ def _clone_build(
 
     dst_dir.parent.mkdir(parents=True, exist_ok=True)
     try:
-        _run(["cp", "-cRPp", str(src_dir), str(dst_dir)])
+        _run(_cow_copy_cmd(src_dir, dst_dir))
         # Drop runtime lock/log artifacts inherited from main.
         (dst_dir / ".siso_lock").unlink(missing_ok=True)
         siso_info = dst_dir / "siso.INFO"
@@ -654,10 +686,11 @@ def _setup_builds(
 ) -> list[str]:
     """Prepare each build dir.
 
-    On macOS APFS, any warm build directory present in `main/out/` is COW-cloned
-    (preserving main's args.gn and rewriting Siso's fs state) so unchanged
-    object files share disk blocks and the first build is incremental. All other
-    configs fall back to gm.py + symbol_level=2 + remoteexec + gn gen.
+    On COW-capable filesystems (macOS APFS; Linux btrfs/XFS/bcachefs reflinks),
+    any warm build directory present in `main/out/` is COW-cloned (preserving
+    main's args.gn and rewriting Siso's fs state) so unchanged object files
+    share disk blocks and the first build is incremental. All other configs
+    fall back to gm.py + symbol_level=2 + remoteexec + gn gen.
     """
     gm = wt_path / "tools" / "dev" / "gm.py"
     results: list[str] = []
@@ -671,7 +704,7 @@ def _setup_builds(
             src_dir = main / "out" / build
             if _is_warm_build(src_dir):
                 if cow_supported is None:
-                    cow_supported = _supports_clonefile(src_dir / "args.gn", wt_path)
+                    cow_supported = _supports_cow_clone(src_dir / "args.gn", wt_path)
                 if cow_supported:
                     if drop_paths is None:
                         drop_paths = _paths_differing_from_main(main, wt_path)
@@ -765,8 +798,9 @@ def create(
     force: tear down any leftover worktree dir and dangling same-named branch
     first, so re-creating is idempotent (a fresh attempt). Without it, an
     existing path raises.
-    clone_builds: on macOS APFS, COW-clone any warm build directories present
-    in main/out/ instead of generating them fresh (default True).
+    clone_builds: on COW-capable filesystems (macOS APFS, Linux btrfs/XFS
+    reflinks), COW-clone any warm build directories present in main/out/
+    instead of generating them fresh (default True).
     Returns {path, builds} with the worktree path and build setup results.
     """
     _validate_name(name)

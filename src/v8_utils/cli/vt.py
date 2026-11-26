@@ -137,7 +137,7 @@ def main(argv: list[str] | None = None) -> None:
     cp.add_argument(
         "--no-clone",
         action="store_true",
-        help="Generate fresh build dirs with gm.py instead of APFS COW-cloning "
+        help="Generate fresh build dirs with gm.py instead of COW-cloning "
         "warm builds from main",
     )
     cp.add_argument(
