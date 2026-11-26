@@ -84,9 +84,13 @@ def _find_main_worktree(repo: Path) -> Path:
 
 def _gclient_dep_paths(gclient_root: Path, solution: str) -> list[str]:
     """Query gclient revinfo for all dependency paths under the solution."""
+    # Skip depot_tools auto-update: git fetch / cipd bootstrap can hang
+    # silently when output is captured.
     r = subprocess.run(
         ["gclient", "revinfo", "--output-json=/dev/stdout"],
         cwd=gclient_root,
+        stdin=subprocess.DEVNULL,
+        env={**os.environ, "DEPOT_TOOLS_UPDATE": "0"},
         capture_output=True,
         text=True,
         check=True,
