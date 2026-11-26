@@ -85,7 +85,7 @@ def test_guard_denies(command):
         "git cl issue; ls -n",
         "git log -n 3",
         "curl -s https://host/changes/1/revisions/current/commit",
-        "~/src/v8-utils/bin/cl-set-desc $TMPDIR/d.txt --dry-run",
+        "cl-set-desc $TMPDIR/d.txt --dry-run",
     ],
 )
 def test_guard_allows(command):

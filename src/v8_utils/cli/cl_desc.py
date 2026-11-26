@@ -57,8 +57,7 @@ if any(re.search(p, cmd) for p in pats):
             "Setting a Gerrit CL description directly is blocked: git cl desc -n "
             "takes the text, not a file name, and a mistake publishes it. Write "
             "the full description (with Change-Id) to a file and run "
-            "~/src/v8-utils/bin/cl-set-desc FILE (--dry-run to preview) from "
-            "the CL's worktree.",
+            "cl-set-desc FILE (--dry-run to preview) from the CL's worktree.",
     }}))
 """
 
@@ -134,23 +133,13 @@ def _gerrit(url: str):
         return json.loads(r.read().decode().split("\n", 1)[1])
 
 
-class _Version(argparse.Action):
-    """--version without importing the release machinery (and its third-party
-    dependencies) on every run; bin/cl-set-desc runs on the system Python."""
-
-    def __init__(self, option_strings, dest, **kwargs):
-        super().__init__(option_strings, dest, nargs=0, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-        from ..api.update import current_version
-
-        print(f"{parser.prog} {current_version()}")
-        parser.exit()
-
-
 def main(argv: list[str] | None = None) -> int:
+    from ..api.update import current_version
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--version", action=_Version)
+    ap.add_argument(
+        "--version", action="version", version=f"%(prog)s {current_version()}"
+    )
     ap.add_argument("file", type=Path, nargs="?")
     ap.add_argument("--repo", type=Path, default=Path.cwd())
     ap.add_argument("--dry-run", action="store_true")
