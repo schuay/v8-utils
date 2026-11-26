@@ -74,6 +74,7 @@ jsb = "v8_utils.cli_deps:jsb"
 pd = "v8_utils.cli_deps:pd"
 lv = "v8_utils.cli.lv:main"
 vt = "v8_utils.cli.vt:main"
+cl-set-desc = "v8_utils.cli.cl_desc:main"
 
 [build-system]
 requires = ["hatchling"]
