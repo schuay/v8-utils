@@ -10,7 +10,7 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from platformdirs import user_cache_dir, user_config_dir
+from . import dirs
 
 # A deployment that runs v8-utils on the user's behalf (an automated reviewer,
 # say) keeps its own config -- its own repo map, no personal chat webhook --
@@ -19,16 +19,7 @@ from platformdirs import user_cache_dir, user_config_dir
 CONFIG_ENV = "V8_UTILS_CONFIG"
 
 
-def _config_dir() -> Path:
-    # platformdirs puts macOS config under ~/Library/Application Support. Use
-    # ~/.config there as well, like most command-line tools on macOS.
-    if sys.platform == "darwin":
-        base = os.environ.get("XDG_CONFIG_HOME") or "~/.config"
-        return Path(base).expanduser() / "v8-utils"
-    return Path(user_config_dir("v8-utils"))
-
-
-CONFIG_DIR = _config_dir()
+CONFIG_DIR = dirs.config_dir()
 CONFIG_PATH = (
     Path(os.environ[CONFIG_ENV]).expanduser()
     if os.environ.get(CONFIG_ENV)
@@ -133,7 +124,7 @@ class Config:
         },
     )
     recordings_dir: Path = field(
-        default=Path(user_cache_dir("v8-utils")) / "recordings",
+        default=dirs.cache_dir() / "recordings",
         metadata={_HELP: "Where `jsb --perf` with samply writes recordings"},
     )
     sample_rate: int = field(
@@ -352,7 +343,7 @@ def load() -> Config:
         profiler=data.get("profiler", "auto"),
         sample_rate=int(data.get("sample_rate", 1000)),
         recordings_dir=_path(
-            "recordings_dir", Path(user_cache_dir("v8-utils")) / "recordings"
+            "recordings_dir", dirs.cache_dir() / "recordings"
         ),
         repos=repos,
         sources=data.get("sources", {}),

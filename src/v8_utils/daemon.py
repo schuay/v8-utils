@@ -10,7 +10,7 @@ Notification methods (in preference order):
 New jobs are submitted via a Unix domain socket. The daemon is started
 automatically by `pp watch`; it can also be run directly.
 
-State files (under platformdirs.user_data_dir("v8-utils")):
+State files (under dirs.data_dir()):
   daemon.pid
   daemon.sock
   daemon.log
@@ -30,11 +30,10 @@ import time
 from pathlib import Path
 
 import httpx
-from platformdirs import user_data_dir
 
-from . import config, pinpoint
+from . import config, dirs, pinpoint
 
-_STATE_DIR = Path(user_data_dir("v8-utils"))
+_STATE_DIR = dirs.data_dir()
 SOCK_PATH = _STATE_DIR / "daemon.sock"
 PID_PATH = _STATE_DIR / "daemon.pid"
 LOG_PATH = _STATE_DIR / "daemon.log"

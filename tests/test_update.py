@@ -30,7 +30,7 @@ def startup(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(config, "load", lambda: config.Config())
-    monkeypatch.setattr(update, "user_cache_dir", lambda _: str(tmp_path))
+    monkeypatch.setattr(update.dirs, "cache_dir", lambda: tmp_path)
     monkeypatch.setattr(update, "_eligible_install", Mock(return_value=True))
     monkeypatch.setattr(update, "current_version", lambda: 10)
     monkeypatch.setattr(update, "latest_version", Mock(return_value=11))

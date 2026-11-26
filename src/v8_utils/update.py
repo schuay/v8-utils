@@ -12,7 +12,8 @@ from importlib import metadata
 from pathlib import Path
 
 import httpx
-from platformdirs import user_cache_dir
+
+from . import dirs
 
 REPOSITORY = "https://github.com/schuay/v8-utils.git"
 VERSION_URL = "https://raw.githubusercontent.com/schuay/v8-utils/main/VERSION"
@@ -110,7 +111,7 @@ def check_for_update() -> None:
         if not config.load().auto_update or not _eligible_install():
             return
         current = current_version()
-        cache = Path(user_cache_dir("v8-utils"))
+        cache = dirs.cache_dir()
         cache.mkdir(parents=True, exist_ok=True)
         with (cache / "update.lock").open("a") as lock:
             try:

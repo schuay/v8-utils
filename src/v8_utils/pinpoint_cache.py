@@ -19,12 +19,11 @@ import sqlite3
 import sys
 import threading
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from urllib.parse import urlparse
 
-from platformdirs import user_data_dir
+from . import dirs
 
-_DB_PATH = Path(user_data_dir("v8-utils")) / "cache.db"
+_DB_PATH = dirs.data_dir() / "cache.db"
 _local = threading.local()
 _init_lock = threading.Lock()
 _schema_ready = False

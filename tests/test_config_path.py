@@ -7,7 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from v8_utils import config
+import pytest
+
+from v8_utils import config, dirs
 from v8_utils.api import config as api_config
 
 
@@ -52,14 +54,22 @@ def test_configure_expands_the_home_directory(monkeypatch):
     assert api_config.config_path() == Path.home() / "x.toml"
 
 
-def test_macos_config_lives_under_dot_config(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "darwin")
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_dirs_are_xdg_on_every_platform(monkeypatch, tmp_path, platform):
+    monkeypatch.setattr(sys, "platform", platform)
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
-    assert config._config_dir() == tmp_path / ".config" / "v8-utils"
+    for var in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.delenv(var, raising=False)
+    assert dirs.config_dir() == tmp_path / ".config" / "v8-utils"
+    assert dirs.data_dir() == tmp_path / ".local" / "share" / "v8-utils"
+    assert dirs.cache_dir() == tmp_path / ".cache" / "v8-utils"
 
 
-def test_macos_config_honours_xdg_config_home(monkeypatch, tmp_path):
+def test_dirs_honour_xdg_variables(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "darwin")
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
-    assert config._config_dir() == tmp_path / "xdg" / "v8-utils"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "c"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "d"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "k"))
+    assert dirs.config_dir() == tmp_path / "c" / "v8-utils"
+    assert dirs.data_dir() == tmp_path / "d" / "v8-utils"
+    assert dirs.cache_dir() == tmp_path / "k" / "v8-utils"
