@@ -2,7 +2,7 @@
 
 Usage:
   vt list
-  vt create <name> [-b BRANCH] [-u UPSTREAM] [-f]
+  vt create <name> [-b BRANCH] [-u UPSTREAM] [-f] [--no-clone]
   vt remove <name> [-f]
   vt refresh <name>
 """
@@ -55,8 +55,16 @@ def _cmd_create(
     upstream: str,
     force: bool,
     json_out: bool = False,
+    clone_builds: bool = True,
 ) -> None:
-    result = worktree.create(repo, name, branch, upstream=upstream, force=force)
+    result = worktree.create(
+        repo,
+        name,
+        branch,
+        upstream=upstream,
+        force=force,
+        clone_builds=clone_builds,
+    )
     if json_out:
         # Machine-readable contract for callers (e.g. icompleteu). Plain stdout,
         # never routed through rich, so the path is never width-wrapped. default=str
@@ -127,6 +135,12 @@ def main(argv: list[str] | None = None) -> None:
         "(idempotent re-create)",
     )
     cp.add_argument(
+        "--no-clone",
+        action="store_true",
+        help="Generate fresh build dirs with gm.py instead of APFS COW-cloning "
+        "warm builds from main",
+    )
+    cp.add_argument(
         "--json",
         action="store_true",
         help="Emit the result as a JSON object on stdout (machine-readable)",
@@ -164,7 +178,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.action in ("list", "ls"):
         _cmd_list(repo)
     elif args.action in ("create", "new"):
-        _cmd_create(repo, args.name, args.branch, args.upstream, args.force, args.json)
+        _cmd_create(
+            repo,
+            args.name,
+            args.branch,
+            args.upstream,
+            args.force,
+            args.json,
+            clone_builds=not args.no_clone,
+        )
     elif args.action in ("remove", "rm"):
         failed = sum(
             not _cmd_remove(repo, n, args.force, args.keep_branch) for n in args.names
