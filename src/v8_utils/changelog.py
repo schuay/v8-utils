@@ -60,6 +60,7 @@ ENTRIES: list[str] = [
     "On macOS, the config at `~/.config/v8-utils/config.toml` is now read _(was silently ignored)_",
     "v8-utils mcp: `perf_*` tools are on by default only on Linux; `--enable-perf` registers them elsewhere",
     "*create-job* pins each patch to its current patchset, so job listings show which patchset a job ran; listings also show the base patch",
+    "v8-utils mcp: added `gerrit_edit_comments` and `gerrit_delete_comments` for batch edits and deletes of your unpublished drafts",
 ]
 
 # ── Formatting ───────────────────────────────────────────────────────────────

@@ -66,7 +66,9 @@ def register(
             <hash>:path` to see the file as it was when the comment was written.
 
             Each comment line shows its UUID in `[brackets]` after the author.
-            Pass that UUID as `in_reply_to` to `gerrit_create_comments` to reply.
+            Pass that UUID as `in_reply_to` to `gerrit_create_comments` to reply,
+            or as `id` to `gerrit_edit_comments` / `gerrit_delete_comments` to
+            change one of your drafts.
 
             Threads are sorted by file path then line number.  Use this to understand
             reviewer feedback or the current state of a code review.
@@ -143,12 +145,83 @@ def register(
         Drafts are private to you until published -- review them in the Gerrit UI
         or via `gerrit_comments` with `include_drafts=True`, then publish via
         Gerrit's "Reply" button.  Requires authentication via `luci-auth login`.
+        Change them with `gerrit_edit_comments` and `gerrit_delete_comments`.
 
         Returns one result line per input, in order.  Each draft is created
         independently -- failures don't stop later ones.
         """
         results = gerrit_tools.create_drafts(change_url, comments, patchset=patchset)
         return _text_result(format_draft_results(results))
+
+    # Editing and deleting read the caller's drafts, and the results echo their
+    # text, so they go wherever reading drafts does.
+    if drafts_enabled:
+
+        @mcp.tool()
+        def gerrit_edit_comments(
+            change_url: Annotated[str, Field(description=CHANGE_URL_ARG)],
+            comments: Annotated[
+                list[dict],
+                Field(
+                    description=(
+                        "per-comment dicts with these fields: id (required) UUID"
+                        " of one of your drafts, from `gerrit_comments` with"
+                        " include_drafts=True (shown as `[id]`) or from"
+                        " `gerrit_create_comments`; message (optional) new text,"
+                        " must not be empty; unresolved (optional) bool; line"
+                        " (optional) 1-based line number; range (optional)"
+                        " {start_line, start_character, end_line, end_character};"
+                        ' side (optional) "REVISION" or "PARENT"; is_ai'
+                        " (optional) bool, default True, marks the edited text"
+                        " as machine-authored (pass False for human-authored"
+                        " text). Omitted fields keep their current values,"
+                        " except is_ai; a line or range replaces the location as"
+                        " a whole. path, in_reply_to and patchset cannot be"
+                        " changed: delete the draft and create a new one"
+                    )
+                ),
+            ],
+        ) -> CallToolResult:
+            """Edit one or more of your draft comments on a Gerrit CL.
+
+            Only your unpublished drafts can be edited; an id that names a
+            published comment, or no comment at all, fails with the reason.
+            Requires authentication via `luci-auth login`.
+
+            Returns one result line per input, in order.  Each draft is edited
+            independently -- failures don't stop later ones.
+            """
+            results = gerrit_tools.edit_drafts(change_url, comments)
+            return _text_result(format_draft_results(results))
+
+        @mcp.tool()
+        def gerrit_delete_comments(
+            change_url: Annotated[str, Field(description=CHANGE_URL_ARG)],
+            comments: Annotated[
+                list[dict],
+                Field(
+                    description=(
+                        "per-comment dicts with one field: id (required) UUID of"
+                        " one of your drafts, from `gerrit_comments` with"
+                        " include_drafts=True (shown as `[id]`) or from"
+                        " `gerrit_create_comments`"
+                    )
+                ),
+            ],
+        ) -> CallToolResult:
+            """Delete one or more of your draft comments on a Gerrit CL.
+
+            Only your unpublished drafts can be deleted; an id that names a
+            published comment, or no comment at all, fails with the reason.
+            Each result shows the deleted text, so a mistaken delete can be
+            recreated with `gerrit_create_comments`.  Requires authentication
+            via `luci-auth login`.
+
+            Returns one result line per input, in order.  Each draft is deleted
+            independently -- failures don't stop later ones.
+            """
+            results = gerrit_tools.delete_drafts(change_url, comments)
+            return _text_result(format_draft_results(results))
 
     @mcp.tool()
     def gerrit_fetch(

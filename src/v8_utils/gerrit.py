@@ -161,11 +161,16 @@ class Range:
 
 @dataclass(frozen=True)
 class DraftResult:
-    """The outcome of one create_drafts entry. On success the CommentInfo
-    Gerrit answered with; on failure `error`, and `input` is the entry as
-    given, so the caller can retry just that one."""
+    """The outcome of one create_drafts, edit_drafts or delete_drafts entry.
+
+    On success the CommentInfo Gerrit answered with; for a delete, the draft as
+    it was before deletion, so its text can be recovered. On failure `error`,
+    and `input` is the entry as given, so the caller can retry just that one.
+    """
 
     ok: bool
+    #: "created", "updated" or "deleted"; None on failure.
+    action: str | None = None
     id: str | None = None
     path: str | None = None
     line: int | None = None
@@ -479,6 +484,24 @@ def _post_json(api_base: str, path: str, body: dict) -> dict | list:
     if r.status_code >= 400:
         raise RuntimeError(f"HTTP {r.status_code}: {r.text.strip()}")
     return _parse_json(r)
+
+
+def _delete(api_base: str, path: str) -> None:
+    """Authenticated DELETE. Always uses /a/ prefix.
+
+    Same error contract as _put_json. Gerrit answers 204 with no body, so there
+    is nothing to parse.
+    """
+    token = _require_auth()
+    r = httpx.delete(
+        f"{api_base}/a{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        timeout=30,
+    )
+    if r.status_code in (401, 403):
+        raise _auth_error(r.status_code, r.text.strip()[:200])
+    if r.status_code >= 400:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text.strip()}")
 
 
 # ── Query CLs ─────────────────────────────────────────────────────────────────
@@ -885,7 +908,16 @@ def _published_by_id(api_base: str, cid: str) -> dict[str, dict]:
     CommentInfo itself, so fold it in -- callers here want the location as one
     object.
     """
-    data: dict = _get(api_base, f"/changes/{cid}/comments")
+    return _by_id(_get(api_base, f"/changes/{cid}/comments"))
+
+
+def _drafts_by_id(api_base: str, cid: str) -> dict[str, dict]:
+    """Map comment id -> CommentInfo for the caller's drafts on a change, on
+    every patchset. Shaped like _published_by_id."""
+    return _by_id(_get(api_base, f"/changes/{cid}/drafts", auth_required=True))
+
+
+def _by_id(data: dict) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for filepath, cs in data.items():
         for c in cs:
@@ -937,11 +969,12 @@ def _comment_input(c: dict, src: dict, path: str) -> dict:
     return body
 
 
-def _draft_result(info: dict) -> DraftResult:
+def _draft_result(info: dict, action: str = "created") -> DraftResult:
     """A successful draft from the CommentInfo Gerrit answered with."""
     rng = info.get("range")
     return DraftResult(
         ok=True,
+        action=action,
         id=info.get("id"),
         path=info.get("path"),
         line=info.get("line"),
@@ -1064,6 +1097,222 @@ def create_drafts(
         except (httpx.HTTPError, ValueError, RuntimeError) as e:
             results.append(DraftResult(ok=False, error=str(e), input=c))
 
+    return results
+
+
+class _DraftTargets:
+    """The caller's drafts on one change, resolved by id for edit_drafts and
+    delete_drafts.
+
+    Read once per batch and kept current as the batch runs, so an entry sees
+    the effect of the ones before it: an edit applies to the text an earlier
+    edit left, and a deleted draft is gone for every later entry.
+    """
+
+    def __init__(self, api_base: str, cid: str):
+        self._api_base = api_base
+        self._cid = cid
+        self._drafts: dict[str, dict] | None = None
+        self._read_error: str | None = None
+        self._published: dict[str, dict] | None = None
+        self._deleted: set[str] = set()
+
+    def find(self, uuid: str, verb: str) -> tuple[dict | None, str | None]:
+        """(draft, None), or (None, why the id names no draft of ours)."""
+        if self._drafts is None and self._read_error is None:
+            try:
+                self._drafts = _drafts_by_id(self._api_base, self._cid)
+            except (httpx.HTTPError, ValueError, RuntimeError) as e:
+                self._read_error = str(e)
+        if self._read_error is not None:
+            return None, f"could not read your drafts: {self._read_error}"
+        assert self._drafts is not None
+        if (d := self._drafts.get(uuid)) is not None:
+            return d, None
+        if uuid in self._deleted:
+            return None, f"draft {uuid} was deleted earlier in this batch"
+        return None, self._not_found(uuid, verb)
+
+    def _not_found(self, uuid: str, verb: str) -> str:
+        # The entry fails either way; a failed read only loses the more
+        # specific reason.
+        if self._published is None:
+            try:
+                self._published = _published_by_id(self._api_base, self._cid)
+            except (httpx.HTTPError, ValueError, RuntimeError):
+                self._published = {}
+        if uuid in self._published:
+            return (
+                f"comment {uuid} is published; only your own unpublished drafts"
+                f" can be {verb}"
+            )
+        return f"no draft {uuid} among your unpublished drafts on this change"
+
+    def updated(self, uuid: str, info: dict) -> None:
+        assert self._drafts is not None
+        self._drafts[uuid] = info
+
+    def deleted(self, uuid: str) -> None:
+        assert self._drafts is not None
+        self._drafts.pop(uuid, None)
+        self._deleted.add(uuid)
+
+
+def _draft_endpoint(cid: str, draft: dict) -> str:
+    # Gerrit looks a draft up only among those on the revision in the URL, so
+    # the draft's own patchset is the one to address.
+    return (
+        f"/changes/{cid}/revisions/{draft['patch_set']}"
+        f"/drafts/{quote(draft['id'], safe='')}"
+    )
+
+
+def _entry_id(c: dict) -> str | None:
+    uuid = c.get("id")
+    return uuid if isinstance(uuid, str) and uuid else None
+
+
+#: Fields an edit may set. Everything else about a draft stays as it is.
+_EDIT_FIELDS = ("message", "unresolved", "line", "range", "side", "is_ai")
+#: Fields that identify where a draft lives. Gerrit can only move a draft by
+#: deleting and recreating it, which an edit should not do behind the caller's
+#: back.
+_EDIT_FIXED = ("path", "in_reply_to", "patchset", "patch_set")
+
+
+def _edit_error(c: dict, draft: dict | None) -> str | None:
+    if fixed := [k for k in _EDIT_FIXED if k in c]:
+        return (
+            f"{', '.join(fixed)} cannot be changed by an edit; delete the draft"
+            " and create a new one"
+        )
+    if not any(k in c for k in _EDIT_FIELDS):
+        return f"nothing to change: give at least one of {', '.join(_EDIT_FIELDS)}"
+    if "message" in c and not (isinstance(c["message"], str) and c["message"].strip()):
+        # Gerrit deletes a draft whose update has no message.
+        return "empty message: an edit cannot clear the text; delete the draft instead"
+    if draft is not None and draft.get("fix_suggestions"):
+        # An update without them drops them, and they are not round-tripped here.
+        return "the draft has fix suggestions, which an edit would drop"
+    return None
+
+
+def _edit_input(c: dict, draft: dict) -> dict:
+    """The full CommentInput for an edit: the draft as it stands, with the
+    entry's fields applied.
+
+    Sent complete rather than as the changed fields alone: an update that
+    omits the location leaves the server to restore it, and Gerrit restores
+    the line but not necessarily the range. The location is replaced as a
+    unit, as create_drafts does for replies.
+    """
+    path = draft["path"]
+    body: dict = {"path": path, "message": c.get("message", draft.get("message"))}
+    unresolved = c.get("unresolved", draft.get("unresolved"))
+    if unresolved is not None:
+        body["unresolved"] = unresolved
+    if path != "/PATCHSET_LEVEL":
+        loc = c if any(c.get(k) is not None for k in ("line", "range")) else draft
+        # CommentInfo omits side when it is REVISION.
+        body["side"] = c.get("side") or draft.get("side") or "REVISION"
+        if loc.get("line") is not None:
+            body["line"] = loc["line"]
+        if loc.get("range"):
+            body["range"] = loc["range"]
+    # Sent either way: an update leaves is_ai alone when it is absent, so False
+    # must be explicit to clear the mark. Defaults to True for the reason
+    # create_drafts does.
+    body["is_ai"] = bool(c.get("is_ai", True))
+    return body
+
+
+def edit_drafts(change_url: str, comments: list[dict]) -> list[DraftResult]:
+    """Edit one or more of the caller's draft comments on a Gerrit CL.
+
+    comments: list of per-comment dicts:
+      id          (required) UUID of the draft to edit
+      message     (optional) new comment text; must not be empty
+      unresolved  (optional) bool; omitted keeps the draft's
+      line        (optional) 1-based line
+      range       (optional) {start_line, start_character, end_line, end_character}
+      side        (optional) "REVISION" or "PARENT"
+      is_ai       (optional) default True; mark the edited text as
+                  machine-authored (pass False for human-authored text)
+
+    Omitted fields keep their current values, except is_ai. A line or range
+    replaces the draft's location as a unit. The path, the comment replied to
+    and the patchset cannot be changed. Published comments cannot be edited.
+
+    Returns one DraftResult per input, in order. Continues past failures.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    targets = _DraftTargets(api_base, cid)
+
+    results: list[DraftResult] = []
+    for c in comments:
+        uuid = _entry_id(c)
+        if uuid is None:
+            results.append(DraftResult(ok=False, error="missing field: id", input=c))
+            continue
+        if err := _edit_error(c, None):
+            results.append(DraftResult(ok=False, error=err, input=c))
+            continue
+        draft, err = targets.find(uuid, "edited")
+        if draft is None or (err := _edit_error(c, draft)):
+            results.append(DraftResult(ok=False, error=err, input=c))
+            continue
+        try:
+            info = _put_json(
+                api_base, _draft_endpoint(cid, draft), _edit_input(c, draft)
+            )
+        except (httpx.HTTPError, ValueError, RuntimeError) as e:
+            results.append(DraftResult(ok=False, error=str(e), input=c))
+            continue
+        if not isinstance(info, dict):
+            results.append(
+                DraftResult(ok=False, error=f"unexpected response: {info!r}", input=c)
+            )
+            continue
+        info.setdefault("path", draft["path"])
+        info.setdefault("patch_set", draft["patch_set"])
+        targets.updated(uuid, info)
+        results.append(_draft_result(info, "updated"))
+    return results
+
+
+def delete_drafts(change_url: str, comments: list[dict]) -> list[DraftResult]:
+    """Delete one or more of the caller's draft comments on a Gerrit CL.
+
+    comments: list of per-comment dicts:
+      id  (required) UUID of the draft to delete
+
+    Each result carries the draft as it was, so a mistaken delete can be
+    recreated from it. Published comments cannot be deleted.
+
+    Returns one DraftResult per input, in order. Continues past failures.
+    """
+    api_base, project, change_id, _ = _canonical_change(change_url)
+    cid = _change_cid(project, change_id)
+    targets = _DraftTargets(api_base, cid)
+
+    results: list[DraftResult] = []
+    for c in comments:
+        uuid = _entry_id(c)
+        if uuid is None:
+            results.append(DraftResult(ok=False, error="missing field: id", input=c))
+            continue
+        draft, err = targets.find(uuid, "deleted")
+        if draft is None:
+            results.append(DraftResult(ok=False, error=err, input=c))
+            continue
+        try:
+            _delete(api_base, _draft_endpoint(cid, draft))
+        except (httpx.HTTPError, ValueError, RuntimeError) as e:
+            results.append(DraftResult(ok=False, error=str(e), input=c))
+            continue
+        targets.deleted(uuid)
+        results.append(_draft_result(draft, "deleted"))
     return results
 
 

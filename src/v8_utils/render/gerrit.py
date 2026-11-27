@@ -42,13 +42,22 @@ def format_draft_results(results: list[gerrit.DraftResult]) -> str:
     lines = []
     for i, r in enumerate(results):
         if r.ok:
-            lines.append(f"[{i}] ok  {_loc(r.path, r.line)}  id={r.id or '?'}")
+            lines.append(
+                f"[{i}] ok  {r.action}  {_loc(r.path, r.line)}  id={r.id or '?'}"
+            )
+            if r.action == "deleted" and r.message:
+                # The only copy left; enough to recreate the draft.
+                text = r.message.strip().replace("\n", "\n      ")
+                lines.append(f"    was: {text}")
         else:
             inp = r.input or {}
-            lines.append(
-                f"[{i}] FAIL {_loc(inp.get('path'), inp.get('line'))}  "
-                f"{r.error or 'unknown error'}"
+            # Edits and deletes name their target by id and carry no location.
+            where = (
+                f"id={inp['id']}"
+                if inp.get("id")
+                else _loc(inp.get("path"), inp.get("line"))
             )
+            lines.append(f"[{i}] FAIL {where}  {r.error or 'unknown error'}")
     return "\n".join(lines)
 
 

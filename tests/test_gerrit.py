@@ -5,6 +5,7 @@ import types
 import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 
 import v8_utils.gerrit as g
 from v8_utils import cq
@@ -531,6 +532,234 @@ def test_one_failing_draft_does_not_sink_the_others(monkeypatch):
     assert [r.ok for r in out] == [True, False, True]
     assert "Invalid inReplyTo" in out[1].error
     assert out[1].input["message"] == "b"  # enough to retry just this one
+
+
+# ── edit_drafts / delete_drafts ──────────────────────────────────────────────
+
+
+@pytest.fixture
+def mine(monkeypatch):
+    """The caller's drafts and the published comments, as gerrit returns them
+    (keyed by file, `path` absent), with PUTs and DELETEs captured."""
+    reads = []
+    puts = []
+    deletes = []
+    drafts = {
+        "src/a.cc": [
+            {
+                "id": "d-line",
+                "patch_set": 3,
+                "line": 10,
+                "range": {
+                    "start_line": 10,
+                    "start_character": 2,
+                    "end_line": 10,
+                    "end_character": 8,
+                },
+                "message": "old text",
+                "unresolved": False,
+                "in_reply_to": "c1",
+            },
+            {
+                "id": "d-fix",
+                "patch_set": 3,
+                "line": 4,
+                "message": "with a fix",
+                "fix_suggestions": [{"description": "x", "replacements": []}],
+            },
+        ],
+        "/PATCHSET_LEVEL": [
+            {"id": "d-top", "patch_set": 2, "message": "overall", "unresolved": True},
+        ],
+    }
+    published = {"src/a.cc": [{"id": "c1", "patch_set": 3, "message": "review"}]}
+
+    def fake_get(base, path, **kw):
+        reads.append(path)
+        if path.endswith("/drafts"):
+            assert kw.get("auth_required") is True
+            return drafts
+        assert path.endswith("/comments")
+        return published
+
+    def fake_put(base, path, body):
+        puts.append((path, body))
+        return {"id": path.rsplit("/", 1)[1], "patch_set": 3, **body}
+
+    monkeypatch.setattr(g, "_get", fake_get)
+    monkeypatch.setattr(g, "_put_json", fake_put)
+    monkeypatch.setattr(g, "_delete", lambda base, path: deletes.append(path))
+    return types.SimpleNamespace(reads=reads, puts=puts, deletes=deletes)
+
+
+def test_an_edit_sends_the_whole_draft_with_the_change_applied(mine):
+    """An update that omits the location leaves the server to restore it, so
+    every field goes back as it was, and only the message changes."""
+    (out,) = g.edit_drafts(CL, [{"id": "d-line", "message": "new text"}])
+
+    assert out.ok and out.action == "updated"
+    path, body = mine.puts[0]
+    # Gerrit finds a draft only on the revision in the URL.
+    assert path.endswith("/revisions/3/drafts/d-line")
+    assert body == {
+        "path": "src/a.cc",
+        "message": "new text",
+        "unresolved": False,
+        "side": "REVISION",
+        "line": 10,
+        "range": {
+            "start_line": 10,
+            "start_character": 2,
+            "end_line": 10,
+            "end_character": 8,
+        },
+        "is_ai": True,
+    }
+
+
+def test_an_edit_replaces_the_location_as_a_unit(mine):
+    g.edit_drafts(CL, [{"id": "d-line", "line": 12}])
+
+    _path, body = mine.puts[0]
+    assert body["line"] == 12
+    assert "range" not in body
+    assert body["message"] == "old text"
+
+
+def test_an_edit_can_clear_the_ai_marker(mine):
+    # Gerrit leaves is_ai alone when it is absent, so False must be sent.
+    g.edit_drafts(CL, [{"id": "d-line", "message": "typed", "is_ai": False}])
+    assert mine.puts[0][1]["is_ai"] is False
+
+
+def test_an_edit_of_a_patchset_level_draft_sends_no_location(mine):
+    g.edit_drafts(CL, [{"id": "d-top", "unresolved": False}])
+
+    path, body = mine.puts[0]
+    assert path.endswith("/revisions/2/drafts/d-top")
+    assert body["path"] == "/PATCHSET_LEVEL"
+    assert "side" not in body and "line" not in body and "range" not in body
+    assert body["unresolved"] is False and body["message"] == "overall"
+
+
+@pytest.mark.parametrize(
+    "entry, match",
+    [
+        ({"message": "x"}, "missing field: id"),
+        # Gerrit deletes a draft whose update has no message.
+        ({"id": "d-line", "message": "  "}, "empty message"),
+        ({"id": "d-line", "message": None}, "empty message"),
+        ({"id": "d-line", "path": "src/b.cc"}, "path cannot be changed"),
+        ({"id": "d-line", "in_reply_to": "c2"}, "in_reply_to cannot be changed"),
+        ({"id": "d-line"}, "nothing to change"),
+        ({"id": "d-fix", "message": "x"}, "fix suggestions"),
+        ({"id": "c1", "message": "x"}, "c1 is published"),
+        ({"id": "nope", "message": "x"}, "no draft nope"),
+    ],
+)
+def test_a_bad_edit_fails_without_writing(mine, entry, match):
+    (out,) = g.edit_drafts(CL, [entry])
+    assert out.ok is False
+    assert match in out.error
+    assert out.input == entry
+    assert mine.puts == []
+
+
+def test_the_drafts_are_read_once_and_published_only_to_explain_a_miss(mine):
+    g.edit_drafts(
+        CL, [{"id": "d-line", "message": "a"}, {"id": "d-top", "message": "b"}]
+    )
+    assert [p.rsplit("/", 1)[1] for p in mine.reads] == ["drafts"]
+
+
+def test_an_edit_sees_the_edits_before_it_in_the_batch(mine):
+    g.edit_drafts(
+        CL,
+        [{"id": "d-line", "message": "first"}, {"id": "d-line", "line": 11}],
+    )
+    assert mine.puts[1][1]["message"] == "first"
+
+
+def test_an_unreadable_draft_list_fails_every_entry(mine, monkeypatch):
+    def boom(base, path, **kw):
+        raise RuntimeError("HTTP 429: too many requests")
+
+    monkeypatch.setattr(g, "_get", boom)
+    out = g.edit_drafts(CL, [{"id": "d-line", "message": "x"}])
+    assert out[0].ok is False and "429" in out[0].error
+    assert mine.puts == []
+
+
+def test_a_delete_addresses_the_drafts_patchset_and_returns_its_text(mine):
+    (out,) = g.delete_drafts(CL, [{"id": "d-top"}])
+
+    assert mine.deletes == [
+        "/changes/v8%2Fv8~8174846/revisions/2/drafts/d-top",
+    ]
+    assert out.ok and out.action == "deleted"
+    assert out.message == "overall" and out.path == "/PATCHSET_LEVEL"
+
+
+@pytest.mark.parametrize(
+    "entry, match",
+    [
+        ({}, "missing field: id"),
+        ({"id": "c1"}, "c1 is published"),
+        ({"id": "nope"}, "no draft nope"),
+    ],
+)
+def test_a_bad_delete_fails_without_deleting(mine, entry, match):
+    (out,) = g.delete_drafts(CL, [entry])
+    assert out.ok is False and match in out.error
+    assert mine.deletes == []
+
+
+def test_a_draft_deleted_earlier_in_the_batch_is_reported_as_such(mine):
+    out = g.delete_drafts(CL, [{"id": "d-top"}, {"id": "d-top"}])
+    assert [r.ok for r in out] == [True, False]
+    assert "deleted earlier in this batch" in out[1].error
+    assert len(mine.deletes) == 1
+
+
+def test_delete_accepts_no_content_and_raises_on_errors(monkeypatch):
+    monkeypatch.setattr(g, "_gerrit_token", lambda: "tok")
+    monkeypatch.setattr(httpx, "delete", lambda url, **kw: _resp(204, ""))
+    g._delete("https://h", "/changes/1/revisions/1/drafts/d")
+
+    monkeypatch.setattr(httpx, "delete", lambda url, **kw: _resp(404, "Not found"))
+    with pytest.raises(RuntimeError, match="HTTP 404: Not found"):
+        g._delete("https://h", "/changes/1/revisions/1/drafts/d")
+
+
+def _call(server, tool, args):
+    res = asyncio.run(server.call_tool(tool, args))
+    return res.content[0].text if isinstance(res, CallToolResult) else res[0][0].text
+
+
+def test_mcp_delete_shows_the_deleted_text(mine):
+    server = FastMCP("test")
+    mcp_gerrit.register(server)
+    text = _call(
+        server,
+        "gerrit_delete_comments",
+        {"change_url": CL, "comments": [{"id": "d-line"}, {"id": "c1"}]},
+    )
+    assert text.splitlines() == [
+        "[0] ok  deleted  src/a.cc:10  id=d-line",
+        "    was: old text",
+        (
+            "[1] FAIL id=c1  comment c1 is published; only your own unpublished"
+            " drafts can be deleted"
+        ),
+    ]
+
+
+def test_mcp_edit_and_delete_are_absent_when_drafts_are_disabled():
+    server = FastMCP("test")
+    mcp_gerrit.register(server, drafts_enabled=False)
+    names = {t.name for t in asyncio.run(server.list_tools())}
+    assert "gerrit_create_comments" in names
+    assert not names & {"gerrit_edit_comments", "gerrit_delete_comments"}
 
 
 def test_publishing_sends_every_draft_and_votes_on_nothing(monkeypatch):

@@ -80,7 +80,8 @@ def build_server(
     overrides:     optional {group_name: enabled} mapping. Groups not mentioned
                    fall back to their default in GROUPS.
     gerrit_drafts: when False, gerrit_comments cannot read unpublished drafts
-                   and drops the include_drafts parameter (for deployments that
+                   and drops the include_drafts parameter, and the draft edit
+                   and delete tools are not registered (for deployments that
                    expose the tools to untrusted callers).
     default_user:  when False, tools never fall back to the logged-in account:
                    pinpoint job listings require an explicit user and
